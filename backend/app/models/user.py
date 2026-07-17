@@ -1,0 +1,18 @@
+"""User model."""
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, func
+from app.core.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(256), nullable=False)
+    display_name = Column(String(128), default="")
+    phone = Column(String(20), default="")
+    email = Column(String(128), default="")
+    role = Column(String(20), default="operator")  # admin / operator / viewer
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
