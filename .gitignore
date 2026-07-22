@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+/backend/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Environments & secrets
+.env
+.env.local
+*.db
+*.sqlite3
+
+# Build output
+dist/
+build/
+frontend/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# WorkBuddy internal memory (personal, do not track)
+.workbuddy/
+
+# Logs
+*.log
