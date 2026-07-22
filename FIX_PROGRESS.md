@@ -48,15 +48,40 @@
 - 修复：脚本批量给 19 个文件补 `, timezone`（`mqtt_utils.py` 本就已有，跳过）；`script_engine.py` 手动补。重跑全绿。
 - 教训：仓库级文本替换后必须用**运行时测试**而非仅 `py_compile` 验证。
 
-### B. `modbus_codec` 小端（LITTLE_ENDIAN）解码历史 bug（pre-existing，未在我改动范围）
+### B. `modbus_codec` 小端（LITTLE_ENDIAN）解码历史 bug（pre-existing）→ **已修复并提交**
 - 现象：`tests/test_modbus_codec.py::TestDecodeInt32::test_little_endian` 断言 `decode_value([0,1], …, LITTLE_ENDIAN) == 65536`，实际返回 `1`。
-- 根因：`decode_32bit()`（及 `decode_float32`/`decode_float64` 的同名分支）在 `LITTLE_ENDIAN` 分支写成 `struct.pack("<HH", reg2, reg1)`（字序反了），正确应为 `struct.pack("<HH", reg1, reg2)`。其 `else` 兜底分支反而写的是正确小端。属**原有逻辑 bug**，与本次 17 项修复无关（未改动该文件）。
-- 处置：**未擅自修改**（超出范围，且改动解码语义会影响已按当前行为配置的设备读数）。建议单列修复项，并由你确认字节序约定后再改；同时核对是否还有 `LITTLE_ENDIAN_SWAP` 这类变体枚举需要同步修正。
+- 根因：`decode_32bit()`（及 `decode_float32`/`decode_float64` 的同名分支）在 `LITTLE_ENDIAN` 分支写成 `struct.pack("<HH", reg2, reg1)`（字序反了），正确应为 `struct.pack("<HH", reg1, reg2)`，且 `LITTLE_ENDIAN_SWAP` 变体恰好被错挂到了 `else` 兜底。枚举确认存在 4 个字节序（`BIG`/`LITTLE`/`BIG_SWAP`/`LITTLE_SWAP`），原分支确实**写反**。
+- 处置（用户已批准"修"）：按测试约定（reg[0]=low, reg[1]=high）修正三个函数的 `LITTLE_ENDIAN` 分支为 `pack("<HH", reg1, reg2)`（float64 为 `pack("<HHHH", r1,r2,r3,r4)`），并补显式 `LITTLE_ENDIAN_SWAP` 分支（`reg2,reg1` / `r4,r3,r2,r1`）。新增 `test_modbus_codec.py` 中 int32/float32/float64 的小端与 SWAP 回归测试锁定。提交：单独 `[fix] 修复 modbus_codec 小端解码字序写反`（不在原 17 项编号内）。重跑 **72 passed, 0 failed**。
+
+## Git 提交（逐项，已执行）
+
+仓库原非 git 仓库 → 已 `git init`，按建议编号逐项提交（commit message 注明 `[#N]`）：
+
+```
+d043adf [#1] 接通 WebSocket 实时推送链路
+7625823 [#2] 修复后台线程事件循环 bug
+e745b50 [#4] 后端 API 接入 RBAC 权限校验
+b6f843a [#5] 加固脚本沙箱（RCE/逃逸）
+5168154 [#6] 默认弱口令/默认 SECRET_KEY 加固
+754d8c4 [#7] CORS 通配符+凭据加固（代码随 #2/#6 提交，--allow-empty）
+bb23703 [#10] 修复限流字典内存泄漏
+645fd29 [#13] 修复 reset_password 默认弱口令
+b9c7eb3 [#14] 补充测试覆盖（脚本沙箱安全回归）
+34fdc24 [#15] datetime.utcnow() 替换（弃用 API, 3.12+）
+fd34387 [fix] 修复 modbus_codec 小端解码字序写反（发现项 B）
+f4f38f3 [chore] 初始化 Git 仓库：添加忽略规则并提交基线代码
+```
+
+说明：
+- 共享文件归入**最高优先级**所属项（如 `main.py`→#2、`config.py`→#6；`api/{history,exports,alarms,...}` 的 datetime 改动随 #4 一并提交）。
+- `#7` 的 CORS 代码实际位于 `main.py`(#2)/`config.py`(#6)，故该提交为 `--allow-empty` 并在信息中注明。
+- 无代码改动的项（#3/#17 误报、#8/#9/#11/#12/#16 暂缓）**未提交**，符合"仅提交修改"。
+- 已加 `.gitignore`（忽略 `node_modules/__pycache__/.workbuddy/*.db/.env` 等），基线提交补齐其余既有项目文件。
 
 ## 待办（后续）
 
-- [x] 跑通 `pytest` 回归（venv 已就绪，**66 passed**；1 个 pre-existing codec bug 见上节 B）。
-- [ ] 为 `config/scada/scripts/imports/hierarchy/templates/dashboard` 补充权限码并接入 RBAC。
+- [x] 跑通 `pytest` 回归（**72 passed, 0 failed**；原 codec bug 已修复见上节 B）。
+- [x] 为 `config/scada/script/import/hierarchy/template/dashboard` 补充 14 个权限码并接入 RBAC（见 #4 提交）。
 - [ ] 评估脚本沙箱在 Windows 下的真超时（当前仅 Unix `SIGALRM` 生效；彻底隔离建议改用子进程）。
 - [ ] 生产数据库迁移方案（Alembic）+ 切 MySQL。
 - [ ] `workshop` 字段更名迁移（如确需）。
