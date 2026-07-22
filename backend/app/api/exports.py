@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from app.core.database import get_db
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.device import Device, DeviceTag
 from app.models.history import TagHistory
