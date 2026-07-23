@@ -10,27 +10,36 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import api from '../api/request'
 
+// Menu categories — render order + group title/icon for the sidebar.
+export const MENU_CATEGORIES = [
+  { key: 'monitor', title: '总览监控', icon: 'DataBoard' },
+  { key: 'device', title: '设备中心', icon: 'Cpu' },
+  { key: 'alarm', title: '报警与通知', icon: 'Bell' },
+  { key: 'data', title: '数据运维', icon: 'Folder' },
+  { key: 'system', title: '系统管理', icon: 'Setting' },
+]
+
 // All available menu items with required permissions
 const ALL_MENUS = [
-  { path: '/dashboard', title: '仪表盘', icon: 'Odometer', permission: null },
-  { path: '/realtime', title: '实时数据', icon: 'DataBoard', permission: 'device.read' },
-  { path: '/screen', title: '数据大屏', icon: 'Monitor', permission: null },
-  { path: '/devices', title: '设备管理', icon: 'Cpu', permission: 'device.read' },
-  { path: '/topology', title: '设备拓扑', icon: 'Share', permission: 'device.read' },
-  { path: '/groups', title: '设备分组', icon: 'Files', permission: 'group.read' },
-  { path: '/tags', title: '采集点位', icon: 'Connection', permission: 'tag.read' },
-  { path: '/scada', title: 'SCADA 画面', icon: 'Picture', permission: 'device.read' },
-  { path: '/history', title: '历史数据', icon: 'DataLine', permission: 'history.read' },
-  { path: '/alarms', title: '报警管理', icon: 'Bell', permission: 'alarm.read' },
-  { path: '/control', title: '远程控制', icon: 'Switch', permission: 'device.control' },
-  { path: '/sms', title: '短信管理', icon: 'Message', permission: 'sms.read' },
-  { path: '/audit', title: '操作审计', icon: 'List', permission: 'audit.read' },
-  { path: '/exports', title: '数据导出', icon: 'Download', permission: 'export.download' },
-  { path: '/scripts', title: '脚本算法', icon: 'Document', permission: 'device.write' },
-  { path: '/imports', title: '批量导入', icon: 'Upload', permission: 'device.write' },
-  { path: '/templates', title: '设备模板', icon: 'Files', permission: 'device.write' },
-  { path: '/archive', title: '数据归档', icon: 'FolderDelete', permission: 'system.admin' },
-  { path: '/rbac', title: '权限管理', icon: 'Lock', permission: 'rbac.read' },
+  { path: '/dashboard', title: '仪表盘', icon: 'Odometer', permission: null, category: 'monitor' },
+  { path: '/realtime', title: '实时数据', icon: 'DataBoard', permission: 'device.read', category: 'monitor' },
+  { path: '/screen', title: '数据大屏', icon: 'Monitor', permission: null, category: 'monitor' },
+  { path: '/history', title: '历史数据', icon: 'DataLine', permission: 'history.read', category: 'monitor' },
+  { path: '/devices', title: '设备管理', icon: 'Cpu', permission: 'device.read', category: 'device' },
+  { path: '/topology', title: '设备拓扑', icon: 'Share', permission: 'device.read', category: 'device' },
+  { path: '/groups', title: '设备分组', icon: 'Files', permission: 'group.read', category: 'device' },
+  { path: '/tags', title: '采集点位', icon: 'Connection', permission: 'tag.read', category: 'device' },
+  { path: '/scada', title: 'SCADA 画面', icon: 'Picture', permission: 'device.read', category: 'device' },
+  { path: '/control', title: '远程控制', icon: 'Switch', permission: 'device.control', category: 'device' },
+  { path: '/alarms', title: '报警管理', icon: 'Bell', permission: 'alarm.read', category: 'alarm' },
+  { path: '/sms', title: '短信管理', icon: 'Message', permission: 'sms.read', category: 'alarm' },
+  { path: '/exports', title: '数据导出', icon: 'Download', permission: 'export.download', category: 'data' },
+  { path: '/scripts', title: '脚本算法', icon: 'Document', permission: 'device.write', category: 'data' },
+  { path: '/imports', title: '批量导入', icon: 'Upload', permission: 'device.write', category: 'data' },
+  { path: '/templates', title: '设备模板', icon: 'Files', permission: 'device.write', category: 'data' },
+  { path: '/archive', title: '数据归档', icon: 'FolderDelete', permission: 'system.admin', category: 'data' },
+  { path: '/audit', title: '操作审计', icon: 'List', permission: 'audit.read', category: 'system' },
+  { path: '/rbac', title: '权限管理', icon: 'Lock', permission: 'rbac.read', category: 'system' },
 ]
 
 export const usePermissionStore = defineStore('permission', () => {

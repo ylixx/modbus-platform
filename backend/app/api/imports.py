@@ -43,7 +43,7 @@ async def import_tags(
 def download_device_template(_: User = Depends(require_permission("import.read"))):
     """Download device import CSV template."""
     csv_content = "name,protocol,host,port,slave_id,poll_interval,factory,workshop,production_line,installation,description\n"
-    csv_content += "示例设备1,modbus_tcp,192.168.1.100,502,1,5,一号厂区,A车间,1号线,3号机组,示例设备\n"
+    csv_content += "示例设备1,modbus_tcp,127.0.0.1,502,1,5,一号厂区,A车间,1号线,3号机组,示例设备\n"
     csv_content += "示例设备2,mqtt,192.168.1.101,1883,,10,一号厂区,B车间,,,MQTT示例\n"
     return Response(
         content="\ufeff" + csv_content,

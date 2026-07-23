@@ -98,7 +98,7 @@ DEVICE_TEMPLATES = [
         "category": "PLC",
         "description": "通过 OPC-UA 连接西门子 PLC",
         "protocol": "opc_ua",
-        "opc_endpoint": "opc.tcp://192.168.1.100:4840",
+        "opc_endpoint": "opc.tcp://127.0.0.1:4840",
         "opc_namespace": 2,
         "poll_interval": 5,
         "tags": [

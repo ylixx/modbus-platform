@@ -29,13 +29,32 @@
     </header>
 
     <div class="layout-body">
-      <aside class="layout-sidebar">
-        <el-menu :default-active="$route.path" router>
-          <template v-for="item in menuItems" :key="item.path">
-            <el-menu-item :index="item.path">
-              <el-icon><component :is="item.icon" /></el-icon>
-              <span>{{ item.title }}</span>
-            </el-menu-item>
+      <aside class="layout-sidebar" :class="{ 'is-collapse': isCollapse }">
+        <div class="sidebar-toggle" @click="isCollapse = !isCollapse" :title="isCollapse ? '展开菜单' : '收起菜单'">
+          <el-icon size="18"><component :is="isCollapse ? 'Expand' : 'Fold'" /></el-icon>
+        </div>
+        <el-menu
+          :default-active="$route.path"
+          router
+          :collapse="isCollapse"
+          :collapse-transition="false"
+          class="sidebar-menu"
+        >
+          <template v-for="group in groupedMenus" :key="group.key">
+            <el-sub-menu :index="group.key">
+              <template #title>
+                <el-icon><component :is="group.icon" /></el-icon>
+                <span>{{ group.title }}</span>
+              </template>
+              <el-menu-item
+                v-for="item in group.children"
+                :key="item.path"
+                :index="item.path"
+              >
+                <el-icon><component :is="item.icon" /></el-icon>
+                <span>{{ item.title }}</span>
+              </el-menu-item>
+            </el-sub-menu>
           </template>
         </el-menu>
       </aside>
@@ -51,7 +70,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../stores/user'
-import { usePermissionStore } from '../stores/permission'
+import { usePermissionStore, MENU_CATEGORIES } from '../stores/permission'
 import api from '../api/request'
 
 const router = useRouter()
@@ -60,8 +79,17 @@ const permissionStore = usePermissionStore()
 const activeAlarmCount = ref(0)
 const wsConnected = ref(false)
 
-// Dynamic menu from permission store
+// Sidebar collapse state (icon rail vs. full)
+const isCollapse = ref(false)
+
+// Dynamic menu from permission store, grouped by category
 const menuItems = computed(() => permissionStore.menus)
+const groupedMenus = computed(() =>
+  MENU_CATEGORIES.map(cat => ({
+    ...cat,
+    children: menuItems.value.filter(m => m.category === cat.key),
+  })).filter(g => g.children.length > 0)
+)
 
 let timer = null, ws = null
 
@@ -115,3 +143,38 @@ onUnmounted(() => {
   ws?.close()
 })
 </script>
+
+<style scoped>
+.layout-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+  border-right: 1px solid #ebeef5;
+  transition: width 0.28s ease;
+}
+.layout-sidebar.is-collapse {
+  width: 64px;
+}
+.sidebar-toggle {
+  height: 42px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #606266;
+  border-bottom: 1px solid #f0f0f0;
+}
+.sidebar-toggle:hover {
+  background: #f5f7fa;
+  color: #409eff;
+}
+.sidebar-menu {
+  flex: 1;
+  border-right: none !important;
+  overflow-y: auto;
+}
+</style>
