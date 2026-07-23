@@ -84,10 +84,41 @@
             <el-button size="small" style="margin-top:12px" @click="$router.push(`/devices/${selectedDevice.id}`)">查看详情</el-button>
             <el-button size="small" style="margin-top:12px" @click="selectedDevice = null">取消选择</el-button>
           </el-card>
-          <el-card header="设备分布地图（按经纬度标注）">
+
+          <!-- 聚合标注卡片 -->
+          <el-card v-else-if="selectedAgg" :header="`${aggLabel}：${selectedAgg.name}`" style="margin-bottom:16px">
+            <el-descriptions :column="3" border size="small">
+              <el-descriptions-item label="设备总数">{{ selectedAgg.count }}</el-descriptions-item>
+              <el-descriptions-item label="在线"><span class="status-dot online"></span>{{ selectedAgg.online }}</el-descriptions-item>
+              <el-descriptions-item label="离线/异常"><span class="status-dot offline"></span>{{ selectedAgg.offline }}</el-descriptions-item>
+            </el-descriptions>
+            <el-divider content-position="left">成员设备（点击地图标点也可查看）</el-divider>
+            <el-table :data="selectedAgg.members" size="small" max-height="260" stripe>
+              <el-table-column prop="name" label="名称" width="140" />
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column prop="factory" label="厂级" />
+              <el-table-column prop="workshop" label="区级" />
+            </el-table>
+            <el-button size="small" style="margin-top:12px" @click="selectedAgg = null">取消选择</el-button>
+          </el-card>
+
+          <el-card>
+            <template #header>
+              <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
+                <span>设备分布地图（按经纬度标注）</span>
+                <el-radio-group v-model="aggMode" size="small" @change="onAggChange">
+                  <el-radio-button label="none">按设备</el-radio-button>
+                  <el-radio-button label="factory">按厂级</el-radio-button>
+                  <el-radio-button label="workshop">按区级</el-radio-button>
+                </el-radio-group>
+              </div>
+            </template>
             <div ref="mapChartRef" style="height:550px"></div>
             <div style="margin-top:8px;color:#888;font-size:12px">
               已标注位置设备：{{ mapDevices.length }} / {{ allDevices.length }}
+              <span v-if="aggMode !== 'none'">　|　聚合分组：{{ aggGroups.length }}</span>
               <span v-if="mapDevices.length === 0">（在「设备」页面填写 经度 / 纬度 后，即可在此地图显示）</span>
             </div>
           </el-card>
@@ -213,6 +244,35 @@ const allDevices = ref([])
 const mapDevices = computed(() => allDevices.value.filter(d => d.longitude != null && d.latitude != null))
 const mapChartRef = ref(null)
 let mapChart = null
+const aggMode = ref('none')                 // 'none' | 'factory' | 'workshop'
+const selectedAgg = ref(null)
+const aggLabel = computed(() => aggMode.value === 'factory' ? '厂级' : aggMode.value === 'workshop' ? '区级' : '')
+// 按厂级/区级聚合：取同组已标注设备的经纬度质心作为标点，附数量与在线/离线统计
+const aggGroups = computed(() => {
+  if (aggMode.value === 'none') return []
+  const key = aggMode.value
+  const groups = new Map()
+  for (const d of mapDevices.value) {
+    const g = (d[key] && String(d[key]).trim()) || '未分组'
+    if (!groups.has(g)) groups.set(g, [])
+    groups.get(g).push(d)
+  }
+  const out = []
+  for (const [name, members] of groups.entries()) {
+    const lats = members.map(m => m.latitude).filter(v => v != null)
+    const lngs = members.map(m => m.longitude).filter(v => v != null)
+    const clat = lats.length ? lats.reduce((a, b) => a + b, 0) / lats.length : 0
+    const clng = lngs.length ? lngs.reduce((a, b) => a + b, 0) / lngs.length : 0
+    out.push({
+      name, value: [clng, clat], field: key, isAgg: true,
+      count: members.length,
+      online: members.filter(m => m.status === 'online').length,
+      offline: members.filter(m => m.status !== 'online').length,
+      members: members.map(m => m.id),
+    })
+  }
+  return out.sort((a, b) => b.count - a.count)
+})
 
 const configForm = reactive({ name: '', description: '', is_default: false, levels: [] })
 
@@ -279,18 +339,23 @@ function renderMap() {
     mapChart = echarts.init(mapChartRef.value)
     mapChart.on('click', onMapClick)
   }
-  const data = mapDevices.value.map(d => ({
-    name: d.name,
-    value: [d.longitude, d.latitude],
-    id: d.id,
-    status: d.status,
-  }))
+  const isAgg = aggMode.value !== 'none'
+  const data = isAgg
+    ? aggGroups.value.map(g => ({
+        name: g.name, value: g.value, isAgg: true,
+        count: g.count, online: g.online, offline: g.offline, members: g.members,
+      }))
+    : mapDevices.value.map(d => ({
+        name: d.name, value: [d.longitude, d.latitude], id: d.id, status: d.status,
+      }))
   mapChart.setOption({
     tooltip: {
       trigger: 'item',
-      formatter: (p) => (p.data && p.data.value)
-        ? `${p.data.name}<br/>经度：${p.data.value[0]}<br/>纬度：${p.data.value[1]}`
-        : '',
+      formatter: (p) => {
+        if (!p.data) return ''
+        if (p.data.isAgg) return `${p.data.name}<br/>设备数：${p.data.count}<br/>在线：${p.data.online}　离线：${p.data.offline}`
+        return `${p.data.name}<br/>经度：${p.data.value[0]}<br/>纬度：${p.data.value[1]}`
+      },
     },
     geo: {
       map: 'china', roam: true,
@@ -299,28 +364,51 @@ function renderMap() {
       emphasis: { itemStyle: { areaColor: '#2a4d69' }, label: { show: false } },
     },
     series: [{
-      name: '设备',
+      name: isAgg ? '聚合分组' : '设备',
       type: 'scatter',
       coordinateSystem: 'geo',
       data,
-      symbolSize: 12,
-      itemStyle: { color: '#ff4d4f', borderColor: '#fff', borderWidth: 1 },
-      label: { show: true, formatter: '{b}', position: 'right', color: '#cde', fontSize: 10 },
-      emphasis: { scale: 1.4 },
+      symbolSize: (val, params) => isAgg ? (12 + Math.min((params.data.count || 1) * 2, 26)) : 12,
+      itemStyle: { color: isAgg ? '#1890ff' : '#ff4d4f', borderColor: '#fff', borderWidth: 1 },
+      label: {
+        show: true,
+        formatter: (p) => isAgg ? `${p.data.name}(${p.data.count})` : p.data.name,
+        position: 'right', color: '#cde', fontSize: 10,
+      },
+      emphasis: { scale: isAgg ? 1.2 : 1.4 },
     }],
   }, true)
 }
 
 function onMapClick(params) {
-  if (params.data && params.data.id) {
-    const dev = allDevices.value.find(d => d.id === params.data.id)
-    if (dev) selectedDevice.value = dev
+  if (params.data?.isAgg) {
+    const grp = aggGroups.value.find(g => g.name === params.data.name)
+    if (grp) {
+      selectedAgg.value = {
+        name: grp.name, count: grp.count, online: grp.online, offline: grp.offline,
+        field: grp.field,
+        members: allDevices.value.filter(d => grp.members.includes(d.id)),
+      }
+      selectedDevice.value = null
+    }
+    return
   }
+  if (params.data?.id) {
+    const dev = allDevices.value.find(d => d.id === params.data.id)
+    if (dev) { selectedDevice.value = dev; selectedAgg.value = null }
+  }
+}
+
+function onAggChange() {
+  selectedAgg.value = null
+  selectedDevice.value = null
+  nextTick(renderMap)
 }
 
 function onViewChange(val) {
   if (val === 'map') {
     fetchDevices()
+    selectedAgg.value = null
     nextTick(renderMap)
   } else {
     nextTick(renderTopologyChart)
