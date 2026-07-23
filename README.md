@@ -14,6 +14,21 @@
 - [配置说明](#配置说明)
 - [架构说明](#架构说明)
 - [常见问题](#常见问题)
+- [最近修复](#最近修复)
+
+---
+
+## 最近修复
+
+`master` 分支已落地一批安全与稳定性修复（完整清单见 [FIX_PROGRESS.md](./FIX_PROGRESS.md)）：
+
+- **后端 API 全量接入 RBAC**：`device/tag/group/alarm/sms/history/export/audit` 及新增的 `config/scada/script/import/hierarchy/template/dashboard` 共约 50 个端点已用 `require_permission("模块.read|write")` 守卫；权限码在 `app/services/seed_permissions.py` 中播种并分配给 admin/engineer/operator/viewer。
+- **脚本沙箱加固**：移除 `SAFE_BUILTINS` 中的 `type`，新增 AST 校验拦截 dunder 属性访问与危险调用（`().__class__.__subclasses__()` 等逃逸路径已封），缓存键改用 `hashlib.sha256`。
+- **modbus_codec 小端解码修复**：`decode_32bit/decode_float32/decode_float64` 的 `LITTLE_ENDIAN` 分支字节序写反（pre-existing bug），已修正并补回归测试。
+- **WebSocket 实时推送链路接通**：轮询/报警事件现经主事件循环正确广播。
+- **其他**：默认 `SECRET_KEY` 启动告警 + `DISABLE_DEFAULT_ADMIN` 开关；CORS 改为白名单；`reset_password` 清除默认弱口令；限流字典内存泄漏修复；`datetime.utcnow()` 全量替换为 `datetime.now(timezone.utc)`。
+
+> ⚠️ 生产部署请务必在 `.env` 中将 `SECRET_KEY` 改为强随机值，并配置真实数据库（MySQL）与 Redis（多 worker 时）。
 
 ---
 
@@ -93,7 +108,7 @@
 
 ### 权限管理（RBAC）
 
-- 21 个权限点：device / alarm / sms / history / export / system 六模块
+- 权限点：覆盖 device / tag / group / alarm / sms / history / export / audit / config / scada / script / import / hierarchy / template / dashboard / system 等模块（API 层已全部接入 `require_permission` 校验）
 - 4 个预置角色：admin / engineer / operator / viewer
 - 数据范围：全部 / 指定厂区 / 指定车间 / 仅自己
 - 动态菜单：按权限过滤侧边栏
@@ -119,7 +134,7 @@
 | Modbus | pymodbus 3.7 |
 | MQTT | paho-mqtt 1.6 |
 | OPC-UA | asyncua 0.40 |
-| 数据库 | MySQL 8.0 + Redis |
+| 数据库 | SQLite（开发/演示）/ MySQL 8.0（生产）+ Redis（多 worker 广播） |
 | 认证 | JWT (python-jose) |
 | 短信 | 阿里云/腾讯云/自建网关 |
 | 部署 | Docker Compose / 本地 |
@@ -128,7 +143,58 @@
 
 ## 快速部署
 
-### 方式一：本地部署
+### 方式零：极简启动（SQLite，推荐首次试用）
+
+无需安装 MySQL / Redis，开箱即跑（开发/演示用）。本仓库自带的 `backend/.env` 已指向本地 SQLite。
+
+#### 1. 环境要求
+
+- Python 3.10+
+- Node.js 18+
+
+#### 2. 后端
+
+```bash
+cd modbus-platform/backend
+
+# 安装依赖（首次）
+pip install -r requirements.txt
+# 注意：若安装后运行 init_db.py 报
+#   "ValueError: password cannot be longer than 72 bytes"
+# 说明 passlib 与新版 bcrypt 不兼容，请锁定：
+pip install "bcrypt==4.0.1"
+
+# 初始化数据库（建表 + admin + 权限 + 示例数据）
+# 默认 .env 的 DATABASE_URL 已是 sqlite:///./modbus_platform.db
+python ../scripts/init_db.py
+
+# 启动后端（开发模式热重载）
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+> 未配置 Redis 时，WebSocket 自动降级为单进程内广播（单 worker 正常），多 worker 才需要 Redis。
+
+#### 3. 前端
+
+```bash
+cd modbus-platform/frontend
+
+npm install      # 首次
+npm run dev      # Vite 默认 http://localhost:3000
+```
+
+#### 4. 访问
+
+- 前端界面：http://localhost:3000
+- API 文档（Swagger）：http://localhost:8000/docs
+- 默认账号：**admin / admin123**
+- 登录接口：`POST /api/v1/auth/login`
+
+> 所有 API 均需 `Authorization: Bearer <token>`，未带令牌返回 403（FastAPI 默认行为）。
+
+---
+
+### 方式一：本地部署（MySQL + Redis，生产向）
 
 #### 1. 环境要求
 
@@ -218,7 +284,7 @@ python ../scripts/init_db.py --no-sample
 |------|------|
 | 管理员 | admin / admin123 |
 | 角色 | admin(全部) / engineer(配置+管理) / operator(操作) / viewer(只读) |
-| 权限点 | 21 个，覆盖全部功能模块 |
+| 权限点 | 约 35 个，覆盖全部功能模块（含 config/scada/script/import/hierarchy/template/dashboard） |
 | 示例设备 | 1 台温湿度传感器（禁用状态） |
 
 ---
