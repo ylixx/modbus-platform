@@ -56,50 +56,48 @@ def query_history(
             ],
         }
     else:
-        # Aggregated query
+        # Aggregated query — done in Python so it works on SQLite / MySQL / Postgres alike
         interval_map = {
             "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400,
         }
         secs = interval_map.get(interval, 60)
 
-        # Use time-bucket aggregation (MySQL compatible)
-        from sqlalchemy import text
-        bucket_expr = text(
-            f"FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(recorded_at) / {secs}) * {secs})"
-        )
-        rows = db.query(
-            bucket_expr.label("bucket"),
-            sql_func.min(TagHistory.value).label("min_val"),
-            sql_func.max(TagHistory.value).label("max_val"),
-            sql_func.avg(TagHistory.value).label("avg_val"),
-            sql_func.count().label("count"),
-        ).filter(
+        raw_q = db.query(TagHistory.value, TagHistory.recorded_at).filter(
             TagHistory.device_id == device_id,
             TagHistory.tag_id == tag_id,
         )
         if start_time:
-            rows = rows.filter(TagHistory.recorded_at >= start_time)
+            raw_q = raw_q.filter(TagHistory.recorded_at >= start_time)
         else:
-            rows = rows.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(hours=24))
+            raw_q = raw_q.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(hours=24))
         if end_time:
-            rows = rows.filter(TagHistory.recorded_at <= end_time)
+            raw_q = raw_q.filter(TagHistory.recorded_at <= end_time)
+        raw_q = raw_q.order_by(TagHistory.recorded_at.asc())
 
-        rows = rows.group_by(text("bucket")).order_by(text("bucket")).limit(2000).all()
+        buckets = {}
+        for value, recorded_at in raw_q.all():
+            if recorded_at is None or value is None:
+                continue
+            ts = recorded_at if recorded_at.tzinfo else recorded_at.replace(tzinfo=timezone.utc)
+            bucket_key = (int(ts.timestamp()) // secs) * secs
+            buckets.setdefault(bucket_key, []).append(value)
+
+        data = [
+            {
+                "time": datetime.fromtimestamp(bk, tz=timezone.utc).isoformat(),
+                "min": round(min(vals), 4),
+                "max": round(max(vals), 4),
+                "avg": round(sum(vals) / len(vals), 4),
+                "count": len(vals),
+            }
+            for bk, vals in sorted(buckets.items())
+        ]
 
         return {
             "device_id": device_id,
             "tag_id": tag_id,
             "interval": interval,
-            "data": [
-                {
-                    "time": r.bucket.isoformat() if r.bucket else None,
-                    "min": round(r.min_val, 4) if r.min_val is not None else None,
-                    "max": round(r.max_val, 4) if r.max_val is not None else None,
-                    "avg": round(r.avg_val, 4) if r.avg_val is not None else None,
-                    "count": r.count,
-                }
-                for r in rows
-            ],
+            "data": data,
         }
 
 

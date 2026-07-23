@@ -36,7 +36,7 @@ def get_user_data_scope(db: Session, user: User) -> dict:
     """Get the merged data scope for a user.
 
     Returns:
-        {"scope": "all"|"factory"|"workshop"|"self", "values": ["车间A", ...]}
+        {"scope": "all"|"factory"|"workshop"|"self", "values": ["区级A", ...]}
     If user has multiple roles, the broadest scope wins.
     """
     if user.role == "admin":

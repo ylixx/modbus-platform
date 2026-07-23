@@ -15,7 +15,7 @@
           </div>
         </div>
       </template>
-      <el-table :data="tableData" v-loading="loading" stripe>
+      <el-table :data="pagedRows" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="name" label="画面名称" width="200" />
         <el-table-column prop="description" label="描述" />
@@ -30,6 +30,16 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:12px; display:flex; justify-content:flex-end"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        :page-sizes="[10, 20, 30, 50, 100]"
+        @size-change="onSizeChange"
+        @current-change="onPageChange"
+      />
     </el-card>
   </div>
 </template>
@@ -40,6 +50,7 @@ import { ElMessage } from 'element-plus'
 import api from '../../api/request'
 import { useTable } from '../../composables/useTable'
 import { formatTime } from '../../utils'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 const router = useRouter()
 
@@ -47,7 +58,12 @@ const { tableData, loading, fetchList, handleDelete } = useTable({
   listApi: () => api.get('/scada/pages'),
   deleteApi: (id) => api.delete(`/scada/pages/${id}`),
   immediate: true,
+  onDeleteSuccess: () => resetPage(),
 })
+const {
+  pageSize, currentPage, total, pagedRows,
+  onSizeChange, onPageChange, resetPage,
+} = useClientPagination(tableData)
 
 async function createPage() {
   const res = await api.post('/scada/pages', { name: '新画面' })

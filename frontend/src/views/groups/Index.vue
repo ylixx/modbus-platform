@@ -11,7 +11,7 @@
           <el-button type="primary" size="small" @click="openDialog()"><el-icon><Plus /></el-icon> 新增分组</el-button>
         </div>
       </template>
-      <el-table :data="tableData" v-loading="loading" stripe>
+      <el-table :data="pagedRows" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="name" label="分组名称" />
         <el-table-column prop="description" label="描述" />
@@ -23,6 +23,16 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:12px; display:flex; justify-content:flex-end"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        :page-sizes="[10, 20, 30, 50, 100]"
+        @size-change="onSizeChange"
+        @current-change="onPageChange"
+      />
     </el-card>
 
     <!-- Dialog using useForm -->
@@ -44,13 +54,19 @@
 import api from '../../api/request'
 import { useTable } from '../../composables/useTable'
 import { useForm } from '../../composables/useForm'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 // Table: list + delete
 const { tableData, loading, fetchList, handleDelete } = useTable({
   listApi: (params) => api.get('/devices/groups', { params }),
   deleteApi: (id) => api.delete(`/devices/groups/${id}`),
   immediate: true,
+  onDeleteSuccess: () => resetPage(),
 })
+const {
+  pageSize, currentPage, total, pagedRows,
+  onSizeChange, onPageChange, resetPage,
+} = useClientPagination(tableData)
 
 // Form: create + update
 const { form, dialogVisible, isEdit, submitLoading, openDialog, closeDialog, handleSubmit } = useForm({

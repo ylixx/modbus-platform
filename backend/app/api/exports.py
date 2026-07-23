@@ -118,7 +118,7 @@ def export_devices_csv(
 
     # Devices sheet
     writer.writerow(["=== 设备列表 ==="])
-    writer.writerow(["ID", "名称", "协议", "厂区", "车间", "产线", "安装位置", "连接信息", "状态", "采集周期", "启用"])
+    writer.writerow(["ID", "名称", "协议", "厂级", "区级", "班级", "安装位置", "连接信息", "状态", "采集周期", "启用"])
     for d in devices:
         conn = ""
         if d.protocol == "modbus_tcp":

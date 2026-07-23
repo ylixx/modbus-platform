@@ -23,9 +23,9 @@
         <el-descriptions-item v-if="device?.protocol === 'opc_ua'" label="命名空间">{{ device?.opc_namespace }}</el-descriptions-item>
         <el-descriptions-item label="最后采集">{{ formatTime(device?.last_poll_at) }}</el-descriptions-item>
         <el-descriptions-item label="错误信息" :span="2">{{ device?.last_error || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="厂区">{{ device?.factory || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="车间">{{ device?.workshop || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="产线">{{ device?.production_line || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="厂级">{{ device?.factory || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="区级">{{ device?.workshop || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="班级">{{ device?.production_line || '-' }}</el-descriptions-item>
         <el-descriptions-item label="安装位置">{{ device?.installation || '-' }}</el-descriptions-item>
         <el-descriptions-item label="坐标" v-if="device?.longitude">{{ device?.longitude }}, {{ device?.latitude }}</el-descriptions-item>
       </el-descriptions>
@@ -59,7 +59,7 @@
           <el-button type="primary" size="small" @click="showTagDialog()">新增点位</el-button>
         </div>
       </template>
-      <el-table :data="tags" stripe size="small">
+      <el-table :data="pagedRows" stripe size="small">
         <el-table-column prop="name" label="名称" width="140" />
         <el-table-column label="数据源" width="220">
           <template #default="{ row }">
@@ -86,6 +86,16 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:12px; display:flex; justify-content:flex-end"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        :page-sizes="[10, 20, 30, 50, 100]"
+        @size-change="onSizeChange"
+        @current-change="onPageChange"
+      />
     </el-card>
 
     <!-- Tag Dialog -->
@@ -198,6 +208,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../../api/request'
 import dayjs from 'dayjs'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 const route = useRoute()
 const deviceId = route.params.id
@@ -205,6 +216,10 @@ const device = ref(null)
 const tags = ref([])
 const liveData = ref([])
 const loading = ref(false)
+const {
+  pageSize, currentPage, total, pagedRows,
+  onSizeChange, onPageChange, resetPage,
+} = useClientPagination(tags)
 const allScripts = ref([])
 const tagDialogVisible = ref(false)
 const editingTagId = ref(null)
@@ -234,6 +249,7 @@ async function fetchDevice() {
   const res = await api.get(`/devices/${deviceId}`)
   device.value = res.data
   tags.value = res.data.tags || []
+  resetPage()
 }
 
 async function fetchLive() {

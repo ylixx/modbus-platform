@@ -49,7 +49,7 @@ class UserRoleAssign(BaseModel):
     user_id: int
     role_id: int
     data_scope: str = "all"         # all | factory | workshop | self
-    scope_values: List[str] = []    # e.g. ["车间A", "车间B"]
+    scope_values: List[str] = []    # e.g. ["区级A", "区级B"]
 
 class UserRoleOut(BaseModel):
     id: int

@@ -19,7 +19,7 @@
     </el-card>
 
     <el-card v-if="selectedDevice" header="可写点位">
-      <el-table :data="writableTags" stripe>
+      <el-table :data="pagedRows" stripe>
         <el-table-column prop="name" label="点位名称" width="160" />
         <el-table-column prop="function_code" label="功能码" width="160">
           <template #default="{ row }">{{ fcLabel(row.function_code) }}</template>
@@ -47,6 +47,16 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:12px; display:flex; justify-content:flex-end"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        :page-sizes="[10, 20, 30, 50, 100]"
+        @size-change="onSizeChange"
+        @current-change="onPageChange"
+      />
       <el-empty v-if="!writableTags.length" description="该设备没有可写点位" />
     </el-card>
 
@@ -102,6 +112,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../../api/request'
 import { usePermission } from '../../composables/usePermission'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 const { hasPermission } = usePermission()
 
@@ -121,6 +132,10 @@ const gettingCode = ref(false)
 const executing = ref(false)
 
 const writableTags = computed(() => tags.value.filter(t => t.writable))
+const {
+  pageSize, currentPage, total, pagedRows,
+  onSizeChange, onPageChange, resetPage,
+} = useClientPagination(writableTags)
 const fcLabel = (fc) => ({
   coil: 'Coil (FC01/05)', discrete_input: 'Discrete Input (FC02)',
   input_register: 'Input Register (FC04)', holding_register: 'Holding Register (FC03/06)',
@@ -130,6 +145,7 @@ async function fetchDevices() { devices.value = (await api.get('/devices/all')).
 
 async function fetchTags() {
   if (!selectedDevice.value) return
+  resetPage()
   tags.value = (await api.get(`/devices/${selectedDevice.value}/tags`)).data
   fetchLive()
 }

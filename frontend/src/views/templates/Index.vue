@@ -32,8 +32,8 @@
         <el-form-item :label="selectedTpl?.protocol === 'mqtt' ? 'Broker地址' : selectedTpl?.protocol === 'opc_ua' ? 'Endpoint' : '主机地址'">
           <el-input v-model="createForm.host" :placeholder="hostPlaceholder" />
         </el-form-item>
-        <el-form-item label="厂区"><el-input v-model="createForm.factory" placeholder="选填" /></el-form-item>
-        <el-form-item label="车间"><el-input v-model="createForm.workshop" placeholder="选填" /></el-form-item>
+        <el-form-item label="厂级"><el-input v-model="createForm.factory" placeholder="选填" /></el-form-item>
+        <el-form-item label="区级"><el-input v-model="createForm.workshop" placeholder="选填" /></el-form-item>
       </el-form>
 
       <el-divider content-position="left">预置点位 ({{ selectedTpl?.tags?.length || 0 }} 个)</el-divider>

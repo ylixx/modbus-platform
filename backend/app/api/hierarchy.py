@@ -124,9 +124,9 @@ def get_hierarchy_tree(
 def get_available_fields(_: User = Depends(require_permission("hierarchy.read"))):
     """Return all device fields that can be used as hierarchy levels."""
     return [
-        {"field": "factory",         "label": "厂区",      "type": "string"},
-        {"field": "workshop",        "label": "车间",      "type": "string"},
-        {"field": "production_line", "label": "产线",      "type": "string"},
+        {"field": "factory",         "label": "厂级",      "type": "string"},
+        {"field": "workshop",        "label": "区级",      "type": "string"},
+        {"field": "production_line", "label": "班级",      "type": "string"},
         {"field": "installation",    "label": "安装位置",  "type": "string"},
         {"field": "group",           "label": "设备分组",  "type": "string"},
         {"field": "protocol",        "label": "通信协议",  "type": "enum"},
@@ -137,13 +137,13 @@ def get_available_fields(_: User = Depends(require_permission("hierarchy.read"))
 
 def _create_default(db: Session) -> HierarchyConfig:
     default_levels = [
-        {"key": "factory",         "label": "厂区",   "field": "factory",         "icon": "🏭"},
-        {"key": "workshop",        "label": "车间",   "field": "workshop",        "icon": "🏢"},
-        {"key": "production_line", "label": "产线",   "field": "production_line", "icon": "🔧"},
+        {"key": "factory",         "label": "厂级",   "field": "factory",         "icon": "🏭"},
+        {"key": "workshop",        "label": "区级",   "field": "workshop",        "icon": "🏢"},
+        {"key": "production_line", "label": "班级",   "field": "production_line", "icon": "🔧"},
         {"key": "device",          "label": "设备",   "field": "_device",         "icon": "📡"},
     ]
     cfg = HierarchyConfig(
-        name="默认", description="厂区→车间→产线→设备",
+        name="默认", description="厂级→区级→班级→设备",
         levels_json=json.dumps(default_levels, ensure_ascii=False),
         is_default=True,
     )

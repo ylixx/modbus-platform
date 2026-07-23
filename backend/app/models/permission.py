@@ -8,8 +8,8 @@ Structure:
 
 Data Scope types:
   all         - 全部数据
-  factory     - 指定厂区
-  workshop    - 指定车间
+  factory     - 指定厂级
+  workshop    - 指定区级
   self        - 仅自己创建的
 """
 from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, ForeignKey, func
@@ -66,7 +66,7 @@ class UserRole(Base):
 
     # Data scope
     data_scope = Column(String(20), default="all")  # all | factory | workshop | self
-    scope_values = Column(Text, default="")          # JSON array: ["车间A", "车间B"]
+    scope_values = Column(Text, default="")          # JSON array: ["区级A", "区级B"]
 
     user = relationship("User", back_populates="roles")
     role = relationship("Role", back_populates="users")

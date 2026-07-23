@@ -2,7 +2,7 @@
 
 Allows users to define their own tree structure for device grouping.
 Example hierarchies:
-  - 厂区 → 车间 → 产线 → 设备
+  - 厂级 → 区级 → 班级 → 设备
   - 区域 → 楼栋 → 楼层 → 设备
   - 客户 → 站点 → 设备
   - 项目 → 模块 → 设备
@@ -27,9 +27,9 @@ class HierarchyConfig(Base):
 
 # levels_json example:
 # [
-#   {"key": "factory",         "label": "厂区",   "field": "factory",        "icon": "🏭"},
-#   {"key": "workshop",        "label": "车间",   "field": "workshop",       "icon": "🏢"},
-#   {"key": "production_line", "label": "产线",   "field": "production_line","icon": "🔧"},
+#   {"key": "factory",         "label": "厂级",   "field": "factory",        "icon": "🏭"},
+#   {"key": "workshop",        "label": "区级",   "field": "workshop",       "icon": "🏢"},
+#   {"key": "production_line", "label": "班级",   "field": "production_line","icon": "🔧"},
 #   {"key": "device",          "label": "设备",   "field": "_device",        "icon": "📡"}
 # ]
 #

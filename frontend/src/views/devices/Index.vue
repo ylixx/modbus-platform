@@ -11,12 +11,12 @@
           <el-input v-model="search" placeholder="搜索设备名称/IP" clearable prefix-icon="Search" @clear="fetchDevices" @keyup.enter="fetchDevices" />
         </el-col>
         <el-col :span="3">
-          <el-select v-model="filterFactory" placeholder="厂区" clearable @change="fetchDevices">
+          <el-select v-model="filterFactory" placeholder="厂级" clearable @change="fetchDevices">
             <el-option v-for="f in locationOptions.factories" :key="f" :label="f" :value="f" />
           </el-select>
         </el-col>
         <el-col :span="3">
-          <el-select v-model="filterWorkshop" placeholder="车间" clearable @change="fetchDevices">
+          <el-select v-model="filterWorkshop" placeholder="区级" clearable @change="fetchDevices">
             <el-option v-for="w in locationOptions.workshops" :key="w" :label="w" :value="w" />
           </el-select>
         </el-col>
@@ -150,13 +150,13 @@
           <el-divider content-position="left">位置信息</el-divider>
           <el-row :gutter="16">
             <el-col :span="8">
-              <el-form-item label="厂区"><el-input v-model="form.factory" placeholder="e.g. 一号厂区" /></el-form-item>
+              <el-form-item label="厂级"><el-input v-model="form.factory" placeholder="e.g. 一号厂级" /></el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="车间"><el-input v-model="form.workshop" placeholder="e.g. A车间" /></el-form-item>
+              <el-form-item label="区级"><el-input v-model="form.workshop" placeholder="e.g. A区级" /></el-form-item>
             </el-col>
             <el-col :span="8">
-              <el-form-item label="产线"><el-input v-model="form.production_line" placeholder="e.g. 1号线" /></el-form-item>
+              <el-form-item label="班级"><el-input v-model="form.production_line" placeholder="e.g. 1号线" /></el-form-item>
             </el-col>
           </el-row>
           <el-row :gutter="16">
@@ -175,22 +175,30 @@
           <template v-if="form.protocol === 'modbus_tcp'">
             <el-divider content-position="left">Modbus TCP 连接</el-divider>
             <el-row :gutter="16">
-              <el-col :span="12">
+              <el-col :span="10">
                 <el-form-item label="主机地址" required><el-input v-model="form.host" placeholder="192.168.1.100" /></el-form-item>
               </el-col>
-              <el-col :span="6">
-                <el-form-item label="端口"><el-input-number v-model="form.port" :min="1" :max="65535" style="width:100%" /></el-form-item>
+              <el-col :span="7">
+                <el-form-item label="端口">
+                  <el-input-number v-model="form.port" :min="1" :max="65535" :controls="false" style="width:100%" />
+                </el-form-item>
               </el-col>
-              <el-col :span="6">
-                <el-form-item label="从站ID"><el-input-number v-model="form.slave_id" :min="1" :max="247" style="width:100%" /></el-form-item>
+              <el-col :span="7">
+                <el-form-item label="从站ID">
+                  <el-input-number v-model="form.slave_id" :min="1" :max="247" :controls="false" style="width:100%" />
+                </el-form-item>
               </el-col>
             </el-row>
             <el-row :gutter="16">
               <el-col :span="8">
-                <el-form-item label="超时(秒)"><el-input-number v-model="form.timeout" :min="0.5" :max="30" :step="0.5" style="width:100%" /></el-form-item>
+                <el-form-item label="超时(秒)">
+                  <el-input-number v-model="form.timeout" :min="0.5" :max="30" :step="0.5" :controls="false" style="width:100%" />
+                </el-form-item>
               </el-col>
               <el-col :span="8">
-                <el-form-item label="重试次数"><el-input-number v-model="form.retries" :min="0" :max="10" style="width:100%" /></el-form-item>
+                <el-form-item label="重试次数">
+                  <el-input-number v-model="form.retries" :min="0" :max="10" :controls="false" style="width:100%" />
+                </el-form-item>
               </el-col>
             </el-row>
           </template>
@@ -203,7 +211,9 @@
                 <el-form-item label="Broker地址" required><el-input v-model="form.mqtt_broker" placeholder="192.168.1.100" /></el-form-item>
               </el-col>
               <el-col :span="6">
-                <el-form-item label="端口"><el-input-number v-model="form.mqtt_port" :min="1" :max="65535" style="width:100%" /></el-form-item>
+                <el-form-item label="端口">
+                  <el-input-number v-model="form.mqtt_port" :min="1" :max="65535" :controls="false" style="width:100%" />
+                </el-form-item>
               </el-col>
               <el-col :span="6">
                 <el-form-item label="QoS">

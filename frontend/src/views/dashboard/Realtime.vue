@@ -14,12 +14,12 @@
           </el-select>
         </el-col>
         <el-col :span="3">
-          <el-select v-model="filterFactory" placeholder="厂区" clearable @change="fetchAll">
+          <el-select v-model="filterFactory" placeholder="厂级" clearable @change="fetchAll">
             <el-option v-for="f in locations.factories" :key="f" :label="f" :value="f" />
           </el-select>
         </el-col>
         <el-col :span="3">
-          <el-select v-model="filterWorkshop" placeholder="车间" clearable @change="fetchAll">
+          <el-select v-model="filterWorkshop" placeholder="区级" clearable @change="fetchAll">
             <el-option v-for="w in locations.workshops" :key="w" :label="w" :value="w" />
           </el-select>
         </el-col>
@@ -37,14 +37,22 @@
             <el-option label="异常" value="error" />
           </el-select>
         </el-col>
-        <el-col :span="4">
+        <el-col :span="3">
           <el-input v-model="searchTag" placeholder="搜索点位名称" clearable prefix-icon="Search" @input="applyLocalFilter" />
         </el-col>
-        <el-col :span="4" style="text-align:right">
+        <el-col :span="5" style="text-align:right">
           <el-tag :type="wsConnected ? 'success' : 'info'" size="small">
             {{ wsConnected ? '● 实时连接' : '○ 离线' }}
           </el-tag>
-          <el-button size="small" style="margin-left:8px" @click="fetchAll"><el-icon><Refresh /></el-icon></el-button>
+          <el-button size="small" style="margin-left:8px" @click="fetchAll" title="手动刷新"><el-icon><Refresh /></el-icon></el-button>
+          <span style="margin-left:8px;font-size:12px;color:#888">自动</span>
+          <el-select v-model="refreshInterval" size="small" style="width:104px;margin-left:4px" @change="setupAutoRefresh">
+            <el-option label="手动刷新" :value="0" />
+            <el-option label="10 秒" :value="10" />
+            <el-option label="30 秒" :value="30" />
+            <el-option label="60 秒" :value="60" />
+            <el-option label="2 分钟" :value="120" />
+          </el-select>
           <el-dropdown trigger="click" style="margin-left:4px">
             <el-button size="small"><el-icon><Download /></el-icon></el-button>
             <template #dropdown>
@@ -77,30 +85,29 @@
     <!-- Data Table -->
     <el-card>
       <el-table
-        :data="filteredRows"
+        :data="pagedRows"
         stripe
         size="small"
         :row-class-name="rowClassName"
         :default-sort="{ prop: 'device_name', order: 'ascending' }"
+        @sort-change="onSortChange"
         max-height="calc(100vh - 340px)"
       >
-        <el-table-column prop="device_name" label="设备" width="160" fixed sortable>
+        <el-table-column prop="device_name" label="设备" width="160" fixed sortable="custom">
           <template #default="{ row }">
             <span class="status-dot" :class="row.device_status"></span>
             <span style="font-weight:500">{{ row.device_name }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="protocol" label="协议" width="100" sortable>
+        <el-table-column prop="protocol" label="协议" width="100" sortable="custom">
           <template #default="{ row }">
             <el-tag :type="protoType(row.protocol)" size="small">{{ protoLabel(row.protocol) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="location" label="位置" width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.location || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="tag_name" label="点位名称" width="160" fixed sortable />
+        <el-table-column prop="location" label="位置" width="160" show-overflow-tooltip />
+        <el-table-column prop="tag_name" label="点位名称" width="160" fixed sortable="custom" />
         <el-table-column prop="unit" label="单位" width="70" />
-        <el-table-column prop="value" label="当前值" width="120" sortable :sort-method="sortByValue">
+        <el-table-column prop="value" label="当前值" width="120" sortable="custom">
           <template #default="{ row }">
             <span class="value-cell" :class="valueClass(row)">
               {{ formatValue(row.value) }}
@@ -112,7 +119,7 @@
             <el-tag :type="row.quality === 'good' ? 'success' : 'danger'" size="small">{{ row.quality }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="time" label="更新时间" width="170" sortable>
+        <el-table-column prop="time" label="更新时间" width="170" sortable="custom">
           <template #default="{ row }">
             <span :class="{ 'stale': isStale(row.time) }">{{ formatTime(row.time) }}</span>
           </template>
@@ -125,12 +132,22 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:12px; display:flex; justify-content:flex-end"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="totalRows"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        :page-sizes="[10, 20, 30, 50, 100]"
+        @size-change="onSizeChange"
+        @current-change="onPageChange"
+      />
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../../api/request'
 import dayjs from 'dayjs'
@@ -152,6 +169,15 @@ const filterWorkshop = ref(null)
 const filterProtocol = ref(null)
 const filterStatus = ref(null)
 const searchTag = ref('')
+
+// Auto-refresh (interval-based, lightweight)
+const refreshInterval = ref(30)   // 0 = 手动刷新（不自动）
+// Pagination
+const currentPage = ref(1)
+const pageSize = ref(30)
+// Cross-page sorting
+const sortProp = ref('device_name')
+const sortOrder = ref('ascending')
 
 // Build rows
 const allRows = computed(() => {
@@ -194,6 +220,41 @@ const filteredRows = computed(() => {
   return rows
 })
 
+// Cross-page sorting + pagination (so sorting applies to the full filtered set, not just the current page)
+const sortedRows = computed(() => {
+  if (!sortProp.value || !sortOrder.value) return filteredRows.value
+  const dir = sortOrder.value === 'ascending' ? 1 : -1
+  return filteredRows.value.slice().sort((a, b) => cmpRows(a, b, sortProp.value) * dir)
+})
+const totalRows = computed(() => sortedRows.value.length)
+const pagedRows = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return sortedRows.value.slice(start, start + pageSize.value)
+})
+
+function cmpRows(a, b, prop) {
+  let av = a[prop], bv = b[prop]
+  if (prop === 'value') { av = a.value ?? null; bv = b.value ?? null }
+  if (av === null && bv === null) return 0
+  if (av === null) return -1
+  if (bv === null) return 1
+  if (typeof av === 'number' && typeof bv === 'number') return av - bv
+  return String(av).localeCompare(String(bv), 'zh')
+}
+
+function onSortChange({ prop, order }) {
+  sortProp.value = prop
+  sortOrder.value = order
+  currentPage.value = 1
+}
+function onSizeChange(sz) { pageSize.value = sz; currentPage.value = 1 }
+function onPageChange(p) { currentPage.value = p }
+
+// Reset to first page whenever filters change
+watch([filterDevice, filterFactory, filterWorkshop, filterProtocol, filterStatus, searchTag], () => {
+  currentPage.value = 1
+})
+
 // Stats
 const totalTags = computed(() => filteredRows.value.length)
 const goodCount = computed(() => filteredRows.value.filter(r => r.quality === 'good' && !isStale(r.time)).length)
@@ -205,7 +266,6 @@ const protoLabel = (p) => ({ modbus_tcp: 'Modbus', mqtt: 'MQTT', opc_ua: 'OPC-UA
 const protoType = (p) => ({ modbus_tcp: '', mqtt: 'success', opc_ua: 'warning' }[p] || 'info')
 const formatTime = (t) => t ? dayjs(t).format('HH:mm:ss') : '-'
 const formatValue = (v) => v === null || v === undefined ? '--' : typeof v === 'number' ? v.toFixed(2) : String(v)
-const sortByValue = (a, b) => (a.value ?? -Infinity) - (b.value ?? -Infinity)
 
 function isStale(time) {
   if (!time) return true
@@ -325,10 +385,32 @@ function connectWs() {
 }
 
 let refreshTimer = null
+
+// Lightweight auto-refresh: only updates live values, never rebuilds the
+// device/tag list — so the displayed device set stays stable across refreshes.
+async function fetchLiveValues() {
+  for (const d of allDevices.value) {
+    try {
+      const res = await api.get(`/devices/${d.id}/live`)
+      const values = res.data.values || {}
+      for (const [tagId, val] of Object.entries(values)) {
+        liveValues.value[`${d.id}_${tagId}`] = val
+      }
+    } catch {}
+  }
+}
+
+function setupAutoRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+  if (refreshInterval.value > 0) {
+    refreshTimer = setInterval(fetchLiveValues, refreshInterval.value * 1000)
+  }
+}
+
 onMounted(() => {
   fetchAll()
   connectWs()
-  refreshTimer = setInterval(fetchAll, 60000)  // full refresh every 60s
+  setupAutoRefresh()
 })
 onUnmounted(() => {
   ws?.close()

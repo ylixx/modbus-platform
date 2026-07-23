@@ -16,7 +16,13 @@
         <el-col :span="4">
           <el-switch v-model="showOffline" active-text="显示离线" @change="fetchTree" />
         </el-col>
-        <el-col :span="14" style="text-align:right">
+        <el-col :span="4">
+          <el-radio-group v-model="viewMode" size="small" @change="onViewChange">
+            <el-radio-button label="topology">拓扑</el-radio-button>
+            <el-radio-button label="map">地图</el-radio-button>
+          </el-radio-group>
+        </el-col>
+        <el-col :span="10" style="text-align:right">
           <el-button @click="showConfigDialog = true"><el-icon><Setting /></el-icon> 配置层级</el-button>
           <el-button @click="showNewConfigDialog"><el-icon><Plus /></el-icon> 新建方案</el-button>
           <el-button @click="fetchTree"><el-icon><Refresh /></el-icon> 刷新</el-button>
@@ -56,26 +62,58 @@
         </el-card>
       </el-col>
 
-      <!-- Detail / Chart -->
+      <!-- Detail / Chart / Map -->
       <el-col :span="16">
-        <el-card v-if="selectedDevice" :header="`设备: ${selectedDevice.name}`">
-          <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="协议">{{ protoLabel(selectedDevice.protocol) }}</el-descriptions-item>
-            <el-descriptions-item label="状态">
-              <span class="status-dot" :class="selectedDevice.status"></span>{{ statusLabel(selectedDevice.status) }}
-            </el-descriptions-item>
-            <el-descriptions-item label="厂区">{{ selectedDevice.factory || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="车间">{{ selectedDevice.workshop || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="产线">{{ selectedDevice.production_line || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="安装位置">{{ selectedDevice.installation || '-' }}</el-descriptions-item>
-          </el-descriptions>
-          <el-button size="small" style="margin-top:12px" @click="$router.push(`/devices/${selectedDevice.id}`)">查看详情</el-button>
-        </el-card>
+        <!-- 地图视图：地图常驻，选中设备时详情显示在上方 -->
+        <template v-if="viewMode === 'map'">
+          <el-card v-if="selectedDevice" :header="`设备: ${selectedDevice.name}`" style="margin-bottom:16px">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="协议">{{ protoLabel(selectedDevice.protocol) }}</el-descriptions-item>
+              <el-descriptions-item label="状态">
+                <span class="status-dot" :class="selectedDevice.status"></span>{{ statusLabel(selectedDevice.status) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="厂级">{{ selectedDevice.factory || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="区级">{{ selectedDevice.workshop || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="班级">{{ selectedDevice.production_line || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="安装位置">{{ selectedDevice.installation || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="经纬度">
+                {{ selectedDevice.longitude != null ? selectedDevice.longitude : '-' }} ,
+                {{ selectedDevice.latitude != null ? selectedDevice.latitude : '-' }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <el-button size="small" style="margin-top:12px" @click="$router.push(`/devices/${selectedDevice.id}`)">查看详情</el-button>
+            <el-button size="small" style="margin-top:12px" @click="selectedDevice = null">取消选择</el-button>
+          </el-card>
+          <el-card header="设备分布地图（按经纬度标注）">
+            <div ref="mapChartRef" style="height:550px"></div>
+            <div style="margin-top:8px;color:#888;font-size:12px">
+              已标注位置设备：{{ mapDevices.length }} / {{ allDevices.length }}
+              <span v-if="mapDevices.length === 0">（在「设备」页面填写 经度 / 纬度 后，即可在此地图显示）</span>
+            </div>
+          </el-card>
+        </template>
 
-        <!-- Topology Chart when no device selected -->
-        <el-card v-else header="拓扑总览">
-          <div ref="topologyChartRef" style="height:550px"></div>
-        </el-card>
+        <!-- 拓扑视图：原逻辑 -->
+        <template v-else>
+          <el-card v-if="selectedDevice" :header="`设备: ${selectedDevice.name}`">
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="协议">{{ protoLabel(selectedDevice.protocol) }}</el-descriptions-item>
+              <el-descriptions-item label="状态">
+                <span class="status-dot" :class="selectedDevice.status"></span>{{ statusLabel(selectedDevice.status) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="厂级">{{ selectedDevice.factory || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="区级">{{ selectedDevice.workshop || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="班级">{{ selectedDevice.production_line || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="安装位置">{{ selectedDevice.installation || '-' }}</el-descriptions-item>
+            </el-descriptions>
+            <el-button size="small" style="margin-top:12px" @click="$router.push(`/devices/${selectedDevice.id}`)">查看详情</el-button>
+          </el-card>
+
+          <!-- Topology Chart when no device selected -->
+          <el-card v-else header="拓扑总览">
+            <div ref="topologyChartRef" style="height:550px"></div>
+          </el-card>
+        </template>
       </el-col>
     </el-row>
 
@@ -146,11 +184,15 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Top, Bottom } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
+import chinaJson from '../../assets/china.json'
 import api from '../../api/request'
+
+// 国内地图（离线）：本地内置中国 GeoJSON，无需任何外部 API / 网络 / Key
+echarts.registerMap('china', chinaJson)
 
 const configs = ref([])
 const currentConfig = ref(null)
@@ -164,6 +206,13 @@ const editingConfigId = ref(null)
 const availableFields = ref([])
 const topologyChartRef = ref(null)
 let topoChart = null
+
+// 地图视图（离线中国地图）
+const viewMode = ref('topology')          // 'topology' | 'map'
+const allDevices = ref([])
+const mapDevices = computed(() => allDevices.value.filter(d => d.longitude != null && d.latitude != null))
+const mapChartRef = ref(null)
+let mapChart = null
 
 const configForm = reactive({ name: '', description: '', is_default: false, levels: [] })
 
@@ -216,6 +265,73 @@ function onNodeClick(data) {
   }
 }
 
+// ── 地图数据（设备经纬度） ──
+async function fetchDevices() {
+  try {
+    const res = await api.get('/devices/all')
+    allDevices.value = res.data || []
+  } catch (e) { console.error(e) }
+}
+
+function renderMap() {
+  if (!mapChartRef.value) return
+  if (!mapChart) {
+    mapChart = echarts.init(mapChartRef.value)
+    mapChart.on('click', onMapClick)
+  }
+  const data = mapDevices.value.map(d => ({
+    name: d.name,
+    value: [d.longitude, d.latitude],
+    id: d.id,
+    status: d.status,
+  }))
+  mapChart.setOption({
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => (p.data && p.data.value)
+        ? `${p.data.name}<br/>经度：${p.data.value[0]}<br/>纬度：${p.data.value[1]}`
+        : '',
+    },
+    geo: {
+      map: 'china', roam: true,
+      label: { show: false },
+      itemStyle: { areaColor: '#1f2d3d', borderColor: '#0a3d5c' },
+      emphasis: { itemStyle: { areaColor: '#2a4d69' }, label: { show: false } },
+    },
+    series: [{
+      name: '设备',
+      type: 'scatter',
+      coordinateSystem: 'geo',
+      data,
+      symbolSize: 12,
+      itemStyle: { color: '#ff4d4f', borderColor: '#fff', borderWidth: 1 },
+      label: { show: true, formatter: '{b}', position: 'right', color: '#cde', fontSize: 10 },
+      emphasis: { scale: 1.4 },
+    }],
+  }, true)
+}
+
+function onMapClick(params) {
+  if (params.data && params.data.id) {
+    const dev = allDevices.value.find(d => d.id === params.data.id)
+    if (dev) selectedDevice.value = dev
+  }
+}
+
+function onViewChange(val) {
+  if (val === 'map') {
+    fetchDevices()
+    nextTick(renderMap)
+  } else {
+    nextTick(renderTopologyChart)
+  }
+}
+
+function onResize() {
+  topologyChart?.resize()
+  mapChart?.resize()
+}
+
 function renderTopologyChart() {
   if (!topologyChartRef.value) return
   if (!topoChart) topoChart = echarts.init(topologyChartRef.value)
@@ -254,9 +370,9 @@ function showNewConfigDialog() {
   Object.assign(configForm, {
     name: '', description: '', is_default: false,
     levels: [
-      { key: 'factory', label: '厂区', field: 'factory', icon: '🏭' },
-      { key: 'workshop', label: '车间', field: 'workshop', icon: '🏢' },
-      { key: 'production_line', label: '产线', field: 'production_line', icon: '🔧' },
+      { key: 'factory', label: '厂级', field: 'factory', icon: '🏭' },
+      { key: 'workshop', label: '区级', field: 'workshop', icon: '🏢' },
+      { key: 'production_line', label: '班级', field: 'production_line', icon: '🔧' },
       { key: 'device', label: '设备', field: '_device', icon: '📡' },
     ],
   })
@@ -317,9 +433,10 @@ onMounted(() => {
   fetchConfigs()
   fetchFields()
   fetchTree()
-  window.addEventListener('resize', () => topoChart?.resize())
+  fetchDevices()
+  window.addEventListener('resize', onResize)
 })
-onUnmounted(() => { topoChart?.dispose() })
+onUnmounted(() => { topoChart?.dispose(); mapChart?.dispose() })
 </script>
 
 <style scoped>

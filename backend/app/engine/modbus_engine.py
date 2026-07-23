@@ -191,7 +191,12 @@ class ModbusEngine:
 
                     for tag in tag_list:
                         offset = tag.address - start_addr
-                        value = decode_value(raw_values, offset, tag, count)
+                        value = decode_value(
+                            raw_values, offset, tag.data_type, tag.byte_order,
+                            bit_index=tag.bit_index,
+                            register_count=tag.register_count,
+                            function_code=tag.function_code,
+                        )
                         if value is not None:
                             processed = value * tag.scale_factor + tag.offset
                             if tag.decimal_places is not None:
@@ -268,7 +273,7 @@ class ModbusEngine:
             current_tags = []
 
             for tag in tag_list:
-                reg_count = get_register_count(tag)
+                reg_count = get_register_count(tag.data_type, tag.register_count)
                 tag_start = tag.address
                 tag_end = tag.address + reg_count
 

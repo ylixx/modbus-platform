@@ -1,5 +1,5 @@
-@echo off
-chcp 65001 >nul 2>&1
+@echo on
+rem chcp 65001 >nul 2>&1
 setlocal
 REM 一键启动 Modbus 平台：用托管 Python 调起 start_modbus.py
 set "PYTHON=C:\Users\liyan\.workbuddy\binaries\python\envs\default\Scripts\python.exe"

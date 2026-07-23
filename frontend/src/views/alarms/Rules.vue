@@ -7,7 +7,7 @@
           <el-button type="primary" size="small" @click="openDialog()"><el-icon><Plus /></el-icon> 新增规则</el-button>
         </div>
       </template>
-      <el-table :data="tableData" v-loading="loading" stripe>
+      <el-table :data="pagedRows" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="name" label="规则名称" width="160" />
         <el-table-column prop="device_id" label="设备ID" width="80" />
@@ -44,6 +44,16 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:12px; display:flex; justify-content:flex-end"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        :page-sizes="[10, 20, 30, 50, 100]"
+        @size-change="onSizeChange"
+        @current-change="onPageChange"
+      />
     </el-card>
 
     <!-- Dialog -->
@@ -106,6 +116,7 @@ import { useTable } from '../../composables/useTable'
 import { useForm } from '../../composables/useForm'
 import DictTag from '../../components/DictTag.vue'
 import { ALARM_TYPE_OPTIONS, ALARM_LEVEL_OPTIONS } from '../../utils/dict'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 // Devices list
 const devices = ref([])
@@ -131,7 +142,12 @@ const { tableData, loading, fetchList, handleDelete } = useTable({
   listApi: (params) => api.get('/alarms/rules/all'),
   deleteApi: (id) => api.delete(`/alarms/rules/${id}`),
   immediate: true,
+  onDeleteSuccess: () => resetPage(),
 })
+const {
+  pageSize, currentPage, total, pagedRows,
+  onSizeChange, onPageChange, resetPage,
+} = useClientPagination(tableData)
 
 // Form
 const defaultForm = {

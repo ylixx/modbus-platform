@@ -45,8 +45,8 @@
 ### 设备管理
 
 - 设备 CRUD，支持分组、标签管理
-- 位置信息：厂区、车间、产线、安装位置、经纬度 GPS
-- 自定义拓扑层级：用户可配置树形结构（如 厂区→车间→产线→设备 或 区域→楼栋→楼层→设备），多方案切换
+- 位置信息：厂级、区级、班级、安装位置、经纬度 GPS
+- 自定义拓扑层级：用户可配置树形结构（如 厂级→区级→班级→设备 或 区域→楼栋→楼层→设备），多方案切换
 - 采集点位（Tag）配置：地址/Topic/NodeID、数据类型、字节序、缩放系数、偏移、单位、可写标记
 - 采集频率按设备独立配置
 - 设备状态：在线/离线/异常/维护，自动检测
@@ -73,7 +73,7 @@
 ### 实时数据
 
 - 所有设备 Tag 扁平表格，WebSocket 实时刷新
-- 6 个筛选器：设备/厂区/车间/协议/状态/搜索
+- 6 个筛选器：设备/厂级/区级/协议/状态/搜索
 - 值着色：正常(绿)/过期(黄)/异常(红)
 - 30 秒过期检测
 - CSV/JSON 导出
@@ -110,7 +110,7 @@
 
 - 权限点：覆盖 device / tag / group / alarm / sms / history / export / audit / config / scada / script / import / hierarchy / template / dashboard / system 等模块（API 层已全部接入 `require_permission` 校验）
 - 4 个预置角色：admin / engineer / operator / viewer
-- 数据范围：全部 / 指定厂区 / 指定车间 / 仅自己
+- 数据范围：全部 / 指定厂级 / 指定区级 / 仅自己
 - 动态菜单：按权限过滤侧边栏
 - 按钮级权限守卫
 
@@ -298,7 +298,7 @@ python ../scripts/init_db.py --no-sample
 1. 进入「设备管理」→ 点击「新增设备」
 2. 选择通信协议（Modbus TCP / MQTT / OPC-UA）
 3. 填写连接信息
-4. 填写位置信息（厂区/车间/产线/安装位置）
+4. 填写位置信息（厂级/区级/班级/安装位置）
 5. 点击保存，设备自动开始采集
 
 #### 从模板创建
@@ -475,9 +475,9 @@ ALARM_EMAIL_TO=admin@example.com
 | 角色 | 权限范围 | 数据范围 |
 |------|---------|---------|
 | admin | 全部 21 个权限 | 全部数据 |
-| engineer | 设备配置 + 报警管理 + 数据查看 | 可限定厂区/车间 |
-| operator | 设备查看 + 报警确认 + 远程控制 | 可限定厂区/车间 |
-| viewer | 只读：设备/报警/历史 | 可限定厂区/车间 |
+| engineer | 设备配置 + 报警管理 + 数据查看 | 可限定厂级/区级 |
+| operator | 设备查看 + 报警确认 + 远程控制 | 可限定厂级/区级 |
+| viewer | 只读：设备/报警/历史 | 可限定厂级/区级 |
 
 #### 数据范围
 
@@ -486,8 +486,8 @@ ALARM_EMAIL_TO=admin@example.com
 | 范围 | 说明 |
 |------|------|
 | 全部 | 看所有设备 |
-| 指定厂区 | 只看指定厂区的设备 |
-| 指定车间 | 只看指定车间的设备 |
+| 指定厂级 | 只看指定厂级的设备 |
+| 指定区级 | 只看指定区级的设备 |
 | 仅自己 | 只看自己创建的设备 |
 
 ### 配置导出/迁移
@@ -536,7 +536,7 @@ Response: {"access_token": "***", "token_type": "bearer", "user": {...}}
 | DELETE | `/api/v1/devices/{id}` | 删除设备 |
 | GET | `/api/v1/devices/groups` | 设备分组列表 |
 | POST | `/api/v1/devices/groups` | 创建分组 |
-| GET | `/api/v1/devices/locations` | 获取厂区/车间/产线列表 |
+| GET | `/api/v1/devices/locations` | 获取厂级/区级/班级列表 |
 | GET | `/api/v1/devices/{id}/tags` | 设备点位列表 |
 | POST | `/api/v1/devices/tags` | 创建点位 |
 | PUT | `/api/v1/devices/tags/{id}` | 更新点位 |

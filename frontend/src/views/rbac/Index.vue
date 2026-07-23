@@ -15,7 +15,7 @@
               <el-button type="primary" size="small" @click="showRoleDialog()"><el-icon><Plus /></el-icon> 新建角色</el-button>
             </div>
           </template>
-          <el-table :data="roles" v-loading="loading" stripe>
+          <el-table :data="rolePag.pagedRows" v-loading="loading" stripe>
             <el-table-column prop="code" label="代码" width="120" />
             <el-table-column prop="name" label="名称" width="140" />
             <el-table-column prop="description" label="描述" />
@@ -34,6 +34,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            style="margin-top:12px; display:flex; justify-content:flex-end"
+            layout="total, sizes, prev, pager, next, jumper"
+            :total="rolePag.total"
+            :page-size="rolePag.pageSize"
+            :current-page="rolePag.currentPage"
+            :page-sizes="[10, 20, 30, 50, 100]"
+            @size-change="rolePag.onSizeChange"
+            @current-change="rolePag.onPageChange"
+          />
         </el-card>
       </el-tab-pane>
 
@@ -46,7 +56,7 @@
               <el-button type="primary" size="small" @click="showAssignDialog()"><el-icon><Plus /></el-icon> 分配角色</el-button>
             </div>
           </template>
-          <el-table :data="allUsers" v-loading="loading" stripe>
+          <el-table :data="userPag.pagedRows" v-loading="loading" stripe>
             <el-table-column prop="id" label="ID" width="60" />
             <el-table-column prop="username" label="用户名" width="120" />
             <el-table-column prop="display_name" label="显示名" width="120" />
@@ -62,18 +72,38 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            style="margin-top:12px; display:flex; justify-content:flex-end"
+            layout="total, sizes, prev, pager, next, jumper"
+            :total="userPag.total"
+            :page-size="userPag.pageSize"
+            :current-page="userPag.currentPage"
+            :page-sizes="[10, 20, 30, 50, 100]"
+            @size-change="userPag.onSizeChange"
+            @current-change="userPag.onPageChange"
+          />
         </el-card>
       </el-tab-pane>
 
       <!-- Permissions List -->
       <el-tab-pane label="权限点" name="permissions">
         <el-card>
-          <el-table :data="permissions" stripe>
+          <el-table :data="permPag.pagedRows" stripe>
             <el-table-column prop="code" label="权限代码" width="200"><template #default="{ row }"><code>{{ row.code }}</code></template></el-table-column>
             <el-table-column prop="name" label="名称" width="160" />
             <el-table-column prop="module" label="模块" width="100"><template #default="{ row }"><el-tag size="small">{{ row.module }}</el-tag></template></el-table-column>
             <el-table-column prop="description" label="描述" />
           </el-table>
+          <el-pagination
+            style="margin-top:12px; display:flex; justify-content:flex-end"
+            layout="total, sizes, prev, pager, next, jumper"
+            :total="permPag.total"
+            :page-size="permPag.pageSize"
+            :current-page="permPag.currentPage"
+            :page-sizes="[10, 20, 30, 50, 100]"
+            @size-change="permPag.onSizeChange"
+            @current-change="permPag.onPageChange"
+          />
         </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -117,8 +147,8 @@
         <el-form-item label="数据范围">
           <el-select v-model="assignForm.data_scope" style="width:100%">
             <el-option label="全部数据" value="all" />
-            <el-option label="指定厂区" value="factory" />
-            <el-option label="指定车间" value="workshop" />
+            <el-option label="指定厂级" value="factory" />
+            <el-option label="指定区级" value="workshop" />
             <el-option label="仅自己" value="self" />
           </el-select>
         </el-form-item>
@@ -140,6 +170,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../../api/request'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 const activeTab = ref('roles')
 const loading = ref(false)
@@ -149,6 +180,10 @@ const allUsers = ref([])
 const userRolesMap = ref({})
 const scopeOptions = ref([])
 
+const rolePag = useClientPagination(roles)
+const userPag = useClientPagination(allUsers)
+const permPag = useClientPagination(permissions)
+
 const roleDialogVisible = ref(false)
 const editingRoleId = ref(null)
 const roleForm = reactive({ code: '', name: '', description: '', permission_ids: [] })
@@ -156,7 +191,7 @@ const roleForm = reactive({ code: '', name: '', description: '', permission_ids:
 const assignDialogVisible = ref(false)
 const assignForm = reactive({ user_id: null, role_id: null, data_scope: 'all', scope_values: [] })
 
-const scopeLabel = (s) => ({ all: '全部', factory: '厂区', workshop: '车间', self: '仅自己' }[s] || s)
+const scopeLabel = (s) => ({ all: '全部', factory: '厂级', workshop: '区级', self: '仅自己' }[s] || s)
 const groupedPermissions = computed(() => { const g = {}; for (const p of permissions.value) { (g[p.module] ??= []).push(p) } return g })
 const getUserRoles = (uid) => userRolesMap.value[uid] || []
 

@@ -15,7 +15,7 @@
               <el-button type="primary" size="small" @click="openContactDialog()"><el-icon><Plus /></el-icon> 新增联系人</el-button>
             </div>
           </template>
-          <el-table :data="contacts" v-loading="loading" stripe>
+          <el-table :data="contactPag.pagedRows" v-loading="loading" stripe>
             <el-table-column prop="id" label="ID" width="60" />
             <el-table-column prop="name" label="姓名" width="120" />
             <el-table-column prop="phone" label="手机号" width="150" />
@@ -30,6 +30,16 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            style="margin-top:12px; display:flex; justify-content:flex-end"
+            layout="total, sizes, prev, pager, next, jumper"
+            :total="contactPag.total"
+            :page-size="contactPag.pageSize"
+            :current-page="contactPag.currentPage"
+            :page-sizes="[10, 20, 30, 50, 100]"
+            @size-change="contactPag.onSizeChange"
+            @current-change="contactPag.onPageChange"
+          />
         </el-card>
       </el-tab-pane>
 
@@ -42,7 +52,7 @@
               <el-button type="primary" size="small" @click="openRuleDialog()"><el-icon><Plus /></el-icon> 新增规则</el-button>
             </div>
           </template>
-          <el-table :data="pushRules" v-loading="loading" stripe>
+          <el-table :data="rulePag.pagedRows" v-loading="loading" stripe>
             <el-table-column prop="id" label="ID" width="60" />
             <el-table-column prop="name" label="规则名称" width="160" />
             <el-table-column label="时间窗口" width="140"><template #default="{ row }">{{ row.time_start }} - {{ row.time_end }}</template></el-table-column>
@@ -55,13 +65,23 @@
               </template>
             </el-table-column>
           </el-table>
+          <el-pagination
+            style="margin-top:12px; display:flex; justify-content:flex-end"
+            layout="total, sizes, prev, pager, next, jumper"
+            :total="rulePag.total"
+            :page-size="rulePag.pageSize"
+            :current-page="rulePag.currentPage"
+            :page-sizes="[10, 20, 30, 50, 100]"
+            @size-change="rulePag.onSizeChange"
+            @current-change="rulePag.onPageChange"
+          />
         </el-card>
       </el-tab-pane>
 
       <!-- Records -->
       <el-tab-pane label="发送记录" name="records">
         <el-card>
-          <el-table :data="smsRecords" stripe>
+          <el-table :data="recordPag.pagedRows" stripe>
             <el-table-column prop="id" label="ID" width="60" />
             <el-table-column prop="phone" label="手机号" width="140" />
             <el-table-column prop="content" label="内容" show-overflow-tooltip />
@@ -72,6 +92,16 @@
             <el-table-column prop="retry_count" label="重试" width="70" />
             <el-table-column prop="sent_at" label="发送时间" width="170"><template #default="{ row }">{{ formatTime(row.sent_at) }}</template></el-table-column>
           </el-table>
+          <el-pagination
+            style="margin-top:12px; display:flex; justify-content:flex-end"
+            layout="total, sizes, prev, pager, next, jumper"
+            :total="recordPag.total"
+            :page-size="recordPag.pageSize"
+            :current-page="recordPag.currentPage"
+            :page-sizes="[10, 20, 30, 50, 100]"
+            @size-change="recordPag.onSizeChange"
+            @current-change="recordPag.onPageChange"
+          />
         </el-card>
       </el-tab-pane>
 
@@ -136,6 +166,7 @@ import api from '../../api/request'
 import { formatTime } from '../../utils'
 import DictTag from '../../components/DictTag.vue'
 import { SMS_STATUS_OPTIONS, ALARM_LEVEL_OPTIONS } from '../../utils/dict'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 const BOOL_OPTIONS = [{ value: true, label: '是', type: 'success' }, { value: false, label: '否', type: 'info' }]
 
@@ -144,6 +175,10 @@ const loading = ref(false)
 const contacts = ref([])
 const pushRules = ref([])
 const smsRecords = ref([])
+
+const contactPag = useClientPagination(contacts)
+const rulePag = useClientPagination(pushRules)
+const recordPag = useClientPagination(smsRecords)
 
 // Contact dialog
 const contactDialogVisible = ref(false)
@@ -208,7 +243,7 @@ async function deleteRule(rule) {
 }
 
 // ── Records + Test ──
-async function fetchRecords() { smsRecords.value = (await api.get('/sms/records', { params: { page: 1, page_size: 100 } })).data.data }
+async function fetchRecords() { smsRecords.value = (await api.get('/sms/records', { params: { page: 1, page_size: 1000 } })).data.data }
 
 async function testSms() {
   if (!testForm.phone) { ElMessage.warning('请输入手机号'); return }

@@ -91,9 +91,9 @@ class Device(Base):
     protocol = Column(String(20), default=ProtocolType.MODBUS_TCP)  # modbus_tcp | mqtt | opc_ua
 
     # ── Location fields ──
-    factory = Column(String(128), default="")          # 厂区
-    workshop = Column(String(128), default="")          # 车间
-    production_line = Column(String(128), default="")   # 产线
+    factory = Column(String(128), default="")          # 厂级
+    workshop = Column(String(128), default="")          # 区级
+    production_line = Column(String(128), default="")   # 班级
     installation = Column(String(256), default="")      # 安装位置描述, e.g. "3号机组东侧"
     longitude = Column(Float, nullable=True)             # 经度
     latitude = Column(Float, nullable=True)              # 纬度

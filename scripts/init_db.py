@@ -106,7 +106,7 @@ def seed_sample_devices():
         d1 = Device(
             name="示例-温湿度传感器", protocol="modbus_tcp",
             host="192.168.1.100", port=502, slave_id=1,
-            factory="示例厂区", workshop="A车间", production_line="1号线",
+            factory="示例厂级", workshop="A区级", production_line="1号线",
             poll_interval=10, enabled=False,
             description="示例设备，请修改连接信息后启用",
         )

@@ -19,7 +19,7 @@
           </el-col>
         </el-row>
       </template>
-      <el-table :data="filteredTags" v-loading="loading" stripe>
+      <el-table :data="pagedRows" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="device_id" label="设备" width="120"><template #default="{ row }">{{ deviceName(row.device_id) }}</template></el-table-column>
         <el-table-column prop="name" label="名称" width="150" />
@@ -38,6 +38,16 @@
         <el-table-column prop="writable" label="可写" width="70"><template #default="{ row }"><DictTag :modelValue="row.writable" :options="BOOL_OPTIONS" /></template></el-table-column>
         <el-table-column prop="enabled" label="启用" width="70"><template #default="{ row }"><DictTag :modelValue="row.enabled" :options="BOOL_OPTIONS" /></template></el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:12px; display:flex; justify-content:flex-end"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        :page-sizes="[10, 20, 30, 50, 100]"
+        @size-change="onSizeChange"
+        @current-change="onPageChange"
+      />
     </el-card>
   </div>
 </template>
@@ -47,6 +57,7 @@ import { ref, computed, onMounted } from 'vue'
 import api from '../../api/request'
 import DictTag from '../../components/DictTag.vue'
 import { PROTOCOL_OPTIONS, FUNCTION_CODE_OPTIONS } from '../../utils/dict'
+import { useClientPagination } from '../../composables/useClientPagination'
 
 const BOOL_OPTIONS = [{ value: true, label: '是', type: 'success' }, { value: false, label: '否', type: 'info' }]
 
@@ -69,6 +80,11 @@ const filteredTags = computed(() => {
   return t
 })
 
+const {
+  pageSize, currentPage, total, pagedRows,
+  onSizeChange, onPageChange, resetPage,
+} = useClientPagination(filteredTags)
+
 async function fetchTags() {
   loading.value = true
   try {
@@ -77,6 +93,7 @@ async function fetchTags() {
       const devs = (await api.get('/devices/all')).data; allDevices.value = devs
       const all = []; for (const d of devs) { all.push(...(await api.get(`/devices/${d.id}/tags`)).data) }; tags.value = all
     }
+    resetPage()
   } finally { loading.value = false }
 }
 
