@@ -102,12 +102,12 @@
         <el-form-item label="高度"><el-input-number v-model="editForm.default_height" :min="10" /></el-form-item>
         <el-form-item label="可绑定">
           <el-checkbox-group v-model="editForm.bindable">
-            <el-checkbox label="text">文本</el-checkbox>
-            <el-checkbox label="value">数值</el-checkbox>
-            <el-checkbox label="state">状态</el-checkbox>
-            <el-checkbox label="fill">颜色</el-checkbox>
-            <el-checkbox label="liquidLevel">液位</el-checkbox>
-            <el-checkbox label="flow">流量</el-checkbox>
+            <el-checkbox value="text">文本</el-checkbox>
+            <el-checkbox value="value">数值</el-checkbox>
+            <el-checkbox value="state">状态</el-checkbox>
+            <el-checkbox value="fill">颜色</el-checkbox>
+            <el-checkbox value="liquidLevel">液位</el-checkbox>
+            <el-checkbox value="flow">流量</el-checkbox>
           </el-checkbox-group>
         </el-form-item>
         <el-form-item label="预览">

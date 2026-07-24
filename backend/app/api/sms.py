@@ -100,7 +100,7 @@ def delete_push_rule(rule_id: int, db: Session = Depends(get_db), _: User = Depe
 @router.get("/records", response_model=PageResponse)
 def list_sms_records(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     status: str = None,
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("sms.read")),

@@ -18,8 +18,8 @@
         </el-col>
         <el-col :span="4">
           <el-radio-group v-model="viewMode" size="small" @change="onViewChange">
-            <el-radio-button label="topology">拓扑</el-radio-button>
-            <el-radio-button label="map">地图</el-radio-button>
+            <el-radio-button value="topology">拓扑</el-radio-button>
+            <el-radio-button value="map">地图</el-radio-button>
           </el-radio-group>
         </el-col>
         <el-col :span="10" style="text-align:right">
@@ -109,9 +109,9 @@
               <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
                 <span>设备分布地图（按经纬度标注）</span>
                 <el-radio-group v-model="aggMode" size="small" @change="onAggChange">
-                  <el-radio-button label="none">按设备</el-radio-button>
-                  <el-radio-button label="factory">按厂级</el-radio-button>
-                  <el-radio-button label="workshop">按区级</el-radio-button>
+                  <el-radio-button value="none">按设备</el-radio-button>
+                  <el-radio-button value="factory">按厂级</el-radio-button>
+                  <el-radio-button value="workshop">按区级</el-radio-button>
                 </el-radio-group>
               </div>
             </template>
@@ -215,6 +215,7 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Topology' })
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Top, Bottom } from '@element-plus/icons-vue'
@@ -416,7 +417,7 @@ function onViewChange(val) {
 }
 
 function onResize() {
-  topologyChart?.resize()
+  topoChart?.resize()
   mapChart?.resize()
 }
 

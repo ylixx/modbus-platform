@@ -19,6 +19,10 @@ class SmsService:
                 return self._send_tencent(phone, content)
             elif provider == "custom":
                 return self._send_custom(phone, content)
+            elif provider in ("mock", "demo", "none", ""):
+                # 演示/本地开发模式：不真正发送，仅记录并返回成功，便于验证 UI 流程
+                logger.info(f"[MOCK SMS] to={phone} content={content}")
+                return True
             else:
                 logger.error(f"Unknown SMS provider: {provider}")
                 return False

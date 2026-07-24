@@ -147,6 +147,7 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Realtime' })
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../../api/request'

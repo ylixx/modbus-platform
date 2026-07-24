@@ -17,7 +17,7 @@ alibabacloud-dysmsapi20170525==3.0.0
 tencentcloud-sdk-python-sms==3.0.1173
 loguru==0.7.2
 tenacity==9.0.0
-paho-mqtt==1.6.1
+paho-mqtt>=2.0.0,<3
 asyncua==2.0.1
 pytest==8.3.0
 pytest-asyncio==0.24.0

@@ -119,7 +119,7 @@
             <el-checkbox-group v-model="roleForm.permission_ids">
               <div v-for="(perms, module) in groupedPermissions" :key="module" style="margin-bottom:8px">
                 <el-divider content-position="left">{{ module }}</el-divider>
-                <el-checkbox v-for="p in perms" :key="p.id" :label="p.id">{{ p.name }}</el-checkbox>
+                <el-checkbox v-for="p in perms" :key="p.id" :value="p.id">{{ p.name }}</el-checkbox>
               </div>
             </el-checkbox-group>
           </el-form-item>
@@ -180,9 +180,9 @@ const allUsers = ref([])
 const userRolesMap = ref({})
 const scopeOptions = ref([])
 
-const rolePag = useClientPagination(roles)
-const userPag = useClientPagination(allUsers)
-const permPag = useClientPagination(permissions)
+const rolePag = reactive(useClientPagination(roles))
+const userPag = reactive(useClientPagination(allUsers))
+const permPag = reactive(useClientPagination(permissions))
 
 const roleDialogVisible = ref(false)
 const editingRoleId = ref(null)

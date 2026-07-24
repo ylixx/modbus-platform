@@ -66,6 +66,7 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Dashboard' })
 import { ref, onMounted, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import api from '../../api/request'

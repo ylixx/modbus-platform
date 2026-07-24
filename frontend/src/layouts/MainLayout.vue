@@ -60,7 +60,13 @@
       </aside>
 
       <main class="layout-content">
-        <router-view />
+        <router-view v-slot="{ Component, route }">
+          <transition name="fade">
+            <keep-alive :include="cachedViews" :max="15">
+              <component :is="Component" :key="route.name" />
+            </keep-alive>
+          </transition>
+        </router-view>
       </main>
     </div>
   </div>
@@ -89,6 +95,17 @@ const groupedMenus = computed(() =>
     ...cat,
     children: menuItems.value.filter(m => m.category === cat.key),
   })).filter(g => g.children.length > 0)
+)
+
+// 仅缓存展示型页面（仪表盘/实时/大屏/拓扑/SCADA），列表页不缓存（避免切回显示旧数据）。
+// keep-alive 必须「始终包裹」，不能用 v-if 在 keep-alive 与裸 component 之间切换——
+// 否则跨缓存边界切页时 transition 的子节点类型突变，进入阶段收不到而整屏卡白。
+// :include 匹配各缓存视图的组件 name（见各视图 defineOptions），与路由 name 一一对应。
+const cachedViews = computed(() =>
+  router.getRoutes()
+    .filter(r => r.meta && r.meta.keepAlive)
+    .map(r => r.name)
+    .filter(Boolean)
 )
 
 let timer = null, ws = null
@@ -176,5 +193,30 @@ onUnmounted(() => {
   flex: 1;
   border-right: none !important;
   overflow-y: auto;
+}
+</style>
+
+<style>
+/* 路由切换淡入淡出：消除切页时内容区"白一下"的整屏刷新感 */
+/* 去掉 mode="out-in"：默认模式下新页面立即挂载，避免与条件 keep-alive
+   叠加时进入阶段永不触发而整屏卡白（跨缓存边界切页尤其明显）。 */
+.layout-content {
+  position: relative;
+}
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+/* 默认模式新旧组件会短暂共存；让离场元素脱离文档流，
+   避免把新页面挤下去造成跳动（对齐 .layout-content 的 20px 内边距）。 */
+.fade-leave-active {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  right: 20px;
 }
 </style>

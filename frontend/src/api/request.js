@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import router from '../router'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -14,6 +15,9 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// 防止并发 401 时重复跳转登录页（之前用 window.location.href 会导致整页刷新）
+let redirecting = false
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -21,8 +25,11 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('userInfo')
-      if (!window.location.pathname.includes('/login')) {
-        window.location.href = '/login'
+      const onLogin = router.currentRoute.value.path.includes('/login')
+      if (!redirecting && !onLogin) {
+        redirecting = true
+        ElMessage.warning('登录状态已失效，请重新登录')
+        router.push('/login').finally(() => { redirecting = false })
       }
       return Promise.reject(error)
     }

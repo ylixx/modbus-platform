@@ -45,6 +45,7 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Scada' })
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../../api/request'

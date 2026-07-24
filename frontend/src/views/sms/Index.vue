@@ -176,9 +176,9 @@ const contacts = ref([])
 const pushRules = ref([])
 const smsRecords = ref([])
 
-const contactPag = useClientPagination(contacts)
-const rulePag = useClientPagination(pushRules)
-const recordPag = useClientPagination(smsRecords)
+const contactPag = reactive(useClientPagination(contacts))
+const rulePag = reactive(useClientPagination(pushRules))
+const recordPag = reactive(useClientPagination(smsRecords))
 
 // Contact dialog
 const contactDialogVisible = ref(false)
@@ -243,7 +243,14 @@ async function deleteRule(rule) {
 }
 
 // ── Records + Test ──
-async function fetchRecords() { smsRecords.value = (await api.get('/sms/records', { params: { page: 1, page_size: 1000 } })).data.data }
+async function fetchRecords() {
+  try {
+    const r = await api.get('/sms/records', { params: { page: 1, page_size: 1000 } })
+    smsRecords.value = r.data.data
+  } catch (e) {
+    console.error('加载短信记录失败', e)
+  }
+}
 
 async function testSms() {
   if (!testForm.phone) { ElMessage.warning('请输入手机号'); return }

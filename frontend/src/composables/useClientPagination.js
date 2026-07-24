@@ -35,5 +35,10 @@ export function useClientPagination(source, options = {}) {
     currentPage.value = 1
   }
 
+  // 返回普通对象（成员为 ref/computed）。调用方若「解构」使用（如
+  // `const { pagedRows } = useClientPagination(x)`），顶层 ref 在模板自动解包，正常。
+  // 若「嵌套」使用（如 `const pag = useClientPagination(x); :data="pag.pagedRows"`），
+  // 请在调用处用 `reactive(useClientPagination(x))` 包裹，否则 pag.pagedRows 不会解包、
+  // 会把 ComputedRef 对象传给 el-table 触发 `rows is not iterable` 渲染崩溃（整页白屏）。
   return { pageSize, currentPage, total, pagedRows, onSizeChange, onPageChange, resetPage }
 }
