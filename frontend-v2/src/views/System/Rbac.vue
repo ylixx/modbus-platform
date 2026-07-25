@@ -17,6 +17,7 @@ import {
   ElCheckboxGroup,
   ElCheckbox,
   ElTreeSelect,
+  ElSwitch,
   ElMessage,
   ElMessageBox
 } from 'element-plus'
@@ -27,6 +28,9 @@ import {
   deleteRole,
   getPermissions,
   getUsers,
+  createUser,
+  updateUser,
+  deleteUser,
   getOrgTree,
   unwrapList
 } from '@/api/modbus'
@@ -41,13 +45,13 @@ const orgTree = ref<any[]>([])
 const loading = ref(false)
 
 const permCode = (p: any) => (typeof p === 'string' ? p : p.code || p.name)
-// 权限 code -> id 映射，用于提交 permission_ids
 const permMap = computed<Record<string, number>>(() => {
   const m: Record<string, number> = {}
   for (const p of permissions.value) m[permCode(p)] = p.id
   return m
 })
 
+// ── 角色管理 ──
 const fetchRoles = async () => {
   loading.value = true
   try {
@@ -76,11 +80,11 @@ const form = reactive<any>({
   name: '',
   description: '',
   permissionCodes: [] as string[],
-  data_scope: 'all', // all | org
+  data_scope: 'all',
   org_node_ids: [] as number[]
 })
 const isAdminRole = computed(() => form.code === 'admin')
-const rules = {
+const roleRules = {
   code: [{ required: true, message: '请输入角色代码', trigger: 'blur' }],
   name: [{ required: true, message: '请输入角色名称', trigger: 'blur' }]
 }
@@ -88,22 +92,15 @@ const rules = {
 const openCreate = () => {
   dialogTitle.value = '新增角色'
   Object.assign(form, {
-    id: null,
-    code: '',
-    name: '',
-    description: '',
-    permissionCodes: [],
-    data_scope: 'all',
-    org_node_ids: []
+    id: null, code: '', name: '', description: '',
+    permissionCodes: [], data_scope: 'all', org_node_ids: []
   })
   dialogVisible.value = true
 }
 const openEdit = (row: any) => {
   dialogTitle.value = '编辑角色'
   Object.assign(form, {
-    id: row.id,
-    code: row.code,
-    name: row.name,
+    id: row.id, code: row.code, name: row.name,
     description: row.description || '',
     permissionCodes: (row.permissions || []).map((p: any) => permCode(p)),
     data_scope: row.data_scope || 'all',
@@ -111,14 +108,12 @@ const openEdit = (row: any) => {
   })
   dialogVisible.value = true
 }
-const submit = async () => {
+const submitRole = async () => {
   await formRef.value?.validate()
   const permission_ids = form.permissionCodes.map((c: string) => permMap.value[c]).filter(Boolean)
   const payload: any = {
-    name: form.name,
-    description: form.description,
-    permission_ids,
-    data_scope: form.data_scope,
+    name: form.name, description: form.description,
+    permission_ids, data_scope: form.data_scope,
     org_node_ids: form.data_scope === 'org' ? form.org_node_ids : []
   }
   if (!form.id) payload.code = form.code
@@ -132,11 +127,107 @@ const submit = async () => {
   dialogVisible.value = false
   fetchRoles()
 }
-const remove = async (row: any) => {
+const removeRole = async (row: any) => {
   await ElMessageBox.confirm(`确认删除角色「${row.name}」？`, '提示', { type: 'warning' })
   await deleteRole(row.id)
   ElMessage.success('删除成功')
   fetchRoles()
+}
+
+// ── 用户管理 ──
+const userDialogVisible = ref(false)
+const userDialogTitle = ref('新增用户')
+const userFormRef = ref()
+const userForm = reactive<any>({
+  id: null,
+  username: '',
+  password: '',
+  display_name: '',
+  phone: '',
+  email: '',
+  role: 'operator',
+  is_active: true
+})
+const userRules = {
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  role: [{ required: true, message: '请选择角色', trigger: 'change' }]
+}
+const userEditRules = {
+  role: [{ required: true, message: '请选择角色', trigger: 'change' }]
+}
+
+const roleOptions = computed(() => roles.value.map((r) => ({ label: r.name, value: r.code || r.name })))
+
+const openUserCreate = () => {
+  userDialogTitle.value = '新增用户'
+  Object.assign(userForm, {
+    id: null, username: '', password: '', display_name: '',
+    phone: '', email: '', role: 'operator', is_active: true
+  })
+  userDialogVisible.value = true
+}
+const openUserEdit = (row: any) => {
+  userDialogTitle.value = '编辑用户'
+  Object.assign(userForm, {
+    id: row.id, username: row.username, password: '',
+    display_name: row.display_name || '', phone: row.phone || '',
+    email: row.email || '', role: row.role || 'operator',
+    is_active: row.is_active !== false
+  })
+  userDialogVisible.value = true
+}
+const submitUser = async () => {
+  const rules = userForm.id ? userEditRules : userRules
+  await userFormRef.value?.validate(rules)
+  if (userForm.id) {
+    const payload: any = {
+      display_name: userForm.display_name,
+      phone: userForm.phone,
+      email: userForm.email,
+      role: userForm.role,
+      is_active: userForm.is_active
+    }
+    await updateUser(userForm.id, payload)
+    ElMessage.success('更新成功')
+  } else {
+    await createUser({
+      username: userForm.username,
+      password: userForm.password,
+      display_name: userForm.display_name,
+      phone: userForm.phone,
+      email: userForm.email,
+      role: userForm.role
+    })
+    ElMessage.success('创建成功')
+  }
+  userDialogVisible.value = false
+  fetchUsers()
+}
+const removeUser = async (row: any) => {
+  await ElMessageBox.confirm(`确认删除用户「${row.username}」？`, '提示', { type: 'warning' })
+  await deleteUser(row.id)
+  ElMessage.success('删除成功')
+  fetchUsers()
+}
+const resetPassword = async (row: any) => {
+  const { value } = await ElMessageBox.prompt('请输入新密码', `重置密码 - ${row.username}`, {
+    inputType: 'password',
+    inputPlaceholder: '请输入新密码',
+    inputValidator: (v) => !!v?.trim() || '密码不能为空',
+    confirmButtonText: '确认重置',
+    cancelButtonText: '取消'
+  })
+  try {
+    const res = await fetch(`/api/v1/users/${row.id}/reset-password?new_password=${encodeURIComponent(value)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }
+    })
+    if (!res.ok) throw new Error('重置失败')
+    ElMessage.success('密码已重置')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '重置失败')
+  }
 }
 
 onMounted(() => {
@@ -150,11 +241,10 @@ onMounted(() => {
 <template>
   <ContentWrap title="权限管理">
     <ElTabs v-model="activeTab">
+      <!-- 角色管理 -->
       <ElTabPane label="角色管理" name="roles">
         <div class="flex justify-end mb-12px">
-          <ElButton v-hasPermi="['rbac.write']" type="success" @click="openCreate"
-            >新增角色</ElButton
-          >
+          <ElButton v-hasPermi="['rbac.write']" type="success" @click="openCreate">新增角色</ElButton>
         </div>
         <ElTable v-loading="loading" :data="roles" border stripe>
           <ElTableColumn prop="id" label="ID" width="70" />
@@ -173,49 +263,57 @@ onMounted(() => {
           </ElTableColumn>
           <ElTableColumn label="操作" width="160" fixed="right">
             <template #default="{ row }">
-              <ElButton v-hasPermi="['rbac.write']" link type="primary" @click="openEdit(row)"
-                >编辑</ElButton
-              >
-              <ElButton v-hasPermi="['rbac.write']" link type="danger" @click="remove(row)"
-                >删除</ElButton
-              >
+              <ElButton v-hasPermi="['rbac.write']" link type="primary" @click="openEdit(row)">编辑</ElButton>
+              <ElButton v-hasPermi="['rbac.write']" link type="danger" @click="removeRole(row)">删除</ElButton>
             </template>
           </ElTableColumn>
         </ElTable>
       </ElTabPane>
 
+      <!-- 用户管理 -->
       <ElTabPane label="用户管理" name="users">
+        <div class="flex justify-end mb-12px">
+          <ElButton v-hasPermi="['rbac.write']" type="success" @click="openUserCreate">新增用户</ElButton>
+        </div>
         <ElTable :data="users" border stripe>
-          <ElTableColumn prop="id" label="ID" width="70" />
-          <ElTableColumn prop="username" label="用户名" width="140" />
-          <ElTableColumn prop="display_name" label="显示名" min-width="140" />
-          <ElTableColumn label="角色" width="130">
-            <template #default="{ row }"
-              ><ElTag>{{ row.role || '—' }}</ElTag></template
-            >
-          </ElTableColumn>
-          <ElTableColumn prop="phone" label="手机号" width="140" />
-          <ElTableColumn label="状态" width="90">
+          <ElTableColumn prop="id" label="ID" width="60" />
+          <ElTableColumn prop="username" label="用户名" width="120" />
+          <ElTableColumn prop="display_name" label="显示名" width="120" />
+          <ElTableColumn label="角色" width="110">
             <template #default="{ row }">
-              <ElTag :type="row.is_active !== false ? 'success' : 'info'">{{
-                row.is_active !== false ? '启用' : '停用'
-              }}</ElTag>
+              <ElTag>{{ row.role || '—' }}</ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn prop="phone" label="手机号" width="130" />
+          <ElTableColumn prop="email" label="邮箱" min-width="160" show-overflow-tooltip />
+          <ElTableColumn label="状态" width="80">
+            <template #default="{ row }">
+              <ElTag :type="row.is_active !== false ? 'success' : 'info'">
+                {{ row.is_active !== false ? '启用' : '停用' }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="操作" width="220" fixed="right">
+            <template #default="{ row }">
+              <ElButton v-hasPermi="['rbac.write']" link type="primary" @click="openUserEdit(row)">编辑</ElButton>
+              <ElButton v-hasPermi="['rbac.write']" link type="warning" @click="resetPassword(row)">重置密码</ElButton>
+              <ElButton v-hasPermi="['rbac.write']" link type="danger" @click="removeUser(row)">删除</ElButton>
             </template>
           </ElTableColumn>
         </ElTable>
       </ElTabPane>
 
+      <!-- 权限清单 -->
       <ElTabPane label="权限清单" name="perms">
         <div class="flex flex-wrap gap-8px py-8px">
-          <ElTag v-for="p in permissions" :key="permCode(p)" class="mb-6px">{{
-            permCode(p)
-          }}</ElTag>
+          <ElTag v-for="p in permissions" :key="permCode(p)" class="mb-6px">{{ permCode(p) }}</ElTag>
         </div>
       </ElTabPane>
     </ElTabs>
 
+    <!-- 角色编辑对话框 -->
     <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px">
-      <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
+      <ElForm ref="formRef" :model="form" :rules="roleRules" label-width="90px">
         <ElFormItem label="角色代码" prop="code">
           <ElInput v-model="form.code" :disabled="!!form.id" placeholder="如：workshop_admin" />
         </ElFormItem>
@@ -237,27 +335,54 @@ onMounted(() => {
             :data="orgTree"
             node-key="id"
             :props="{ label: 'name', children: 'children' }"
-            multiple
-            check-strictly
-            clearable
-            placeholder="勾选可访问的组织节点（含其下级）"
+            multiple check-strictly clearable
+            placeholder="勾选可访问的组织节点"
             class="w-full"
           />
         </ElFormItem>
         <ElFormItem label="权限">
           <ElCheckboxGroup v-model="form.permissionCodes">
-            <ElCheckbox
-              v-for="p in permissions"
-              :key="permCode(p)"
-              :value="permCode(p)"
-              :label="permCode(p)"
-            />
+            <ElCheckbox v-for="p in permissions" :key="permCode(p)" :value="permCode(p)" :label="permCode(p)" />
           </ElCheckboxGroup>
         </ElFormItem>
       </ElForm>
       <template #footer>
         <ElButton @click="dialogVisible = false">取消</ElButton>
-        <ElButton type="primary" @click="submit">确定</ElButton>
+        <ElButton type="primary" @click="submitRole">确定</ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- 用户编辑对话框 -->
+    <ElDialog v-model="userDialogVisible" :title="userDialogTitle" width="500px">
+      <ElForm ref="userFormRef" :model="userForm" :rules="userForm.id ? userEditRules : userRules" label-width="80px">
+        <ElFormItem label="用户名" prop="username">
+          <ElInput v-model="userForm.username" :disabled="!!userForm.id" placeholder="登录用户名" />
+        </ElFormItem>
+        <ElFormItem v-if="!userForm.id" label="密码" prop="password">
+          <ElInput v-model="userForm.password" type="password" placeholder="登录密码" show-password />
+        </ElFormItem>
+        <ElFormItem label="显示名">
+          <ElInput v-model="userForm.display_name" placeholder="真实姓名" />
+        </ElFormItem>
+        <ElFormItem label="手机号">
+          <ElInput v-model="userForm.phone" placeholder="可选" />
+        </ElFormItem>
+        <ElFormItem label="邮箱">
+          <ElInput v-model="userForm.email" placeholder="可选" />
+        </ElFormItem>
+        <ElFormItem label="角色" prop="role">
+          <ElSelect v-model="userForm.role" class="w-full">
+            <ElOption v-for="r in roleOptions" :key="r.value" :label="r.label" :value="r.value" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem v-if="userForm.id" label="状态">
+          <ElSwitch v-model="userForm.is_active" />
+          <span class="text-12px text-gray-400 ml-8px">{{ userForm.is_active ? '启用' : '停用' }}</span>
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="userDialogVisible = false">取消</ElButton>
+        <ElButton type="primary" @click="submitUser">确定</ElButton>
       </template>
     </ElDialog>
   </ContentWrap>

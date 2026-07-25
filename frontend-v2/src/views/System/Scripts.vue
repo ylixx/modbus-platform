@@ -16,12 +16,15 @@ import {
   ElMessage,
   ElMessageBox
 } from 'element-plus'
+import { CodeEditor } from '@/components/CodeEditor'
 import {
   getScripts,
   createScript,
   updateScript,
   deleteScript,
   testScript,
+  getScriptTemplates,
+  unwrap,
   unwrapList
 } from '@/api/modbus'
 
@@ -29,12 +32,22 @@ defineOptions({ name: 'Scripts' })
 
 const loading = ref(false)
 const list = ref<any[]>([])
+const templates = ref<any[]>([])
 const fetchList = async () => {
   loading.value = true
   try {
     list.value = unwrapList(await getScripts()).list
   } finally {
     loading.value = false
+  }
+}
+
+const fetchTemplates = async () => {
+  try {
+    const res = await getScriptTemplates()
+    templates.value = unwrapList(res).list
+  } catch {
+    templates.value = []
   }
 }
 
@@ -54,24 +67,25 @@ const rules = { name: [{ required: true, message: '请输入脚本名称', trigg
 const openCreate = () => {
   dialogTitle.value = '新增脚本'
   Object.assign(form, {
-    id: null,
-    name: '',
-    language: 'python',
-    content: '# result = value * 2\n',
-    description: '',
-    enabled: true
+    id: null, name: '', language: 'python',
+    content: '# result = value * 2\n', description: '', enabled: true
   })
   dialogVisible.value = true
 }
 const openEdit = (row: any) => {
   dialogTitle.value = '编辑脚本'
   Object.assign(form, {
-    id: row.id,
-    name: row.name,
-    language: row.language || 'python',
-    content: row.content || '',
-    description: row.description || '',
+    id: row.id, name: row.name, language: row.language || 'python',
+    content: row.content || '', description: row.description || '',
     enabled: row.enabled !== false
+  })
+  dialogVisible.value = true
+}
+const openFromTemplate = (tpl: any) => {
+  dialogTitle.value = '从模板创建'
+  Object.assign(form, {
+    id: null, name: tpl.name || '', language: tpl.language || 'python',
+    content: tpl.content || '', description: tpl.description || '', enabled: true
   })
   dialogVisible.value = true
 }
@@ -95,6 +109,7 @@ const remove = async (row: any) => {
   ElMessage.success('删除成功')
   fetchList()
 }
+
 const testing = ref(false)
 const doTest = async () => {
   testing.value = true
@@ -109,16 +124,31 @@ const doTest = async () => {
   }
 }
 
-onMounted(fetchList)
+onMounted(() => {
+  fetchList()
+  fetchTemplates()
+})
 </script>
 
 <template>
   <ContentWrap title="脚本算法">
     <template #header>
-      <div class="flex-grow flex justify-end">
-        <ElButton v-hasPermi="['script.write']" type="success" @click="openCreate"
-          >新增脚本</ElButton
+      <div class="flex-grow flex justify-end gap-8px">
+        <ElSelect
+          v-if="templates.length"
+          placeholder="从模板创建"
+          class="!w-180px"
+          filterable
+          @change="openFromTemplate"
         >
+          <ElOption
+            v-for="tpl in templates"
+            :key="tpl.id || tpl.name"
+            :label="tpl.name"
+            :value="tpl"
+          />
+        </ElSelect>
+        <ElButton v-hasPermi="['script.write']" type="success" @click="openCreate">新增脚本</ElButton>
       </div>
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
@@ -128,24 +158,20 @@ onMounted(fetchList)
       <ElTableColumn prop="description" label="描述" min-width="200" show-overflow-tooltip />
       <ElTableColumn label="启用" width="90">
         <template #default="{ row }">
-          <ElTag :type="row.enabled !== false ? 'success' : 'info'">{{
-            row.enabled !== false ? '启用' : '停用'
-          }}</ElTag>
+          <ElTag :type="row.enabled !== false ? 'success' : 'info'">
+            {{ row.enabled !== false ? '启用' : '停用' }}
+          </ElTag>
         </template>
       </ElTableColumn>
       <ElTableColumn label="操作" width="160" fixed="right">
         <template #default="{ row }">
-          <ElButton v-hasPermi="['script.write']" link type="primary" @click="openEdit(row)"
-            >编辑</ElButton
-          >
-          <ElButton v-hasPermi="['script.write']" link type="danger" @click="remove(row)"
-            >删除</ElButton
-          >
+          <ElButton v-hasPermi="['script.write']" link type="primary" @click="openEdit(row)">编辑</ElButton>
+          <ElButton v-hasPermi="['script.write']" link type="danger" @click="remove(row)">删除</ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
 
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="640px">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="800px" top="5vh">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="80px">
         <ElFormItem label="名称" prop="name">
           <ElInput v-model="form.name" />
@@ -156,11 +182,20 @@ onMounted(fetchList)
             <ElOption label="JavaScript" value="javascript" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="脚本内容">
-          <ElInput v-model="form.content" type="textarea" :rows="10" class="font-mono" />
-        </ElFormItem>
         <ElFormItem label="描述">
           <ElInput v-model="form.description" type="textarea" :rows="2" />
+        </ElFormItem>
+        <ElFormItem label="脚本内容">
+          <div class="w-full border border-solid border-gray-200 rounded">
+            <CodeEditor
+              v-model="form.content"
+              :language="form.language === 'python' ? 'python' : 'javascript'"
+              theme="vs-dark"
+              :height="400"
+              :language-selector="false"
+              :theme-selector="false"
+            />
+          </div>
         </ElFormItem>
         <ElFormItem label="启用">
           <ElSwitch v-model="form.enabled" />
