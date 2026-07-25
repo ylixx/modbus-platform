@@ -111,6 +111,13 @@ class ModbusEngine:
         self._stop_events.pop(device_id, None)
         self._threads.pop(device_id, None)
 
+    # ── 重连退避常量 ──
+    BACKOFF_BASE = 1.0        # 初始退避 1 秒
+    BACKOFF_MAX = 60.0        # 最大退避 60 秒
+    BACKOFF_MULTIPLIER = 2.0  # 指数倍数
+    MAX_CONSECUTIVE_FAILURES = 50  # 连续失败上限，超过自动禁用设备
+    OFFLINE_ALARM_THRESHOLD = 3   # 连续失败 N 次后触发离线报警
+
     def _poll_device_loop(
         self, device_id: int, host: str, port: int, slave_id: int,
         timeout: float, retries: int, interval: float, stop_event: threading.Event,
@@ -118,59 +125,165 @@ class ModbusEngine:
         client = ModbusTcpClient(host=host, port=port, timeout=timeout, retries=retries)
         self._clients[device_id] = client
         consecutive_failures = 0
+        was_online = False  # 上一轮是否在线（用于检测状态转换）
+        backoff_delay = self.BACKOFF_BASE
 
         while not stop_event.is_set():
             try:
                 if not client.connected:
                     connected = client.connect()
                     if not connected:
-                        self._update_device_status(device_id, "error", "连接失败")
                         consecutive_failures += 1
-                        if consecutive_failures >= 3:
-                            from app.services.alarm_service import alarm_service
-                            db = SessionLocal()
-                            try:
-                                device = db.query(Device).filter(Device.id == device_id).first()
-                                if device:
-                                    alarm_service.evaluate_disconnect(device_id, device.name)
-                            finally:
-                                db.close()
-                        time.sleep(interval)
+                        self._update_device_status(device_id, "error", "连接失败")
+
+                        # 首次离线：写入 quality=bad 标记
+                        if was_online:
+                            self._mark_tags_offline(device_id)
+                            was_online = False
+
+                        # 触发离线报警
+                        if consecutive_failures == self.OFFLINE_ALARM_THRESHOLD:
+                            self._trigger_disconnect_alarm(device_id)
+
+                        # 超过上限：自动禁用设备
+                        if consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                            self._auto_disable_device(device_id, f"连续 {consecutive_failures} 次连接失败")
+                            break
+
+                        # 指数退避
+                        sleep_time = min(backoff_delay, self.BACKOFF_MAX)
+                        logger.warning(f"Device {device_id} 连接失败 ({consecutive_failures}次)，{sleep_time:.0f}s 后重试")
+                        backoff_delay *= self.BACKOFF_MULTIPLIER
+                        stop_event.wait(sleep_time)
                         continue
 
+                # 连接成功，执行采集
                 self._poll_device(device_id, client, slave_id)
-                consecutive_failures = 0
-                self._update_device_status(device_id, "online", None)
 
-                # Clear disconnect alarms
-                from app.services.alarm_service import alarm_service
-                alarm_service.clear_disconnect(device_id)
+                # 状态恢复
+                if consecutive_failures > 0:
+                    logger.info(f"Device {device_id} 恢复在线，连续失败 {consecutive_failures} 次")
+                    # 清除离线期间的 quality=bad 标记（用新数据覆盖即可）
+                    from app.services.alarm_service import alarm_service
+                    alarm_service.clear_disconnect(device_id)
+
+                consecutive_failures = 0
+                backoff_delay = self.BACKOFF_BASE  # 重置退避
+                was_online = True
+                self._update_device_status(device_id, "online", None)
 
             except Exception as e:
                 logger.error(f"Poll error for device {device_id}: {e}")
                 consecutive_failures += 1
                 self._update_device_status(device_id, "error", str(e))
-                if consecutive_failures >= 3:
-                    from app.services.alarm_service import alarm_service
-                    db = SessionLocal()
-                    try:
-                        device = db.query(Device).filter(Device.id == device_id).first()
-                        if device:
-                            alarm_service.evaluate_disconnect(device_id, device.name)
-                    finally:
-                        db.close()
-                # Reconnect on next iteration
+
+                # 首次离线：写入 quality=bad 标记
+                if was_online:
+                    self._mark_tags_offline(device_id)
+                    was_online = False
+
+                # 触发离线报警
+                if consecutive_failures == self.OFFLINE_ALARM_THRESHOLD:
+                    self._trigger_disconnect_alarm(device_id)
+
+                # 超过上限：自动禁用
+                if consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                    self._auto_disable_device(device_id, f"连续 {consecutive_failures} 次采集异常: {e}")
+                    break
+
+                # 关闭连接，下次重连
                 try:
                     client.close()
                 except Exception:
                     pass
 
-            time.sleep(interval)
+                # 指数退避
+                sleep_time = min(backoff_delay, self.BACKOFF_MAX)
+                logger.warning(f"Device {device_id} 采集异常 ({consecutive_failures}次)，{sleep_time:.0f}s 后重试")
+                backoff_delay *= self.BACKOFF_MULTIPLIER
+                stop_event.wait(sleep_time)
+                continue
+
+            # 正常轮询间隔
+            stop_event.wait(interval)
 
         try:
             client.close()
         except Exception:
             pass
+
+    def _mark_tags_offline(self, device_id: int):
+        """为设备所有启用的点位写入 quality=bad 的历史标记，用于离线期间数据可追溯。"""
+        db = SessionLocal()
+        try:
+            tags = db.query(DeviceTag).filter(
+                DeviceTag.device_id == device_id, DeviceTag.enabled == True
+            ).all()
+            now = datetime.now(timezone.utc)
+            for tag in tags:
+                # 更新实时缓存
+                key = f"{device_id}_{tag.id}"
+                if key in self._live_values:
+                    self._live_values[key]["quality"] = "bad"
+                    self._live_values[key]["time"] = now.isoformat()
+
+                # 写入历史标记
+                history = TagHistory(
+                    device_id=device_id,
+                    tag_id=tag.id,
+                    tag_name=tag.name,
+                    value=None,
+                    raw_value="offline",
+                    quality="bad",
+                )
+                db.add(history)
+
+                # WebSocket 推送
+                try:
+                    from app.engine.ws_broadcast import broadcast_live_value
+                    broadcast_live_value(device_id, tag.id, tag.name, None, "bad")
+                except Exception:
+                    pass
+
+            db.commit()
+            logger.info(f"Device {device_id}: 已写入 {len(tags)} 个点位的离线标记")
+        except Exception as e:
+            logger.error(f"Mark offline error for device {device_id}: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    def _trigger_disconnect_alarm(self, device_id: int):
+        """触发设备离线报警。"""
+        from app.services.alarm_service import alarm_service
+        db = SessionLocal()
+        try:
+            device = db.query(Device).filter(Device.id == device_id).first()
+            if device:
+                alarm_service.evaluate_disconnect(device_id, device.name)
+        finally:
+            db.close()
+
+    def _auto_disable_device(self, device_id: int, reason: str):
+        """连续失败过多，自动禁用设备。"""
+        logger.error(f"Device {device_id} 自动禁用: {reason}")
+        db = SessionLocal()
+        try:
+            device = db.query(Device).filter(Device.id == device_id).first()
+            if device:
+                device.enabled = False
+                device.status = "error"
+                device.last_error = f"自动禁用: {reason}"
+                db.commit()
+                try:
+                    from app.engine.ws_broadcast import broadcast_device_status
+                    broadcast_device_status(device_id, device.name, "disabled", reason)
+                except Exception:
+                    pass
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
 
     def _poll_device(self, device_id: int, client: ModbusTcpClient, slave_id: int):
         db = SessionLocal()

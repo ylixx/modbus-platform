@@ -59,6 +59,9 @@ class MqttDeviceSession:
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
 
+        # 指数退避重连：最小 1s，最大 60s
+        self._client.reconnect_delay_set(min_delay=1, max_delay=60)
+
         try:
             self._client.connect(self._broker, self._port, keepalive=60)
             self._client.loop_start()

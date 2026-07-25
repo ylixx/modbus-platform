@@ -146,11 +146,32 @@ class OpcUaDeviceSession:
             except Exception as e:
                 logger.warning(f"OPC-UA node {tag.opc_node_id} not accessible: {e}")
 
-        # Polling loop
+        # Polling loop with reconnection
+        consecutive_failures = 0
+        backoff_delay = 1.0
+
         while not self._stop_event.is_set():
-            for nid, (node, tag) in node_map.items():
-                try:
-                    raw = await node.read_value()
+            try:
+                # 检查连接状态
+                if not self._connected:
+                    try:
+                        await client.connect()
+                        self._connected = True
+                        consecutive_failures = 0
+                        backoff_delay = 1.0
+                        self._update_status("online", None)
+                        logger.info(f"OPC-UA device '{self.device_name}' reconnected")
+                    except Exception as e:
+                        consecutive_failures += 1
+                        self._update_status("error", f"重连失败: {e}")
+                        sleep_time = min(backoff_delay, 60.0)
+                        backoff_delay *= 2
+                        await asyncio.sleep(sleep_time)
+                        continue
+
+                for nid, (node, tag) in node_map.items():
+                    try:
+                        raw = await node.read_value()
                     casted = _cast_opc_value(raw, tag.opc_node_type or "float64")
                     if casted is None:
                         continue
@@ -195,8 +216,20 @@ class OpcUaDeviceSession:
 
                 except Exception as e:
                     logger.error(f"OPC-UA read error for {nid}: {e}")
+                    consecutive_failures += 1
+                    # 连续读取失败超过 5 次，标记为断开
+                    if consecutive_failures >= 5:
+                        self._connected = False
+                        self._update_status("error", f"连续读取失败: {e}")
+                        try:
+                            await client.disconnect()
+                        except Exception:
+                            pass
+                        break
 
-            self._update_status("online", None)
+            if self._connected:
+                consecutive_failures = 0
+                self._update_status("online", None)
             await asyncio.sleep(self._poll_interval)
 
         # Cleanup
