@@ -8,12 +8,16 @@ import {
   ElSelect,
   ElOption,
   ElInput,
+  ElInputNumber,
   ElTable,
   ElTableColumn,
   ElTag,
   ElMessage,
   ElMessageBox,
-  ElEmpty
+  ElDialog,
+  ElAlert,
+  ElDescriptions,
+  ElDescriptionsItem
 } from 'element-plus'
 import { getAllDevices, getDeviceTags, writeDevice, unwrap, unwrapList } from '@/api/modbus'
 
@@ -24,6 +28,9 @@ const tags = ref<any[]>([])
 const form = reactive<any>({ device_id: null, tag_id: null, value: '' })
 
 const writableTags = computed(() => tags.value.filter((t) => t.writable))
+
+const selectedDevice = computed(() => devices.value.find((d) => d.id === form.device_id))
+const selectedTag = computed(() => tags.value.find((t) => t.id === form.tag_id))
 
 const fetchDevices = async () => {
   devices.value = unwrapList(await getAllDevices()).list
@@ -36,24 +43,55 @@ const onDeviceChange = async () => {
   const body = unwrap(res)
   tags.value = Array.isArray(body) ? body : unwrapList(res).list
 }
-const doWrite = async () => {
+
+// ── 二次确认 ──
+const confirmDialogVisible = ref(false)
+const confirmText = ref('')
+const confirmBusy = ref(false)
+
+const doWrite = () => {
   if (form.device_id == null || form.tag_id == null) {
     ElMessage.warning('请选择设备和点位')
     return
   }
-  const tag = tags.value.find((t) => t.id === form.tag_id)
-  await ElMessageBox.confirm(`确认向点位「${tag?.name}」写入值 ${form.value} ？`, '远程控制确认', {
-    type: 'warning'
-  })
-  await writeDevice(form.device_id, { tag_id: form.tag_id, value: Number(form.value) })
-  ElMessage.success('写入指令已下发')
+  if (form.value === '' || form.value == null) {
+    ElMessage.warning('请输入写入值')
+    return
+  }
+  // 打开确认对话框
+  confirmText.value = ''
+  confirmDialogVisible.value = true
+}
+
+const confirmAndWrite = async () => {
+  if (confirmText.value !== '确认') {
+    ElMessage.warning('请输入"确认"以继续')
+    return
+  }
+  confirmBusy.value = true
+  try {
+    await writeDevice(form.device_id, { tag_id: form.tag_id, value: Number(form.value) })
+    ElMessage.success('写入指令已下发')
+    confirmDialogVisible.value = false
+  } catch (e: any) {
+    ElMessage.error(e?.message || '写入失败')
+  } finally {
+    confirmBusy.value = false
+  }
 }
 
 onMounted(fetchDevices)
 </script>
 
 <template>
-  <ContentWrap title="远程控制" message="向可写点位下发控制指令，请谨慎操作">
+  <ContentWrap title="远程控制">
+    <ElAlert
+      title="远程控制可直接修改设备运行参数，请确认操作对象和数值无误后再执行。"
+      type="warning"
+      :closable="false"
+      class="mb-16px"
+    />
+
     <ElForm :model="form" label-width="90px" class="max-w-560px">
       <ElFormItem label="目标设备">
         <ElSelect
@@ -84,9 +122,9 @@ onMounted(fetchDevices)
         <ElInput v-model="form.value" placeholder="请输入要写入的数值" />
       </ElFormItem>
       <ElFormItem>
-        <ElButton v-hasPermi="['device.control']" type="danger" @click="doWrite"
-          >下发控制指令</ElButton
-        >
+        <ElButton v-hasPermi="['device.control']" type="danger" @click="doWrite">
+          下发控制指令
+        </ElButton>
       </ElFormItem>
     </ElForm>
 
@@ -105,5 +143,59 @@ onMounted(fetchDevices)
         </ElTableColumn>
       </ElTable>
     </div>
+
+    <!-- 二次确认对话框 -->
+    <ElDialog v-model="confirmDialogVisible" title="⚠️ 远程控制确认" width="480px" :close-on-click-modal="false">
+      <ElAlert type="error" :closable="false" class="mb-16px">
+        请仔细确认以下操作信息，写入指令一旦下发将直接作用于设备。
+      </ElAlert>
+
+      <ElDescriptions :column="1" border>
+        <ElDescriptionsItem label="设备">
+          {{ selectedDevice?.name || '—' }}
+        </ElDescriptionsItem>
+        <ElDescriptionsItem label="协议">
+          {{ selectedDevice?.protocol || '—' }}
+        </ElDescriptionsItem>
+        <ElDescriptionsItem label="连接">
+          {{ selectedDevice?.host }}:{{ selectedDevice?.port }} / #{{ selectedDevice?.slave_id }}
+        </ElDescriptionsItem>
+        <ElDescriptionsItem label="点位">
+          {{ selectedTag?.name || '—' }} (地址 {{ selectedTag?.address ?? '—' }})
+        </ElDescriptionsItem>
+        <ElDescriptionsItem label="寄存器类型">
+          {{ selectedTag?.register_type || '—' }}
+        </ElDescriptionsItem>
+        <ElDescriptionsItem label="当前值">
+          {{ selectedTag?.value ?? '—' }}{{ selectedTag?.unit || '' }}
+        </ElDescriptionsItem>
+        <ElDescriptionsItem label="写入值">
+          <span class="text-20px font-700 text-red-500">{{ form.value }}</span>
+        </ElDescriptionsItem>
+      </ElDescriptions>
+
+      <div class="mt-16px">
+        <div class="text-13px mb-8px">
+          输入 <span class="font-700 text-red-500">确认</span> 以继续操作：
+        </div>
+        <ElInput
+          v-model="confirmText"
+          placeholder="请输入"确认""
+          @keyup.enter="confirmAndWrite"
+        />
+      </div>
+
+      <template #footer>
+        <ElButton @click="confirmDialogVisible = false">取消</ElButton>
+        <ElButton
+          type="danger"
+          :loading="confirmBusy"
+          :disabled="confirmText !== '确认'"
+          @click="confirmAndWrite"
+        >
+          确认下发
+        </ElButton>
+      </template>
+    </ElDialog>
   </ContentWrap>
 </template>
