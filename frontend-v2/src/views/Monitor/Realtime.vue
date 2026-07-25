@@ -66,8 +66,20 @@ const applyWsData = () => {
 const onLiveValue = (msg: any) => {
   const d = msg.data as WsLiveValue
   if (!d || d.device_id !== currentDevice.value) return
+  applyLiveValue(d)
+}
 
-  // 更新对应行
+const onBatchLive = (msg: any) => {
+  const items = msg.data as WsLiveValue[]
+  if (!Array.isArray(items)) return
+  for (const d of items) {
+    if (d.device_id === currentDevice.value) {
+      applyLiveValue(d)
+    }
+  }
+}
+
+const applyLiveValue = (d: WsLiveValue) => {
   const idx = rows.value.findIndex((r: any) => r.tag_name === d.tag_name || r.name === d.tag_name)
   if (idx !== -1) {
     const updated = [...rows.value]
@@ -90,6 +102,7 @@ onMounted(() => {
 
   // 监听 WebSocket 实时数据
   unsubFns.push(wsManager.on('live_value', onLiveValue))
+  unsubFns.push(wsManager.on('batch_live', onBatchLive))
 
   // 兜底轮询（WebSocket 未连接时降级）
   setupPolling()

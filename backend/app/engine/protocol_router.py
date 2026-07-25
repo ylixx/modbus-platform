@@ -12,10 +12,10 @@ class ProtocolRouter:
         self._opcua = None
 
     def init(self):
-        from app.engine.modbus_engine import modbus_engine
+        from app.engine.modbus_engine_v2 import modbus_engine_v2
         from app.engine.mqtt_engine import mqtt_engine
         from app.engine.opcua_engine import opcua_engine
-        self._modbus = modbus_engine
+        self._modbus = modbus_engine_v2
         self._mqtt = mqtt_engine
         self._opcua = opcua_engine
 
@@ -59,7 +59,9 @@ class ProtocolRouter:
         elif protocol == ProtocolType.OPC_UA:
             self._opcua._stop_device(device_id)
         else:
-            self._modbus._stop_device_polling(device_id)
+            task = self._modbus._tasks.pop(device_id, None)
+            if task and not task.done():
+                task.cancel()
 
     def write_value(self, device_id: int, tag: DeviceTag, value, protocol: str = None) -> bool:
         if not protocol:

@@ -56,11 +56,21 @@ export const useWsStore = defineStore('websocket', {
         this.connected = false
       })
 
-      // 实时数据更新
+      // 实时数据更新（单条，兼容旧格式）
       wsManager.on('live_value', (msg: WsMessage) => {
         const d = msg.data as WsLiveValue
         if (d) {
           this.liveData[`${d.device_id}:${d.tag_name}`] = d
+        }
+      })
+
+      // 实时数据更新（批量，v2 引擎）
+      wsManager.on('batch_live', (msg: WsMessage) => {
+        const items = msg.data as WsLiveValue[]
+        if (Array.isArray(items)) {
+          for (const d of items) {
+            this.liveData[`${d.device_id}:${d.tag_name}`] = d
+          }
         }
       })
 
