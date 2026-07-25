@@ -3,6 +3,7 @@ from app.models.device import Device, DeviceGroup, DeviceTag
 from app.models.alarm import AlarmRule, AlarmRecord, AlarmAck
 from app.models.sms import SmsContact, SmsRecord, SmsPushRule
 from app.models.history import TagHistory
+from app.models.lab_data import LabData, TagAggregate
 from app.models.audit import AuditLog
 from app.models.hierarchy import HierarchyConfig
 from app.models.permission import Permission, Role, RolePermission, UserRole

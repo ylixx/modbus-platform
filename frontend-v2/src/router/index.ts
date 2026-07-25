@@ -248,6 +248,16 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
           icon: 'vi-ant-design:database-outlined',
           permission: 'config.read'
         }
+      },
+      {
+        path: 'lab',
+        component: () => import('@/views/Data/LabCompare.vue'),
+        name: 'LabCompare',
+        meta: {
+          title: '化验对比',
+          icon: 'vi-ant-design:experiment-outlined',
+          permission: 'history.read'
+        }
       }
     ]
   },

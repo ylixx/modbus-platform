@@ -130,6 +130,7 @@ const form = reactive<any>({
   // 通用
   org_node_id: null as number | null,
   poll_interval: 5,
+  has_lab_data: false,
   description: ''
 })
 const rules = {
@@ -169,6 +170,7 @@ const openCreate = () => {
     opc_security_mode: 'None',
     org_node_id: query.org_node_id ?? null,
     poll_interval: 5,
+    has_lab_data: false,
     description: ''
   })
   dialogVisible.value = true
@@ -198,6 +200,7 @@ const openEdit = (row: any) => {
     opc_security_mode: row.opc_security_mode || 'None',
     org_node_id: row.org_node_id ?? null,
     poll_interval: row.poll_interval ?? 5,
+    has_lab_data: !!row.has_lab_data,
     description: row.description || ''
   })
   dialogVisible.value = true
@@ -209,6 +212,7 @@ const submit = async () => {
     protocol: form.protocol,
     org_node_id: form.org_node_id ?? null,
     poll_interval: form.poll_interval,
+    has_lab_data: form.has_lab_data,
     description: form.description
   }
 
@@ -507,6 +511,10 @@ onMounted(() => {
         <ElDivider content-position="left">通用设置</ElDivider>
         <ElFormItem label="采集间隔(秒)">
           <ElInputNumber v-model="form.poll_interval" :min="1" :max="3600" class="w-full" />
+        </ElFormItem>
+        <ElFormItem label="化验对比">
+          <ElSwitch v-model="form.has_lab_data" />
+          <span class="text-12px text-gray-400 ml-8px">启用后可录入化验数据并与采集值对比</span>
         </ElFormItem>
         <ElFormItem label="归属组织">
           <ElTreeSelect

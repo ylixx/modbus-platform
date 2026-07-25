@@ -183,3 +183,11 @@ export const resetUserPassword = (id: number, data?: any) =>
 export const getHierarchyTree = (params?: any) => request.get({ url: '/hierarchy/tree', params })
 export const getHierarchyConfigs = () => request.get({ url: '/hierarchy/configs' })
 export const getHierarchyFields = () => request.get({ url: '/hierarchy/fields' })
+
+// ============ Lab Data ============
+export const getLabData = (params: any) => request.get({ url: '/lab-data', params })
+export const createLabData = (data: any) => request.post({ url: '/lab-data', data })
+export const updateLabData = (id: number, data: any) => request.put({ url: `/lab-data/${id}`, data })
+export const deleteLabData = (id: number) => request.delete({ url: `/lab-data/${id}` })
+export const compareLabData = (params: any) => request.get({ url: '/lab-data/compare', params })
+export const getAggregate = (params: any) => request.get({ url: '/lab-data/aggregate', params })

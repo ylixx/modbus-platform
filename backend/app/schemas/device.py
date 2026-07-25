@@ -191,6 +191,7 @@ class DeviceCreate(BaseModel):
     # Common
     poll_interval: float = 5.0
     enabled: bool = True
+    has_lab_data: bool = False
 
 
 class DeviceUpdate(BaseModel):
@@ -238,6 +239,7 @@ class DeviceUpdate(BaseModel):
 
     poll_interval: Optional[float] = None
     enabled: Optional[bool] = None
+    has_lab_data: Optional[bool] = None
 
 
 class DeviceOut(BaseModel):
@@ -280,8 +282,9 @@ class DeviceOut(BaseModel):
     status: str
     last_poll_at: Optional[datetime]
     last_error: Optional[str]
-    poll_interval: float
-    enabled: bool
+    poll_interval: float = 5.0
+    enabled: bool = True
+    has_lab_data: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     class Config:

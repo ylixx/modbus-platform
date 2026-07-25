@@ -11,6 +11,7 @@ from app.api import (
     auth, users, devices, alarms, sms, history, dashboard,
     audit, exports, websocket, hierarchy, permissions, scada,
     archive, imports, templates, scripts, config_export, orgs,
+    lab_data,
 )
 
 
@@ -264,6 +265,7 @@ app.include_router(imports.router, prefix=prefix)
 app.include_router(templates.router, prefix=prefix)
 app.include_router(scripts.router, prefix=prefix)
 app.include_router(config_export.router, prefix=prefix)
+app.include_router(lab_data.router, prefix=prefix)
 app.include_router(websocket.router)
 
 
