@@ -123,6 +123,7 @@ const form = reactive<any>({
   mqtt_password: '',
   mqtt_client_id: '',
   mqtt_qos: 0,
+  mqtt_payload_template: '',
   // OPC-UA
   endpoint_url: '',
   node_id: '',
@@ -165,6 +166,7 @@ const openCreate = () => {
     mqtt_password: '',
     mqtt_client_id: '',
     mqtt_qos: 0,
+    mqtt_payload_template: '',
     endpoint_url: '',
     node_id: '',
     opc_security_mode: 'None',
@@ -195,6 +197,7 @@ const openEdit = (row: any) => {
     mqtt_password: row.mqtt_password || '',
     mqtt_client_id: row.mqtt_client_id || '',
     mqtt_qos: row.mqtt_qos ?? 0,
+    mqtt_payload_template: row.mqtt_payload_template || '',
     endpoint_url: row.endpoint_url || '',
     node_id: row.node_id || '',
     opc_security_mode: row.opc_security_mode || 'None',
@@ -235,6 +238,7 @@ const submit = async () => {
     payload.mqtt_password = form.mqtt_password
     payload.mqtt_client_id = form.mqtt_client_id
     payload.mqtt_qos = form.mqtt_qos
+    payload.mqtt_payload_template = form.mqtt_payload_template
   } else if (isOpcua.value) {
     payload.endpoint_url = form.endpoint_url
     payload.node_id = form.node_id
@@ -486,6 +490,18 @@ onMounted(() => {
               <ElOption label="1 - 至少一次" :value="1" />
               <ElOption label="2 - 恰好一次" :value="2" />
             </ElSelect>
+          </ElFormItem>
+          <ElFormItem label="发布模板">
+            <ElInput
+              v-model="form.mqtt_payload_template"
+              type="textarea"
+              :rows="6"
+              placeholder="留空使用默认格式。支持占位符：${device_id} ${device_name} ${timestamp} ${timestamp_ms} ${values_json} ${values_detail} ${value} ${tag_name}"
+              class="font-mono"
+            />
+            <div class="text-12px text-gray-400 mt-4px">
+              占位符：${device_id} ${device_name} ${timestamp} ${timestamp_ms} ${values_json} ${values_detail}
+            </div>
           </ElFormItem>
         </template>
 

@@ -121,6 +121,7 @@ class Device(Base):
     mqtt_publish_qos = Column(Integer, default=0)
     mqtt_publish_interval = Column(Float, default=5.0)      # publish cycle in seconds
     mqtt_payload_format = Column(String(20), default="json")   # plain | json | thingsboard
+    mqtt_payload_template = Column(Text, default="")  # 自定义发布模板，留空用默认格式
     mqtt_is_gateway = Column(Boolean, default=False)            # ThingsBoard gateway mode
 
     # ── OPC-UA fields ──

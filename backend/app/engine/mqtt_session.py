@@ -36,6 +36,7 @@ class MqttDeviceSession:
         self._publish_topic = device.mqtt_publish_topic
         self._publish_qos = device.mqtt_publish_qos or 0
         self._publish_interval = device.mqtt_publish_interval or 5.0
+        self._publish_template = (device.mqtt_payload_template or "").strip()
 
         self._client: Optional[mqtt.Client] = None
         self._stop_event = threading.Event()
@@ -208,14 +209,66 @@ class MqttDeviceSession:
     def _publish_loop(self):
         while not self._stop_event.is_set():
             if self._connected and self._live_values:
-                payload = {"device_id": self.device_id, "device_name": self.device_name, "timestamp": datetime.now(timezone.utc).isoformat(), "values": {}}
-                db = SessionLocal()
-                try:
-                    for tag_id, val in self._live_values.items():
-                        tag = db.query(DeviceTag).filter(DeviceTag.id == tag_id).first()
-                        key = tag.name if tag else str(tag_id)
-                        payload["values"][key] = val.get("value")
-                finally:
-                    db.close()
-                self._client.publish(self._publish_topic, json.dumps(payload), qos=self._publish_qos)
+                payload = self._render_payload()
+                self._client.publish(self._publish_topic, payload, qos=self._publish_qos)
             self._stop_event.wait(self._publish_interval)
+
+    def _render_payload(self) -> str:
+        """根据模板渲染发布内容。"""
+        now = datetime.now(timezone.utc)
+        timestamp_ms = int(now.timestamp() * 1000)
+
+        # 构建 values 字典
+        values_simple = {}  # {tag_name: value}
+        values_detail = {}  # {tag_name: {value, quality, time}}
+        db = SessionLocal()
+        try:
+            for tag_id, val in self._live_values.items():
+                tag = db.query(DeviceTag).filter(DeviceTag.id == tag_id).first()
+                key = tag.name if tag else str(tag_id)
+                values_simple[key] = val.get("value")
+                values_detail[key] = {
+                    "value": val.get("value"),
+                    "quality": val.get("quality", "good"),
+                    "raw_value": val.get("raw_value"),
+                }
+        finally:
+            db.close()
+
+        # 无模板：使用默认格式
+        if not self._publish_template:
+            payload = {
+                "device_id": self.device_id,
+                "device_name": self.device_name,
+                "timestamp": now.isoformat(),
+                "values": values_simple,
+            }
+            return json.dumps(payload)
+
+        # 有模板：替换占位符
+        try:
+            result = self._publish_template
+            result = result.replace("${device_id}", str(self.device_id))
+            result = result.replace("${device_name}", self.device_name)
+            result = result.replace("${timestamp}", now.isoformat())
+            result = result.replace("${timestamp_ms}", str(timestamp_ms))
+            result = result.replace("${values_json}", json.dumps(values_simple))
+            result = result.replace("${values_detail}", json.dumps(values_detail))
+
+            # 单个值替换（用于每条消息只发一个点位的场景）
+            # 取第一个值作为当前值
+            if values_simple:
+                first_key = next(iter(values_simple))
+                first_val = values_simple[first_key]
+                result = result.replace("${value}", json.dumps(first_val) if first_val is not None else "null")
+                result = result.replace("${tag_name}", first_key)
+
+            return result
+        except Exception as e:
+            logger.error(f"Template render error: {e}, falling back to default")
+            return json.dumps({
+                "device_id": self.device_id,
+                "device_name": self.device_name,
+                "timestamp": now.isoformat(),
+                "values": values_simple,
+            })

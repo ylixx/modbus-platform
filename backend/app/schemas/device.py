@@ -177,6 +177,7 @@ class DeviceCreate(BaseModel):
     mqtt_publish_qos: int = 0
     mqtt_publish_interval: float = 5.0
     mqtt_payload_format: str = "json"    # plain | json | thingsboard
+    mqtt_payload_template: str = ""      # 自定义发布模板
     mqtt_is_gateway: bool = False
 
     # OPC-UA
@@ -227,6 +228,7 @@ class DeviceUpdate(BaseModel):
     mqtt_publish_qos: Optional[int] = None
     mqtt_publish_interval: Optional[float] = None
     mqtt_payload_format: Optional[str] = None
+    mqtt_payload_template: Optional[str] = None
     mqtt_is_gateway: Optional[bool] = None
 
     opc_endpoint: Optional[str] = None
@@ -273,6 +275,7 @@ class DeviceOut(BaseModel):
     mqtt_publish_qos: int
     mqtt_publish_interval: float
     mqtt_payload_format: str
+    mqtt_payload_template: str
     mqtt_is_gateway: bool
 
     opc_endpoint: str
