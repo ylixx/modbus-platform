@@ -181,6 +181,93 @@ def delete_device(device_id: int, db: Session = Depends(get_db), _: User = Depen
     return {"message": "删除成功"}
 
 
+@router.post("/{device_id}/duplicate")
+def duplicate_device(
+    device_id: int,
+    new_name: str = Query(..., description="新设备名称"),
+    copy_tags: bool = Query(True, description="是否复制点位"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("device.write")),
+):
+    """Duplicate a device and optionally all its tags."""
+    src = db.query(Device).filter(Device.id == device_id).first()
+    if not src:
+        raise HTTPException(404, "设备不存在")
+
+    if db.query(Device).filter(Device.name == new_name).first():
+        raise HTTPException(400, f"设备名 '{new_name}' 已存在")
+
+    # Copy device fields
+    new_device = Device(
+        name=new_name,
+        protocol=src.protocol,
+        host=src.host,
+        port=src.port,
+        slave_id=src.slave_id,
+        serial_port=src.serial_port,
+        baudrate=src.baudrate,
+        parity=src.parity,
+        data_bits=src.data_bits,
+        stop_bits=src.stop_bits,
+        broker_url=src.broker_url,
+        mqtt_topic=src.mqtt_topic,
+        mqtt_username=src.mqtt_username,
+        mqtt_password=src.mqtt_password,
+        mqtt_client_id=src.mqtt_client_id,
+        mqtt_qos=src.mqtt_qos,
+        endpoint_url=src.endpoint_url,
+        node_id=src.node_id,
+        opc_security_mode=src.opc_security_mode,
+        poll_interval=src.poll_interval,
+        factory=src.factory,
+        workshop=src.workshop,
+        production_line=src.production_line,
+        installation=src.installation,
+        org_node_id=src.org_node_id,
+        description=f"复制自: {src.name}" if not src.description else src.description,
+        enabled=False,  # 新设备默认禁用，确认后再启用
+    )
+    db.add(new_device)
+    db.flush()  # Get new_device.id
+
+    tag_count = 0
+    if copy_tags:
+        src_tags = db.query(DeviceTag).filter(DeviceTag.device_id == device_id).all()
+        for st in src_tags:
+            new_tag = DeviceTag(
+                device_id=new_device.id,
+                name=st.name,
+                function_code=st.function_code,
+                address=st.address,
+                data_type=st.data_type,
+                byte_order=st.byte_order,
+                scale_factor=st.scale_factor,
+                offset=st.offset,
+                decimal_places=st.decimal_places,
+                unit=st.unit,
+                writable=st.writable,
+                description=st.description,
+                sort_order=st.sort_order,
+                enabled=st.enabled,
+            )
+            db.add(new_tag)
+            tag_count += 1
+
+    db.commit()
+    db.refresh(new_device)
+
+    return {
+        "message": f"设备复制成功，已复制 {tag_count} 个点位",
+        "device": {
+            "id": new_device.id,
+            "name": new_device.name,
+            "protocol": new_device.protocol,
+            "enabled": new_device.enabled,
+        },
+        "tag_count": tag_count,
+    }
+
+
 # ============ Tags ============
 
 @router.get("/{device_id}/tags", response_model=List[TagOut])

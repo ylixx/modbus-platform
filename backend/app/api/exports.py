@@ -2,7 +2,7 @@
 import io
 import csv
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from app.core.database import get_db
@@ -153,6 +153,40 @@ def export_devices_csv(
 
     content = "\ufeff" + output.getvalue()
     filename = f"devices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/tags/csv")
+def export_tags_csv(
+    device_id: int = Query(..., description="设备ID"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("export.download")),
+):
+    """Export tags of a specific device as CSV (for import-compatible format)."""
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(404, "设备不存在")
+
+    tags = db.query(DeviceTag).filter(DeviceTag.device_id == device_id).order_by(DeviceTag.sort_order, DeviceTag.id).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    # 与导入模板格式一致：device_name, name, function_code, address, data_type, byte_order, scale_factor, offset, decimal_places, unit, writable, description
+    writer.writerow(["device_name", "name", "function_code", "address", "data_type", "byte_order", "scale_factor", "offset", "decimal_places", "unit", "writable", "description"])
+    for t in tags:
+        writer.writerow([
+            device.name, t.name, t.function_code or "holding_register", t.address,
+            t.data_type or "uint16", t.byte_order or "big_endian",
+            t.scale_factor or 1, t.offset or 0, t.decimal_places or 2,
+            t.unit or "", "true" if t.writable else "false", t.description or "",
+        ])
+
+    content = "\ufeff" + output.getvalue()
+    filename = f"tags_{device.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return Response(
         content=content,
         media_type="text/csv; charset=utf-8",

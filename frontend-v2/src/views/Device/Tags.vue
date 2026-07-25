@@ -24,6 +24,8 @@ import {
   createTag,
   updateTag,
   deleteTag,
+  exportTagsCsv,
+  importTags,
   unwrap,
   unwrapList
 } from '@/api/modbus'
@@ -119,6 +121,65 @@ const remove = async (row: any) => {
   fetchTags()
 }
 
+// ── 导出/导入 ──
+const downloadBlob = (data: any, filename: string) => {
+  const blob = data instanceof Blob ? data : new Blob([data])
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  window.URL.revokeObjectURL(url)
+}
+
+const exportLoading = ref(false)
+const doExport = async () => {
+  if (!currentDevice.value) {
+    ElMessage.warning('请先选择设备')
+    return
+  }
+  exportLoading.value = true
+  try {
+    const res: any = await exportTagsCsv(currentDevice.value)
+    const deviceName = devices.value.find((d) => d.id === currentDevice.value)?.name || 'device'
+    downloadBlob(res?.data ?? res, `tags_${deviceName}_${new Date().toISOString().slice(0, 10)}.csv`)
+    ElMessage.success('导出成功')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导出失败')
+  } finally {
+    exportLoading.value = false
+  }
+}
+
+const importDialogVisible = ref(false)
+const importLoading = ref(false)
+const importResult = ref<any>(null)
+
+const openImport = () => {
+  importResult.value = null
+  importDialogVisible.value = true
+}
+
+const doImport = async (opt: any) => {
+  importLoading.value = true
+  importResult.value = null
+  try {
+    const fd = new FormData()
+    fd.append('file', opt.file)
+    const res: any = await importTags(fd)
+    const body = res?.data || res
+    importResult.value = body
+    ElMessage.success(`导入完成：成功 ${body?.created ?? 0} 条`)
+    fetchTags()
+    opt.onSuccess?.(body)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导入失败')
+    opt.onError?.(e)
+  } finally {
+    importLoading.value = false
+  }
+}
+
 onMounted(fetchDevices)
 </script>
 
@@ -130,6 +191,20 @@ onMounted(fetchDevices)
         <ElSelect v-model="currentDevice" class="!w-220px mr-10px" @change="fetchTags">
           <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
         </ElSelect>
+        <ElButton
+          v-hasPermi="['export.download']"
+          :loading="exportLoading"
+          :disabled="currentDevice == null"
+          @click="doExport"
+        >
+          导出点位
+        </ElButton>
+        <ElButton
+          v-hasPermi="['import.write']"
+          @click="openImport"
+        >
+          导入点位
+        </ElButton>
         <ElButton
           v-hasPermi="['tag.write']"
           type="success"
@@ -207,6 +282,51 @@ onMounted(fetchDevices)
       <template #footer>
         <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">确定</ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- 导入点位对话框 -->
+    <ElDialog v-model="importDialogVisible" title="导入点位" width="500px">
+      <ElAlert
+        title="导入说明"
+        type="info"
+        :closable="false"
+        class="mb-16px"
+      >
+        <template #default>
+          <div>
+            <p>1. 先从已有设备「导出点位」获取 CSV 文件</p>
+            <p>2. 修改 CSV 中的 device_name 为目标设备名称</p>
+            <p>3. 按需修改点位名称、地址等信息</p>
+            <p>4. 上传修改后的 CSV 文件</p>
+          </div>
+        </template>
+      </ElAlert>
+      <ElUpload
+        :show-file-list="true"
+        accept=".csv"
+        :http-request="doImport"
+        :loading="importLoading"
+      >
+        <ElButton type="primary" :loading="importLoading">选择 CSV 文件</ElButton>
+        <template #tip>
+          <div class="text-12px text-gray-400 mt-4px">
+            CSV 格式: device_name, name, function_code, address, data_type, ...
+          </div>
+        </template>
+      </ElUpload>
+      <div v-if="importResult" class="mt-12px">
+        <ElAlert
+          :title="`导入完成：成功 ${importResult.created} 条`"
+          :type="importResult.errors?.length ? 'warning' : 'success'"
+          :closable="false"
+        />
+        <div v-if="importResult.errors?.length" class="mt-8px text-12px text-red-500">
+          <div v-for="(err, i) in importResult.errors" :key="i">{{ err }}</div>
+        </div>
+      </div>
+      <template #footer>
+        <ElButton @click="importDialogVisible = false">关闭</ElButton>
       </template>
     </ElDialog>
   </ContentWrap>

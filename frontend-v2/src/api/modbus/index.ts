@@ -24,6 +24,8 @@ export const getDevice = (id: number | string) => request.get({ url: `/devices/$
 export const createDevice = (data: any) => request.post({ url: '/devices', data })
 export const updateDevice = (id: number, data: any) => request.put({ url: `/devices/${id}`, data })
 export const deleteDevice = (id: number) => request.delete({ url: `/devices/${id}` })
+export const duplicateDevice = (id: number, newName: string, copyTags = true) =>
+  request.post({ url: `/devices/${id}/duplicate?new_name=***&copy_tags=${copyTags}` })
 export const getDeviceLive = (id: number | string) => request.get({ url: `/devices/${id}/live` })
 export const getDeviceTags = (id: number | string) => request.get({ url: `/devices/${id}/tags` })
 export const writeDevice = (id: number, data: any) =>
@@ -97,6 +99,8 @@ export const exportDevicesCsv = () =>
   request.get({ url: '/export/devices/csv', responseType: 'blob' })
 export const exportHistoryCsv = (params?: any) =>
   request.get({ url: '/export/history/csv', params, responseType: 'blob' })
+export const exportTagsCsv = (deviceId: number) =>
+  request.get({ url: '/export/tags/csv', params: { device_id: deviceId }, responseType: 'blob' })
 export const exportAlarmsCsv = (params?: any) =>
   request.get({ url: '/export/alarms/csv', params, responseType: 'blob' })
 export const exportDailyReport = (params?: any) =>

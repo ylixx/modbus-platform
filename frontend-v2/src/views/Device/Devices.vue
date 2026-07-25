@@ -27,6 +27,7 @@ import {
   createDevice,
   updateDevice,
   deleteDevice,
+  duplicateDevice,
   getOrgTree,
   unwrapList
 } from '@/api/modbus'
@@ -253,6 +254,33 @@ const remove = async (row: any) => {
   fetchList()
 }
 
+// ── 设备复制 ──
+const dupDialogVisible = ref(false)
+const dupForm = reactive({ id: 0, name: '', copyTags: true, sourceName: '' })
+
+const openDuplicate = (row: any) => {
+  dupForm.id = row.id
+  dupForm.name = row.name + ' 副本'
+  dupForm.copyTags = true
+  dupForm.sourceName = row.name
+  dupDialogVisible.value = true
+}
+const doDuplicate = async () => {
+  if (!dupForm.name.trim()) {
+    ElMessage.warning('请输入新设备名称')
+    return
+  }
+  try {
+    const res: any = await duplicateDevice(dupForm.id, dupForm.name.trim(), dupForm.copyTags)
+    const body = res?.data || res
+    ElMessage.success(body?.message || '复制成功')
+    dupDialogVisible.value = false
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '复制失败')
+  }
+}
+
 onMounted(() => {
   fetchList()
   fetchOrgTree()
@@ -324,13 +352,16 @@ onMounted(() => {
             </template>
           </ElTableColumn>
           <ElTableColumn prop="description" label="描述" min-width="160" show-overflow-tooltip />
-          <ElTableColumn label="操作" width="220" fixed="right">
+          <ElTableColumn label="操作" width="280" fixed="right">
             <template #default="{ row }">
               <ElButton link type="primary" @click="router.push(`/device/detail/${row.id}`)"
                 >详情</ElButton
               >
               <ElButton v-hasPermi="['device.write']" link type="primary" @click="openEdit(row)"
                 >编辑</ElButton
+              >
+              <ElButton v-hasPermi="['device.write']" link type="primary" @click="openDuplicate(row)"
+                >复制</ElButton
               >
               <ElButton v-hasPermi="['device.write']" link type="danger" @click="remove(row)"
                 >删除</ElButton
@@ -496,6 +527,32 @@ onMounted(() => {
       <template #footer>
         <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">确定</ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- 设备复制对话框 -->
+    <ElDialog v-model="dupDialogVisible" title="复制设备" width="480px">
+      <ElAlert
+        :title="`从「${dupForm.sourceName}」复制，设备配置和点位将一并复制`"
+        type="info"
+        :closable="false"
+        class="mb-16px"
+      />
+      <ElForm label-width="100px">
+        <ElFormItem label="新设备名称">
+          <ElInput v-model="dupForm.name" placeholder="请输入新设备名称" />
+        </ElFormItem>
+        <ElFormItem label="复制点位">
+          <ElSwitch v-model="dupForm.copyTags" />
+          <span class="text-12px text-gray-400 ml-8px">复制全部采集点位配置</span>
+        </ElFormItem>
+        <ElFormItem label="状态">
+          <span class="text-12px text-gray-500">新设备默认禁用，确认无误后手动启用</span>
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="dupDialogVisible = false">取消</ElButton>
+        <ElButton type="primary" @click="doDuplicate">确认复制</ElButton>
       </template>
     </ElDialog>
   </ContentWrap>
