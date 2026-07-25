@@ -262,24 +262,16 @@ class OpcUaDeviceSession:
             return False
 
     def _save_history(self, tag: DeviceTag, value: float, raw: str):
-        db = SessionLocal()
-        try:
-            h = TagHistory(
-                device_id=self.device_id,
-                tag_id=tag.id,
-                tag_name=tag.name,
-                value=value,
-                raw_value=raw,
-                quality="good",
-            )
-            db.add(h)
-            db.commit()
-        except Exception:
-            db.rollback()
-        finally:
-            db.close()
+        from app.engine.shared_buffer import write_buffer, ws_pusher
+        write_buffer.add({
+            "device_id": self.device_id, "tag_id": tag.id, "tag_name": tag.name,
+            "value": value, "raw_value": raw, "quality": "good",
+            "recorded_at": datetime.now(timezone.utc),
+        })
+        ws_pusher.push_live_value(self.device_id, tag.id, tag.name, value, "good")
 
     def _update_status(self, status: str, error: Optional[str]):
+        from app.engine.shared_buffer import ws_pusher
         db = SessionLocal()
         try:
             device = db.query(Device).filter(Device.id == self.device_id).first()
@@ -288,6 +280,7 @@ class OpcUaDeviceSession:
                 device.last_error = error
                 device.last_poll_at = datetime.now(timezone.utc)
                 db.commit()
+                ws_pusher.push_device_status(self.device_id, device.name, status, error)
         except Exception:
             db.rollback()
         finally:

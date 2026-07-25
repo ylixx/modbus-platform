@@ -36,6 +36,11 @@ async def lifespan(app: FastAPI):
     _seed_permissions()
     _assign_admin_role()
 
+    # Start shared write buffer and WebSocket pusher
+    from app.engine.shared_buffer import write_buffer, ws_pusher
+    write_buffer.start()
+    ws_pusher.start()
+
     # Start all protocol engines
     from app.engine.protocol_router import protocol_router
     protocol_router.start_all()
@@ -52,6 +57,8 @@ async def lifespan(app: FastAPI):
     yield
 
     protocol_router.stop_all()
+    write_buffer.stop()
+    ws_pusher.stop()
     _stop_scheduler()
     logger.info("Application stopped")
 

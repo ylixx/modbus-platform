@@ -1,259 +1,23 @@
 """
 Modbus TCP 异步采集引擎 v2 — 混合架构
 
-架构：
-┌─────────────────────────────────────────────────┐
-│  asyncio 事件循环（单线程）                       │
-│  - 600 个设备协程并发采集                         │
-│  - IO 等待时不阻塞，自动调度                      │
-│  - 数据写入 WriteBuffer                          │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│  WriteBuffer + 写入线程（1 个）                   │
-│  - 攒 500 条或 2 秒批量 INSERT                    │
-│  - 聚合计算（预聚合表）                           │
-└──────────────────┬──────────────────────────────┘
-                   │
-┌──────────────────▼──────────────────────────────┐
-│  WsBatchPusher                                   │
-│  - 50ms 攒一批 → WebSocket 批量广播               │
-└─────────────────────────────────────────────────┘
+使用共享 WriteBuffer 和 WsBatchPusher（shared_buffer.py）。
 """
 
 import asyncio
 import threading
-import time
-from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
 from app.core.database import SessionLocal
 from app.models.device import Device, DeviceTag, FunctionCode
 from app.models.history import TagHistory
-from app.models.lab_data import TagAggregate
 from app.engine.modbus_codec import get_register_count, decode_value
+from app.engine.shared_buffer import write_buffer, ws_pusher
 
 
 # ═══════════════════════════════════════════════════
 # WriteBuffer — 批量写入缓冲
-# ═══════════════════════════════════════════════════
-
-class WriteBuffer:
-    """线程安全的写入缓冲，攒够一批后批量写入数据库。"""
-
-    FLUSH_SIZE = 500        # 条数阈值
-    FLUSH_INTERVAL = 2.0    # 秒
-
-    def __init__(self):
-        self._buffer: list[dict] = []
-        self._agg_buffer: dict[str, list[float]] = defaultdict(list)  # "device_id:tag_id:granularity" -> [values]
-        self._lock = threading.Lock()
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._flush_event = threading.Event()
-
-    def start(self):
-        self._running = True
-        self._thread = threading.Thread(target=self._write_loop, daemon=True, name="db-writer")
-        self._thread.start()
-        logger.info("WriteBuffer started")
-
-    def stop(self):
-        self._running = False
-        self._flush_event.set()
-        if self._thread:
-            self._thread.join(timeout=10)
-        # 最终 flush
-        self._do_flush()
-        logger.info("WriteBuffer stopped")
-
-    def add(self, record: dict):
-        """添加一条历史记录到缓冲。record 字段与 TagHistory 模型对应。"""
-        with self._lock:
-            self._buffer.append(record)
-            if len(self._buffer) >= self.FLUSH_SIZE:
-                self._flush_event.set()
-
-    def _write_loop(self):
-        while self._running:
-            self._flush_event.wait(timeout=self.FLUSH_INTERVAL)
-            self._flush_event.clear()
-            self._do_flush()
-
-    def _do_flush(self):
-        with self._lock:
-            if not self._buffer:
-                return
-            batch = self._buffer[:]
-            self._buffer.clear()
-
-        if not batch:
-            return
-
-        db = SessionLocal()
-        try:
-            # 批量 INSERT
-            db.bulk_insert_mappings(TagHistory, batch)
-            db.commit()
-            logger.debug(f"WriteBuffer: 批量写入 {len(batch)} 条历史记录")
-
-            # 更新预聚合（每分钟桶）
-            self._update_aggregates(db, batch)
-
-        except Exception as e:
-            logger.error(f"WriteBuffer flush error: {e}")
-            db.rollback()
-            # 丢弃这批数据，避免无限重试阻塞
-        finally:
-            db.close()
-
-    def _update_aggregates(self, db, records: list[dict]):
-        """更新 1 分钟粒度的预聚合数据。"""
-        try:
-            # 按 device_id:tag_id:minute 分组
-            buckets: dict[str, list[float]] = defaultdict(list)
-            meta: dict[str, dict] = {}
-
-            for r in records:
-                if r.get("value") is None or r.get("quality") != "good":
-                    continue
-                ts = r.get("recorded_at")
-                if not ts:
-                    continue
-                if isinstance(ts, str):
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                minute_ts = ts.replace(second=0, microsecond=0)
-                key = f"{r['device_id']}:{r['tag_id']}:{minute_ts.isoformat()}"
-                buckets[key].append(r["value"])
-                if key not in meta:
-                    meta[key] = {
-                        "device_id": r["device_id"],
-                        "tag_id": r["tag_id"],
-                        "tag_name": r.get("tag_name", ""),
-                        "bucket_time": minute_ts,
-                    }
-
-            for key, values in buckets.items():
-                m = meta[key]
-                # Upsert: 先查已有记录
-                existing = db.query(TagAggregate).filter(
-                    TagAggregate.device_id == m["device_id"],
-                    TagAggregate.tag_id == m["tag_id"],
-                    TagAggregate.granularity == 60,
-                    TagAggregate.bucket_time == m["bucket_time"],
-                ).first()
-
-                if existing:
-                    # 合并
-                    all_min = min(existing.min_value, min(values)) if existing.min_value is not None else min(values)
-                    all_max = max(existing.max_value, max(values)) if existing.max_value is not None else max(values)
-                    total_sum = (existing.avg_value or 0) * existing.count + sum(values)
-                    existing.count += len(values)
-                    existing.avg_value = round(total_sum / existing.count, 4)
-                    existing.min_value = round(all_min, 4)
-                    existing.max_value = round(all_max, 4)
-                    existing.last_value = round(values[-1], 4)
-                else:
-                    db.add(TagAggregate(
-                        device_id=m["device_id"],
-                        tag_id=m["tag_id"],
-                        tag_name=m["tag_name"],
-                        granularity=60,
-                        bucket_time=m["bucket_time"],
-                        min_value=round(min(values), 4),
-                        max_value=round(max(values), 4),
-                        avg_value=round(sum(values) / len(values), 4),
-                        count=len(values),
-                        first_value=round(values[0], 4),
-                        last_value=round(values[-1], 4),
-                    ))
-
-            db.commit()
-        except Exception as e:
-            logger.error(f"Aggregate update error: {e}")
-            db.rollback()
-
-
-# ═══════════════════════════════════════════════════
-# WsBatchPusher — WebSocket 批量推送
-# ═══════════════════════════════════════════════════
-
-class WsBatchPusher:
-    """攒一批 WebSocket 消息，定时批量广播。"""
-
-    FLUSH_INTERVAL = 0.05  # 50ms
-
-    def __init__(self):
-        self._buffer: list[dict] = []
-        self._lock = threading.Lock()
-        self._running = False
-        self._thread: Optional[threading.Thread] = None
-
-    def start(self):
-        self._running = True
-        self._thread = threading.Thread(target=self._push_loop, daemon=True, name="ws-pusher")
-        self._thread.start()
-
-    def stop(self):
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=5)
-
-    def push_live_value(self, device_id: int, tag_id: int, tag_name: str, value, quality: str = "good"):
-        with self._lock:
-            self._buffer.append({
-                "device_id": device_id,
-                "tag_id": tag_id,
-                "tag_name": tag_name,
-                "value": value,
-                "quality": quality,
-                "time": datetime.now(timezone.utc).isoformat(),
-            })
-
-    def push_device_status(self, device_id: int, device_name: str, status: str, error: str = None):
-        # 设备状态变更立即推送（不攒批）
-        try:
-            from app.engine.ws_broadcast import broadcast_device_status
-            broadcast_device_status(device_id, device_name, status, error)
-        except Exception:
-            pass
-
-    def _push_loop(self):
-        while self._running:
-            time.sleep(self.FLUSH_INTERVAL)
-            self._do_push()
-
-    def _do_push(self):
-        with self._lock:
-            if not self._buffer:
-                return
-            batch = self._buffer[:]
-            self._buffer.clear()
-
-        try:
-            from app.engine.websocket_manager import ws_manager
-            import asyncio
-            asyncio.run_coroutine_threadsafe(
-                ws_manager.broadcast({"type": "batch_live", "data": batch}),
-                _get_event_loop(),
-            )
-        except Exception:
-            pass
-
-
-def _get_event_loop():
-    """获取主事件循环。"""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            return asyncio.new_event_loop()
-        return loop
-    except RuntimeError:
-        return asyncio.new_event_loop()
-
-
-# ═══════════════════════════════════════════════════
 # ModbusEngineV2 — 异步采集引擎
 # ═══════════════════════════════════════════════════
 
@@ -261,8 +25,8 @@ class ModbusEngineV2:
     """异步 Modbus TCP 采集引擎。
 
     - asyncio 单线程管理所有设备连接
-    - WriteBuffer 批量写入数据库
-    - WsBatchPusher 批量推送 WebSocket
+    - 使用共享 WriteBuffer 批量写入数据库
+    - 使用共享 WsBatchPusher 批量推送 WebSocket
     """
 
     # 重连退避
@@ -279,18 +43,10 @@ class ModbusEngineV2:
         self._live_values: dict[str, dict] = {}
         self._device_states: dict[int, dict] = {}  # device_id -> {status, error, consecutive_failures}
 
-        # 子系统
-        self._write_buffer = WriteBuffer()
-        self._ws_pusher = WsBatchPusher()
-
     def start(self):
         if self._running:
             return
         self._running = True
-
-        # 启动写入和推送线程
-        self._write_buffer.start()
-        self._ws_pusher.start()
 
         # 启动 asyncio 事件循环（在专用线程中）
         self._loop = asyncio.new_event_loop()
@@ -310,10 +66,6 @@ class ModbusEngineV2:
 
         if self._loop_thread:
             self._loop_thread.join(timeout=10)
-
-        # 停止子系统
-        self._write_buffer.stop()
-        self._ws_pusher.stop()
 
         logger.info("ModbusEngineV2 stopped")
 
@@ -500,7 +252,7 @@ class ModbusEngineV2:
                             }
 
                             # 写入缓冲（不直接写 DB）
-                            self._write_buffer.add({
+                            write_buffer.add({
                                 "device_id": device_id,
                                 "tag_id": tag.id,
                                 "tag_name": tag.name,
@@ -511,7 +263,7 @@ class ModbusEngineV2:
                             })
 
                             # WebSocket 批量推送
-                            self._ws_pusher.push_live_value(device_id, tag.id, tag.name, processed, quality)
+                            ws_pusher.push_live_value(device_id, tag.id, tag.name, processed, quality)
 
                             # 报警评估
                             from app.services.alarm_service import alarm_service
@@ -650,13 +402,13 @@ class ModbusEngineV2:
                     self._live_values[key]["quality"] = "bad"
                     self._live_values[key]["time"] = now.isoformat()
 
-                self._write_buffer.add({
+                write_buffer.add({
                     "device_id": device_id, "tag_id": tag.id, "tag_name": tag.name,
                     "value": None, "raw_value": "offline", "quality": "bad",
                     "recorded_at": now,
                 })
 
-                self._ws_pusher.push_live_value(device_id, tag.id, tag.name, None, "bad")
+                ws_pusher.push_live_value(device_id, tag.id, tag.name, None, "bad")
 
             logger.info(f"Device {device_id}: 离线标记已写入缓冲 ({len(tags)} 个点位)")
         except Exception as e:
@@ -684,7 +436,7 @@ class ModbusEngineV2:
                 device.status = "error"
                 device.last_error = f"自动禁用: {reason}"
                 db.commit()
-                self._ws_pusher.push_device_status(device_id, device.name, "disabled", reason)
+                ws_pusher.push_device_status(device_id, device.name, "disabled", reason)
         except Exception:
             db.rollback()
         finally:
@@ -704,7 +456,7 @@ class ModbusEngineV2:
                 device.status = status
                 device.last_error = error
                 db.commit()
-                self._ws_pusher.push_device_status(device_id, device.name, status, error)
+                ws_pusher.push_device_status(device_id, device.name, status, error)
         except Exception:
             db.rollback()
         finally:

@@ -63,7 +63,7 @@ def is_thingsboard_format(obj: dict) -> bool:
 
 
 def process_tag_value(device_id: int, tag: DeviceTag, raw_value, ts: Optional[datetime] = None):
-    """Cast, scale, script process, store history, evaluate alarms for a single tag value."""
+    """Cast, scale, script process, buffer for batch write, evaluate alarms."""
     casted = cast_value(raw_value, tag.mqtt_value_type or "float64")
     if casted is None:
         return None
@@ -101,15 +101,14 @@ def process_tag_value(device_id: int, tag: DeviceTag, raw_value, ts: Optional[da
     now = ts or datetime.now(timezone.utc)
     live = {"value": processed, "raw_value": str(casted), "quality": quality, "time": now.isoformat()}
 
-    # History
-    db = SessionLocal()
-    try:
-        db.add(TagHistory(device_id=device_id, tag_id=tag.id, tag_name=tag.name, value=processed, raw_value=str(casted), quality=quality))
-        db.commit()
-    except Exception:
-        db.rollback()
-    finally:
-        db.close()
+    # 写入共享缓冲（批量写 DB）
+    from app.engine.shared_buffer import write_buffer, ws_pusher
+    write_buffer.add({
+        "device_id": device_id, "tag_id": tag.id, "tag_name": tag.name,
+        "value": processed if quality == "good" else None,
+        "raw_value": str(casted), "quality": quality, "recorded_at": now,
+    })
+    ws_pusher.push_live_value(device_id, tag.id, tag.name, processed, quality)
 
     # Alarm
     from app.services.alarm_service import alarm_service
@@ -119,6 +118,7 @@ def process_tag_value(device_id: int, tag: DeviceTag, raw_value, ts: Optional[da
 
 
 def update_device_status(device_id: int, status: str, error: Optional[str]):
+    from app.engine.shared_buffer import ws_pusher
     db = SessionLocal()
     try:
         device = db.query(Device).filter(Device.id == device_id).first()
@@ -127,6 +127,7 @@ def update_device_status(device_id: int, status: str, error: Optional[str]):
             device.last_error = error
             device.last_poll_at = datetime.now(timezone.utc)
             db.commit()
+            ws_pusher.push_device_status(device_id, device.name, status, error)
     except Exception:
         db.rollback()
     finally:
