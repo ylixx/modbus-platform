@@ -293,6 +293,16 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         }
       },
       {
+        path: 'batch-control',
+        component: () => import('@/views/Alarm/BatchControl.vue'),
+        name: 'BatchControl',
+        meta: {
+          title: '批量控制',
+          icon: 'vi-ant-design:thunderbolt-outlined',
+          permission: 'device.control'
+        }
+      },
+      {
         path: 'sms',
         component: () => import('@/views/Alarm/Sms.vue'),
         name: 'Sms',

@@ -28,6 +28,8 @@ export const getDeviceLive = (id: number | string) => request.get({ url: `/devic
 export const getDeviceTags = (id: number | string) => request.get({ url: `/devices/${id}/tags` })
 export const writeDevice = (id: number, data: any) =>
   request.post({ url: `/devices/${id}/write`, data })
+export const batchWriteDevices = (data: { items: any[]; stop_on_error?: boolean }) =>
+  request.post({ url: '/devices/batch-write', data })
 export const getLocations = () => request.get({ url: '/devices/locations' })
 
 // ============ Tags ============

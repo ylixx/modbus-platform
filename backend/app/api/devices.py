@@ -255,6 +255,91 @@ def write_tag_value(device_id: int, req: WriteRequest, db: Session = Depends(get
     return {"message": "写入成功", "tag_id": tag.id, "value": req.value}
 
 
+# ============ Batch Write ============
+
+class BatchWriteItem(BaseModel):
+    device_id: int
+    tag_id: int
+    value: float | bool | int | str
+
+class BatchWriteRequest(BaseModel):
+    items: List[BatchWriteItem]
+    stop_on_error: bool = False  # 某条失败是否停止后续执行
+
+
+@router.post("/batch-write")
+def batch_write_tag_values(
+    req: BatchWriteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("device.control")),
+):
+    """Batch write values to multiple device tags.
+    Each item specifies device_id, tag_id, and value.
+    Returns per-item results.
+    """
+    results = []
+    success_count = 0
+    fail_count = 0
+
+    for i, item in enumerate(req.items):
+        result = {
+            "index": i,
+            "device_id": item.device_id,
+            "tag_id": item.tag_id,
+            "value": item.value,
+            "success": False,
+            "message": "",
+        }
+
+        try:
+            _ensure_device_visible(db, current_user, item.device_id)
+            tag = db.query(DeviceTag).filter(
+                DeviceTag.id == item.tag_id, DeviceTag.device_id == item.device_id
+            ).first()
+            if not tag:
+                result["message"] = "Tag不存在"
+                fail_count += 1
+            elif not tag.writable:
+                result["message"] = "该Tag不可写"
+                fail_count += 1
+            else:
+                device = db.query(Device).filter(Device.id == item.device_id).first()
+                from app.engine.protocol_router import protocol_router
+                ok = protocol_router.write_value(item.device_id, tag, item.value, device.protocol)
+                if ok:
+                    result["success"] = True
+                    result["message"] = "写入成功"
+                    success_count += 1
+                else:
+                    result["message"] = "写入失败，请检查设备连接"
+                    fail_count += 1
+        except Exception as e:
+            result["message"] = str(e)
+            fail_count += 1
+
+        results.append(result)
+
+        if req.stop_on_error and not result["success"]:
+            # 标记剩余项为跳过
+            for j in range(i + 1, len(req.items)):
+                results.append({
+                    "index": j,
+                    "device_id": req.items[j].device_id,
+                    "tag_id": req.items[j].tag_id,
+                    "value": req.items[j].value,
+                    "success": False,
+                    "message": "已跳过（前序操作失败）",
+                })
+            break
+
+    return {
+        "total": len(req.items),
+        "success": success_count,
+        "failed": fail_count,
+        "results": results,
+    }
+
+
 # ============ Live values ============
 
 @router.get("/{device_id}/live")
