@@ -1,0 +1,268 @@
+<script setup lang="ts">
+/**
+ * ScadaCanvas - Fabric.js SCADA 画布组件
+ *
+ * 功能：
+ * - 加载/渲染 Fabric.js JSON 配置
+ * - 图元拖放放置
+ * - 图元选中/移动/缩放/旋转/删除
+ * - 画布序列化（保存）
+ * - 数据绑定模式（运行时）
+ */
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import * as fabric from 'fabric'
+
+const props = withDefaults(
+  defineProps<{
+    width?: number
+    height?: number
+    background?: string
+    /** 是否为运行模式（不可编辑，只显示） */
+    runtime?: boolean
+  }>(),
+  {
+    width: 1920,
+    height: 1080,
+    background: '#1a1a2e',
+    runtime: false
+  }
+)
+
+const emit = defineEmits<{
+  (e: 'object:selected', obj: any): void
+  (e: 'object:deselected'): void
+  (e: 'canvas:changed'): void
+  (e: 'ready'): void
+}>()
+
+const canvasEl = ref<HTMLCanvasElement>()
+let canvas: fabric.Canvas | null = null
+
+// ── 初始化画布 ──
+
+onMounted(() => {
+  if (!canvasEl.value) return
+
+  canvas = new fabric.Canvas(canvasEl.value, {
+    width: props.width,
+    height: props.height,
+    backgroundColor: props.background,
+    selection: !props.runtime,
+    preserveObjectStacking: true
+  })
+
+  if (props.runtime) {
+    canvas.forEachObject((obj) => {
+      obj.selectable = false
+      obj.evented = false
+    })
+  }
+
+  // 选中事件
+  canvas.on('selection:created', (e) => {
+    if (props.runtime) return
+    const obj = canvas?.getActiveObject()
+    emit('object:selected', obj)
+  })
+  canvas.on('selection:updated', (e) => {
+    if (props.runtime) return
+    const obj = canvas?.getActiveObject()
+    emit('object:selected', obj)
+  })
+  canvas.on('selection:cleared', () => {
+    emit('object:deselected')
+  })
+
+  // 对象修改事件（用于跟踪变更）
+  canvas.on('object:modified', () => {
+    emit('canvas:changed')
+  })
+  canvas.on('object:added', () => {
+    if (!props.runtime) emit('canvas:changed')
+  })
+  canvas.on('object:removed', () => {
+    if (!props.runtime) emit('canvas:changed')
+  })
+
+  emit('ready')
+})
+
+onUnmounted(() => {
+  canvas?.dispose()
+  canvas = null
+})
+
+// ── 公共方法 ──
+
+/** 加载 Fabric JSON */
+const loadFromJSON = async (json: string | object): Promise<void> => {
+  if (!canvas) return
+  const data = typeof json === 'string' ? json : JSON.stringify(json)
+  return new Promise((resolve) => {
+    canvas!.loadFromJSON(data).then(() => {
+      canvas!.renderAll()
+      if (props.runtime) {
+        canvas!.forEachObject((obj) => {
+          obj.selectable = false
+          obj.evented = false
+        })
+      }
+      resolve()
+    })
+  })
+}
+
+/** 导出 Fabric JSON */
+const toJSON = (): object => {
+  return canvas?.toJSON(['_widgetType', '_bindable', '_bindTarget', '_bindProp']) || {}
+}
+
+/** 添加图元对象 */
+const addWidget = (fabricObj: any, left?: number, top?: number) => {
+  if (!canvas) return
+  const obj = fabric.util.enlivenObjects([fabricObj])
+  // fabric.util.enlivenObjects returns a Promise in fabric v6
+  if (obj instanceof Promise) {
+    obj.then((objects) => {
+      objects.forEach((o: any) => {
+        if (left != null) o.set({ left })
+        if (top != null) o.set({ top })
+        canvas!.add(o)
+        canvas!.setActiveObject(o)
+        canvas!.renderAll()
+      })
+    })
+  }
+}
+
+/** 添加 SVG 字符串 */
+const addSVG = (svgString: string, left?: number, top?: number) => {
+  if (!canvas) return
+  fabric.loadSVGFromString(svgString).then((result) => {
+    const group = fabric.util.groupSVGElements(result.objects, result.options)
+    if (left != null) group.set({ left })
+    if (top != null) group.set({ top })
+    group.set({ scaleX: 1, scaleY: 1 })
+    canvas!.add(group)
+    canvas!.setActiveObject(group)
+    canvas!.renderAll()
+  })
+}
+
+/** 添加图片（base64/dataURI） */
+const addImage = (src: string, left?: number, top?: number, w?: number, h?: number) => {
+  if (!canvas) return
+  const imgEl = new Image()
+  imgEl.onload = () => {
+    const img = new fabric.FabricImage(imgEl, {
+      left: left || 0,
+      top: top || 0,
+      scaleX: w ? w / imgEl.width : 1,
+      scaleY: h ? h / imgEl.height : 1
+    })
+    canvas!.add(img)
+    canvas!.setActiveObject(img)
+    canvas!.renderAll()
+  }
+  imgEl.src = src
+}
+
+/** 删除选中对象 */
+const deleteSelected = () => {
+  if (!canvas || props.runtime) return
+  const active = canvas.getActiveObjects()
+  active.forEach((obj) => canvas!.remove(obj))
+  canvas.discardActiveObject()
+  canvas.renderAll()
+}
+
+/** 清空画布 */
+const clear = () => {
+  canvas?.clear()
+  canvas?.setBackgroundColor(props.background || '#1a1a2e', () => {})
+}
+
+/** 更新对象的绑定数据（运行时） */
+const updateBoundValue = (
+  widgetType: string,
+  bindTarget: string,
+  newValue: any,
+  prop: string = 'text'
+) => {
+  if (!canvas) return
+  canvas.forEachObject((obj) => {
+    if (obj.type === 'group') {
+      const group = obj as fabric.Group
+      const objects = group.getObjects()
+      objects.forEach((child: any) => {
+        if (child._bindTarget === bindTarget) {
+          if (prop === 'text' && child.type === 'textbox') {
+            child.set({ text: String(newValue) })
+          } else if (prop === 'fill') {
+            child.set({ fill: newValue })
+          } else if (prop === 'width' || prop === 'height') {
+            child.set({ [prop]: Number(newValue) })
+          }
+        }
+      })
+    }
+  })
+  canvas.renderAll()
+}
+
+/** 获取画布数据 URL（截图） */
+const toDataURL = (): string => {
+  return canvas?.toDataURL({ format: 'png', quality: 0.8 }) || ''
+}
+
+/** 缩放画布 */
+const setZoom = (zoom: number) => {
+  if (!canvas) return
+  canvas.setZoom(zoom)
+  canvas.setWidth(props.width * zoom)
+  canvas.setHeight(props.height * zoom)
+}
+
+/** 全选 */
+const selectAll = () => {
+  if (!canvas || props.runtime) return
+  canvas.discardActiveObject()
+  const sel = new fabric.ActiveSelection(canvas.getObjects(), { canvas })
+  canvas.setActiveObject(sel)
+  canvas.renderAll()
+}
+
+// 导出方法给父组件
+defineExpose({
+  loadFromJSON,
+  toJSON,
+  addWidget,
+  addSVG,
+  addImage,
+  deleteSelected,
+  clear,
+  updateBoundValue,
+  toDataURL,
+  setZoom,
+  selectAll,
+  getCanvas: () => canvas
+})
+</script>
+
+<template>
+  <div class="scada-canvas-wrapper" :style="{ width: width + 'px', height: height + 'px' }">
+    <canvas ref="canvasEl"></canvas>
+  </div>
+</template>
+
+<style scoped>
+.scada-canvas-wrapper {
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  overflow: auto;
+  background: #0a0a1a;
+}
+.scada-canvas-wrapper canvas {
+  display: block;
+}
+</style>

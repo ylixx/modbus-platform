@@ -148,6 +148,10 @@ export const createScadaWidget = (data: any) => request.post({ url: '/scada/widg
 export const updateScadaWidget = (id: number, data: any) =>
   request.put({ url: `/scada/widgets/${id}`, data })
 export const deleteScadaWidget = (id: number) => request.delete({ url: `/scada/widgets/${id}` })
+export const uploadScadaWidget = (formData: FormData) =>
+  request.post({ url: '/scada/widgets/upload', data: formData, headers: { 'Content-Type': 'multipart/form-data' } })
+export const batchUploadScadaWidgets = (formData: FormData) =>
+  request.post({ url: '/scada/widgets/batch-upload', data: formData, headers: { 'Content-Type': 'multipart/form-data' } })
 
 // ============ RBAC ============
 export const getRoles = () => request.get({ url: '/rbac/roles' })

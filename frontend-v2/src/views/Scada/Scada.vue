@@ -45,7 +45,7 @@ const openCreate = () => {
 }
 const submit = async () => {
   await formRef.value?.validate()
-  await createScadaPage({ name: form.name, description: form.description, config: {} })
+  await createScadaPage({ name: form.name, description: form.description, config_json: '[]' })
   ElMessage.success('创建成功')
   dialogVisible.value = false
   fetchList()
