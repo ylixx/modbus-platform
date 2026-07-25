@@ -195,6 +195,16 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
           icon: 'vi-ant-design:copy-outlined',
           permission: 'template.read'
         }
+      },
+      {
+        path: 'batch-control',
+        component: () => import('@/views/Alarm/BatchControl.vue'),
+        name: 'BatchControl',
+        meta: {
+          title: '批量控制',
+          icon: 'vi-ant-design:thunderbolt-outlined',
+          permission: 'device.control'
+        }
       }
     ]
   },
@@ -299,16 +309,6 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         meta: {
           title: t('router.control'),
           icon: 'vi-ant-design:control-outlined',
-          permission: 'device.control'
-        }
-      },
-      {
-        path: 'batch-control',
-        component: () => import('@/views/Alarm/BatchControl.vue'),
-        name: 'BatchControl',
-        meta: {
-          title: '批量控制',
-          icon: 'vi-ant-design:thunderbolt-outlined',
           permission: 'device.control'
         }
       },
