@@ -133,6 +133,8 @@ export default {
     topology: '设备拓扑',
     tags: '采集点位',
     groups: '设备分组',
+    org: '组织架构',
+    orgManage: '组织架构管理',
     templates: '设备模板',
     data: '数据中心',
     history: '历史数据',

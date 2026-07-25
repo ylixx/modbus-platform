@@ -8,6 +8,7 @@ from app.models.hierarchy import HierarchyConfig
 from app.models.permission import Permission, Role, RolePermission, UserRole
 from app.models.scada import ScadaPage, CustomWidget
 from app.models.script import Script
+from app.models.org import OrgNode, RoleOrgScope
 
 __all__ = [
     "User",
@@ -17,4 +18,5 @@ __all__ = [
     "TagHistory", "AuditLog", "HierarchyConfig",
     "Permission", "Role", "RolePermission", "UserRole",
     "ScadaPage", "CustomWidget", "Script",
+    "OrgNode", "RoleOrgScope",
 ]

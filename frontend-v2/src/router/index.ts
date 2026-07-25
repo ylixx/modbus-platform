@@ -177,13 +177,13 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         }
       },
       {
-        path: 'groups',
-        component: () => import('@/views/Device/Groups.vue'),
-        name: 'Groups',
+        path: 'org',
+        component: () => import('@/views/Device/Organization.vue'),
+        name: 'Organization',
         meta: {
-          title: t('router.groups'),
-          icon: 'vi-ant-design:appstore-outlined',
-          permission: 'group.read'
+          title: t('router.org'),
+          icon: 'vi-ant-design:apartment-outlined',
+          permission: 'org.read'
         }
       },
       {

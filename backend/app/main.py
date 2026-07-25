@@ -10,7 +10,7 @@ from app.core.exception_handler import register_exception_handlers
 from app.api import (
     auth, users, devices, alarms, sms, history, dashboard,
     audit, exports, websocket, hierarchy, permissions, scada,
-    archive, imports, templates, scripts, config_export,
+    archive, imports, templates, scripts, config_export, orgs,
 )
 
 
@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
         )
 
     Base.metadata.create_all(bind=engine)
+    _migrate_columns()
     logger.info("Database tables ensured")
 
     _create_default_admin()
@@ -52,6 +53,25 @@ async def lifespan(app: FastAPI):
     protocol_router.stop_all()
     _stop_scheduler()
     logger.info("Application stopped")
+
+
+def _migrate_columns():
+    """Lightweight SQLite migration: add new columns to existing tables."""
+    from sqlalchemy import text
+    migrations = [
+        ("devices", "org_node_id", "ALTER TABLE devices ADD COLUMN org_node_id INTEGER"),
+        ("roles", "data_scope", "ALTER TABLE roles ADD COLUMN data_scope VARCHAR(20) DEFAULT 'all'"),
+    ]
+    with engine.connect() as conn:
+        for table, column, ddl in migrations:
+            try:
+                cols = [r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()]
+                if column not in cols:
+                    conn.execute(text(ddl))
+                    conn.commit()
+                    logger.info(f"Migrated: {table}.{column} added")
+            except Exception as e:
+                logger.warning(f"Migration {table}.{column} skipped: {e}")
 
 
 def _create_default_admin():
@@ -236,6 +256,7 @@ app.include_router(dashboard.router, prefix=prefix)
 app.include_router(audit.router, prefix=prefix)
 app.include_router(exports.router, prefix=prefix)
 app.include_router(hierarchy.router, prefix=prefix)
+app.include_router(orgs.router, prefix=prefix)
 app.include_router(permissions.router, prefix=prefix)
 app.include_router(scada.router, prefix=prefix)
 app.include_router(archive.router, prefix=prefix)

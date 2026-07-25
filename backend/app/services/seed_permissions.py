@@ -55,6 +55,10 @@ DEFAULT_PERMISSIONS = [
     ("hierarchy.read","查看层级配置", "hierarchy","查看组织层级配置与树"),
     ("hierarchy.write","编辑层级配置", "hierarchy","创建/修改/删除层级配置"),
 
+    # Organization
+    ("org.read",       "查看组织架构", "org",      "查看组织架构树（厂-区-班组-位置）"),
+    ("org.write",      "编辑组织架构", "org",      "创建/修改/删除组织节点、调整设备归属"),
+
     # Templates
     ("template.read",  "查看模板",     "template", "查看设备/报警规则模板"),
     ("template.write", "从模板创建",   "template", "基于模板创建设备"),
@@ -88,6 +92,7 @@ DEFAULT_ROLES = [
             "script.read", "script.write",
             "import.read", "import.write",
             "hierarchy.read", "hierarchy.write",
+            "org.read", "org.write",
             "template.read", "template.write",
             "dashboard.read",
         ],
@@ -103,7 +108,7 @@ DEFAULT_ROLES = [
             "alarm.read", "alarm.ack", "alarm.clear",
             "history.read",
             "config.read", "scada.read", "script.read",
-            "import.read", "hierarchy.read", "template.read",
+            "import.read", "hierarchy.read", "org.read", "template.read",
             "dashboard.read",
         ],
     },
@@ -117,7 +122,7 @@ DEFAULT_ROLES = [
             "alarm.read",
             "history.read",
             "config.read", "scada.read", "script.read",
-            "import.read", "hierarchy.read", "template.read",
+            "import.read", "hierarchy.read", "org.read", "template.read",
             "dashboard.read",
         ],
     },
@@ -138,7 +143,7 @@ def seed_permissions():
                 db.flush()
             perm_map[code] = perm
 
-        # Seed roles
+        # Seed roles (and backfill new permission codes for existing system roles)
         for role_def in DEFAULT_ROLES:
             role = db.query(Role).filter(Role.code == role_def["code"]).first()
             if not role:
@@ -149,14 +154,21 @@ def seed_permissions():
                 db.add(role)
                 db.flush()
 
-                # Assign permissions
-                for perm_code in role_def["permissions"]:
-                    if perm_code == "*":
-                        # Admin gets all permissions
-                        for p in perm_map.values():
-                            db.add(RolePermission(role_id=role.id, permission_id=p.id))
-                    elif perm_code in perm_map:
-                        db.add(RolePermission(role_id=role.id, permission_id=perm_map[perm_code].id))
+            # Sync permissions: add any missing default permission to system roles
+            existing_pids = {
+                rp.permission_id
+                for rp in db.query(RolePermission).filter(RolePermission.role_id == role.id).all()
+            }
+            wanted = []
+            for perm_code in role_def["permissions"]:
+                if perm_code == "*":
+                    wanted = list(perm_map.values())
+                    break
+                if perm_code in perm_map:
+                    wanted.append(perm_map[perm_code])
+            for p in wanted:
+                if p.id not in existing_pids:
+                    db.add(RolePermission(role_id=role.id, permission_id=p.id))
 
         db.commit()
         logger.info("Default permissions and roles seeded")

@@ -8,20 +8,50 @@ from app.models.user import User
 from app.models.device import Device, DeviceTag
 from app.models.alarm import AlarmRecord, AlarmStatus
 from app.models.sms import SmsRecord
+from app.services.org_service import get_visible_device_ids
 
 router = APIRouter(prefix="/dashboard", tags=["仪表盘"])
 
 
-@router.get("/summary")
-def get_dashboard_summary(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard.read"))):
-    total_devices = db.query(sql_func.count()).select_from(Device).scalar()
-    online_devices = db.query(sql_func.count()).select_from(Device).filter(Device.status == "online").scalar()
-    offline_devices = db.query(sql_func.count()).select_from(Device).filter(Device.status == "offline").scalar()
-    error_devices = db.query(sql_func.count()).select_from(Device).filter(Device.status == "error").scalar()
-    total_tags = db.query(sql_func.count()).select_from(DeviceTag).scalar()
+def _device_count(db: Session, visible, *filters):
+    """按组织数据范围统计设备数量。"""
+    if visible is not None and not visible:
+        return 0
+    q = db.query(sql_func.count()).select_from(Device)
+    if visible is not None:
+        q = q.filter(Device.id.in_(visible))
+    for f in filters:
+        q = q.filter(f)
+    return q.scalar()
 
-    active_alarms = db.query(sql_func.count()).select_from(AlarmRecord).filter(AlarmRecord.status == AlarmStatus.ACTIVE).scalar()
-    acked_alarms = db.query(sql_func.count()).select_from(AlarmRecord).filter(AlarmRecord.status == AlarmStatus.ACKNOWLEDGED).scalar()
+
+@router.get("/summary")
+def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = Depends(require_permission("dashboard.read"))):
+    visible = get_visible_device_ids(db, current_user)
+    total_devices = _device_count(db, visible)
+    online_devices = _device_count(db, visible, Device.status == "online")
+    offline_devices = _device_count(db, visible, Device.status == "offline")
+    error_devices = _device_count(db, visible, Device.status == "error")
+
+    total_tags = db.query(sql_func.count()).select_from(DeviceTag)
+    if visible is not None:
+        if not visible:
+            total_tags = total_tags.filter(DeviceTag.device_id == -1)
+        else:
+            total_tags = total_tags.filter(DeviceTag.device_id.in_(visible))
+    total_tags = total_tags.scalar()
+
+    alarm_filter = None
+    if visible is not None:
+        alarm_filter = AlarmRecord.device_id.in_(visible) if visible else AlarmRecord.device_id == -1
+
+    active_alarms = db.query(sql_func.count()).select_from(AlarmRecord)
+    acked_alarms = db.query(sql_func.count()).select_from(AlarmRecord)
+    if alarm_filter is not None:
+        active_alarms = active_alarms.filter(alarm_filter)
+        acked_alarms = acked_alarms.filter(alarm_filter)
+    active_alarms = active_alarms.filter(AlarmRecord.status == AlarmStatus.ACTIVE).scalar()
+    acked_alarms = acked_alarms.filter(AlarmRecord.status == AlarmStatus.ACKNOWLEDGED).scalar()
 
     total_sms = db.query(sql_func.count()).select_from(SmsRecord).scalar()
     failed_sms = db.query(sql_func.count()).select_from(SmsRecord).filter(SmsRecord.status == "failed").scalar()
@@ -46,24 +76,34 @@ def get_dashboard_summary(db: Session = Depends(get_db), _: User = Depends(requi
 
 
 @router.get("/device-status")
-def get_device_status_distribution(db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard.read"))):
-    rows = db.query(Device.status, sql_func.count()).group_by(Device.status).all()
+def get_device_status_distribution(db: Session = Depends(get_db), current_user: User = Depends(require_permission("dashboard.read"))):
+    visible = get_visible_device_ids(db, current_user)
+    q = db.query(Device.status, sql_func.count())
+    if visible is not None:
+        if not visible:
+            return {}
+        q = q.filter(Device.id.in_(visible))
+    rows = q.group_by(Device.status).all()
     return {status: count for status, count in rows}
 
 
 @router.get("/alarm-trend")
-def get_alarm_trend(days: int = 7, db: Session = Depends(get_db), _: User = Depends(require_permission("dashboard.read"))):
+def get_alarm_trend(days: int = 7, db: Session = Depends(get_db), current_user: User = Depends(require_permission("dashboard.read"))):
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import text
 
+    visible = get_visible_device_ids(db, current_user)
     start = datetime.now(timezone.utc) - timedelta(days=days)
-    rows = db.query(
+    q = db.query(
         text("DATE(triggered_at) as date"),
         AlarmRecord.alarm_level,
         sql_func.count().label("count"),
-    ).filter(
-        AlarmRecord.triggered_at >= start
-    ).group_by(text("date"), AlarmRecord.alarm_level).order_by(text("date")).all()
+    ).filter(AlarmRecord.triggered_at >= start)
+    if visible is not None:
+        if not visible:
+            return {}
+        q = q.filter(AlarmRecord.device_id.in_(visible))
+    rows = q.group_by(text("date"), AlarmRecord.alarm_level).order_by(text("date")).all()
 
     result = {}
     for row in rows:

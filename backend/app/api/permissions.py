@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.permission import Permission, Role, RolePermission, UserRole
+from app.models.org import RoleOrgScope
 from app.schemas.common import ResponseModel
 from pydantic import BaseModel
 from typing import Optional, List
@@ -29,11 +30,15 @@ class RoleCreate(BaseModel):
     name: str
     description: str = ""
     permission_ids: List[int] = []
+    data_scope: str = "all"              # all | org
+    org_node_ids: List[int] = []         # data_scope='org' 时绑定的组织节点
 
 class RoleUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     permission_ids: Optional[List[int]] = None
+    data_scope: Optional[str] = None     # all | org
+    org_node_ids: Optional[List[int]] = None
 
 class RoleOut(BaseModel):
     id: int
@@ -41,6 +46,8 @@ class RoleOut(BaseModel):
     name: str
     description: str
     is_system: bool
+    data_scope: str = "all"
+    org_node_ids: List[int] = []
     permissions: List[PermissionOut] = []
     class Config:
         from_attributes = True
@@ -77,31 +84,40 @@ def list_permissions(
 
 # ── Roles ──
 
+def _role_out(role: Role) -> RoleOut:
+    perms = [rp.permission for rp in role.permissions if rp.permission]
+    org_ids = [s.org_node_id for s in role.org_scopes]
+    return RoleOut(
+        id=role.id, code=role.code, name=role.name, description=role.description,
+        is_system=role.is_system, data_scope=role.data_scope or "all",
+        org_node_ids=org_ids,
+        permissions=[PermissionOut.model_validate(p) for p in perms],
+    )
+
+
 @router.get("/roles", response_model=List[RoleOut])
 def list_roles(db: Session = Depends(get_db), _: User = Depends(require_permission("rbac.read"))):
     roles = db.query(Role).order_by(Role.id).all()
-    result = []
-    for r in roles:
-        perms = [rp.permission for rp in r.permissions if rp.permission]
-        result.append(RoleOut(id=r.id, code=r.code, name=r.name, description=r.description,
-                              is_system=r.is_system, permissions=[PermissionOut.model_validate(p) for p in perms]))
-    return result
+    return [_role_out(r) for r in roles]
 
 
 @router.post("/roles", response_model=RoleOut)
 def create_role(req: RoleCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("rbac.write"))):
     if db.query(Role).filter(Role.code == req.code).first():
         raise HTTPException(status_code=400, detail="角色代码已存在")
-    role = Role(code=req.code, name=req.name, description=req.description)
+    if req.data_scope not in ("all", "org"):
+        raise HTTPException(status_code=400, detail="无效数据范围，仅支持 all / org")
+    role = Role(code=req.code, name=req.name, description=req.description, data_scope=req.data_scope)
     db.add(role)
     db.flush()
     for pid in req.permission_ids:
         db.add(RolePermission(role_id=role.id, permission_id=pid))
+    if req.data_scope == "org":
+        for nid in set(req.org_node_ids):
+            db.add(RoleOrgScope(role_id=role.id, org_node_id=nid))
     db.commit()
     db.refresh(role)
-    perms = [rp.permission for rp in role.permissions if rp.permission]
-    return RoleOut(id=role.id, code=role.code, name=role.name, description=role.description,
-                   is_system=role.is_system, permissions=[PermissionOut.model_validate(p) for p in perms])
+    return _role_out(role)
 
 
 @router.put("/roles/{role_id}", response_model=RoleOut)
@@ -117,11 +133,20 @@ def update_role(role_id: int, req: RoleUpdate, db: Session = Depends(get_db), _:
         db.query(RolePermission).filter(RolePermission.role_id == role_id).delete()
         for pid in req.permission_ids:
             db.add(RolePermission(role_id=role_id, permission_id=pid))
+    if req.data_scope is not None:
+        if req.data_scope not in ("all", "org"):
+            raise HTTPException(status_code=400, detail="无效数据范围，仅支持 all / org")
+        if role.code == "admin":
+            raise HTTPException(status_code=400, detail="admin 角色不可限制数据范围")
+        role.data_scope = req.data_scope
+    if req.org_node_ids is not None:
+        db.query(RoleOrgScope).filter(RoleOrgScope.role_id == role_id).delete()
+        if (role.data_scope or "all") == "org":
+            for nid in set(req.org_node_ids):
+                db.add(RoleOrgScope(role_id=role_id, org_node_id=nid))
     db.commit()
     db.refresh(role)
-    perms = [rp.permission for rp in role.permissions if rp.permission]
-    return RoleOut(id=role.id, code=role.code, name=role.name, description=role.description,
-                   is_system=role.is_system, permissions=[PermissionOut.model_validate(p) for p in perms])
+    return _role_out(role)
 
 
 @router.delete("/roles/{role_id}")

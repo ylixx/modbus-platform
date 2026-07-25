@@ -88,6 +88,8 @@ class Device(Base):
     name = Column(String(128), nullable=False, index=True)
     description = Column(Text, default="")
     group_id = Column(Integer, ForeignKey("device_groups.id"), nullable=True)
+    # 组织架构归属（厂-区-班组-位置 灵活树，可挂任意节点）
+    org_node_id = Column(Integer, ForeignKey("org_nodes.id", ondelete="SET NULL"), nullable=True, index=True)
     protocol = Column(String(20), default=ProtocolType.MODBUS_TCP)  # modbus_tcp | mqtt | opc_ua
 
     # ── Location fields ──

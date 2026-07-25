@@ -13,8 +13,25 @@ from app.schemas.alarm import (
 from app.schemas.common import ResponseModel, PageResponse
 from typing import List
 from datetime import datetime, timezone
+from app.services.org_service import get_visible_device_ids, check_device_visible
 
 router = APIRouter(prefix="/alarms", tags=["报警管理"])
+
+
+def _apply_alarm_org_filter(q, db: Session, user: User, device_col=None):
+    """按用户组织数据范围过滤报警/规则查询（基于可见设备集合）。
+
+    device_col 为可空列（如 AlarmRecord.device_id / AlarmRule.device_id），
+    不传时默认按 AlarmRecord.device_id 处理。
+    """
+    if device_col is None:
+        device_col = AlarmRecord.device_id
+    visible = get_visible_device_ids(db, user)
+    if visible is None:
+        return q
+    if not visible:
+        return q.filter(device_col == -1)  # 空结果
+    return q.filter(device_col.in_(visible))
 
 
 # ============ Alarm Rules ============
@@ -26,9 +43,10 @@ def list_alarm_rules(
     device_id: int = None,
     enabled: bool = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("alarm.read")),
+    current_user: User = Depends(require_permission("alarm.read")),
 ):
     q = db.query(AlarmRule)
+    q = _apply_alarm_org_filter(q, db, current_user, AlarmRule.device_id)
     if device_id is not None:
         q = q.filter(AlarmRule.device_id == device_id)
     if enabled is not None:
@@ -39,8 +57,10 @@ def list_alarm_rules(
 
 
 @router.get("/rules/all", response_model=List[AlarmRuleOut])
-def list_all_rules(db: Session = Depends(get_db), _: User = Depends(require_permission("alarm.read"))):
-    return db.query(AlarmRule).order_by(AlarmRule.id).all()
+def list_all_rules(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.read"))):
+    q = db.query(AlarmRule)
+    q = _apply_alarm_org_filter(q, db, current_user, AlarmRule.device_id)
+    return q.order_by(AlarmRule.id).all()
 
 
 @router.post("/rules", response_model=AlarmRuleOut)
@@ -86,9 +106,10 @@ def list_alarm_records(
     start_time: str = None,
     end_time: str = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("alarm.read")),
+    current_user: User = Depends(require_permission("alarm.read")),
 ):
     q = db.query(AlarmRecord)
+    q = _apply_alarm_org_filter(q, db, current_user)
     if device_id is not None:
         q = q.filter(AlarmRecord.device_id == device_id)
     if alarm_level:
@@ -105,11 +126,11 @@ def list_alarm_records(
 
 
 @router.get("/records/active", response_model=List[AlarmRecordOut])
-def list_active_alarms(db: Session = Depends(get_db), _: User = Depends(require_permission("alarm.read"))):
+def list_active_alarms(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.read"))):
     """Get all currently active (unacknowledged) alarms."""
-    return db.query(AlarmRecord).filter(
-        AlarmRecord.status == AlarmStatus.ACTIVE
-    ).order_by(AlarmRecord.triggered_at.desc()).limit(200).all()
+    q = db.query(AlarmRecord).filter(AlarmRecord.status == AlarmStatus.ACTIVE)
+    q = _apply_alarm_org_filter(q, db, current_user)
+    return q.order_by(AlarmRecord.triggered_at.desc()).limit(200).all()
 
 
 @router.post("/records/{record_id}/acknowledge", response_model=AlarmRecordOut)
@@ -122,6 +143,8 @@ def acknowledge_alarm(
     record = db.query(AlarmRecord).filter(AlarmRecord.id == record_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="报警记录不存在")
+    if not check_device_visible(db, current_user, record.device_id):
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权操作该报警（超出组织数据范围）")
     if record.status != AlarmStatus.ACTIVE:
         raise HTTPException(status_code=400, detail="该报警已被处理")
 
@@ -143,10 +166,12 @@ def acknowledge_alarm(
 
 
 @router.post("/records/{record_id}/clear", response_model=AlarmRecordOut)
-def clear_alarm(record_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("alarm.clear"))):
+def clear_alarm(record_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.clear"))):
     record = db.query(AlarmRecord).filter(AlarmRecord.id == record_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="报警记录不存在")
+    if not check_device_visible(db, current_user, record.device_id):
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权操作该报警（超出组织数据范围）")
     record.status = AlarmStatus.CLEARED
     record.cleared_at = datetime.now(timezone.utc)
     db.commit()
@@ -157,22 +182,41 @@ def clear_alarm(record_id: int, db: Session = Depends(get_db), _: User = Depends
 # ============ Alarm Stats ============
 
 @router.get("/stats", response_model=AlarmStats)
-def get_alarm_stats(db: Session = Depends(get_db), _: User = Depends(require_permission("alarm.read"))):
-    active = db.query(sql_func.count()).filter(AlarmRecord.status == AlarmStatus.ACTIVE).scalar()
-    acked = db.query(sql_func.count()).filter(AlarmRecord.status == AlarmStatus.ACKNOWLEDGED).scalar()
-    cleared = db.query(sql_func.count()).filter(AlarmRecord.status == AlarmStatus.CLEARED).scalar()
+def get_alarm_stats(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.read"))):
+    visible = get_visible_device_ids(db, current_user)
+    device_filter = None
+    if visible is not None:
+        if not visible:
+            device_filter = AlarmRecord.device_id == -1
+        else:
+            device_filter = AlarmRecord.device_id.in_(visible)
+
+    def _count(status_val):
+        q = db.query(sql_func.count()).filter(AlarmRecord.status == status_val)
+        if device_filter is not None:
+            q = q.filter(device_filter)
+        return q.scalar()
+
+    active = _count(AlarmStatus.ACTIVE)
+    acked = _count(AlarmStatus.ACKNOWLEDGED)
+    cleared = _count(AlarmStatus.CLEARED)
 
     # By level
-    level_counts = db.query(
-        AlarmRecord.alarm_level, sql_func.count()
-    ).filter(AlarmRecord.status == AlarmStatus.ACTIVE).group_by(AlarmRecord.alarm_level).all()
+    q_level = db.query(AlarmRecord.alarm_level, sql_func.count()).filter(AlarmRecord.status == AlarmStatus.ACTIVE)
+    if device_filter is not None:
+        q_level = q_level.filter(device_filter)
+    level_counts = q_level.group_by(AlarmRecord.alarm_level).all()
 
     # By device
-    device_counts = db.query(
-        AlarmRecord.device_id, sql_func.count()
-    ).filter(AlarmRecord.status == AlarmStatus.ACTIVE).group_by(AlarmRecord.device_id).all()
+    q_dev = db.query(AlarmRecord.device_id, sql_func.count()).filter(AlarmRecord.status == AlarmStatus.ACTIVE)
+    if device_filter is not None:
+        q_dev = q_dev.filter(device_filter)
+    device_counts = q_dev.group_by(AlarmRecord.device_id).all()
 
-    recent = db.query(AlarmRecord).order_by(AlarmRecord.triggered_at.desc()).limit(10).all()
+    q_recent = db.query(AlarmRecord)
+    if device_filter is not None:
+        q_recent = q_recent.filter(device_filter)
+    recent = q_recent.order_by(AlarmRecord.triggered_at.desc()).limit(10).all()
 
     return AlarmStats(
         total_active=active,

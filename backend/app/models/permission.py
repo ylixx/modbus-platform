@@ -38,10 +38,13 @@ class Role(Base):
     name = Column(String(64), nullable=False)                            # e.g. 系统管理员
     description = Column(Text, default="")
     is_system = Column(Boolean, default=False)                           # system roles can't be deleted
+    # 组织数据范围: all=全部数据 | org=按 role_org_scopes 绑定的组织子树过滤
+    data_scope = Column(String(20), default="all")
     created_at = Column(DateTime, server_default=func.now())
 
     permissions = relationship("RolePermission", back_populates="role", cascade="all,delete-orphan")
     users = relationship("UserRole", back_populates="role")
+    org_scopes = relationship("RoleOrgScope", back_populates="role", cascade="all,delete-orphan")
 
 
 class RolePermission(Base):

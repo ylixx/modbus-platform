@@ -37,12 +37,22 @@ export const updateTag = (id: number, data: any) =>
   request.put({ url: `/devices/tags/${id}`, data })
 export const deleteTag = (id: number) => request.delete({ url: `/devices/tags/${id}` })
 
-// ============ Groups ============
+// ============ Groups (保留兼容，设备归属已迁移至组织架构) ============
 export const getGroups = () => request.get({ url: '/devices/groups' })
 export const createGroup = (data: any) => request.post({ url: '/devices/groups', data })
 export const updateGroup = (id: number, data: any) =>
   request.put({ url: `/devices/groups/${id}`, data })
 export const deleteGroup = (id: number) => request.delete({ url: `/devices/groups/${id}` })
+
+// ============ Organization (组织架构) ============
+export const getOrgTree = () => request.get({ url: '/orgs/tree' })
+export const getOrgList = () => request.get({ url: '/orgs' })
+export const createOrg = (data: any) => request.post({ url: '/orgs', data })
+export const updateOrg = (id: number, data: any) => request.put({ url: `/orgs/${id}`, data })
+export const deleteOrg = (id: number, force = false) =>
+  request.delete({ url: `/orgs/${id}`, params: { force } })
+export const moveDevicesToOrg = (id: number, deviceIds: number[]) =>
+  request.post({ url: `/orgs/${id}/move-devices`, data: { device_ids: deviceIds } })
 
 // ============ History ============
 export const getHistory = (params?: any) => request.get({ url: '/history', params })

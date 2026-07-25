@@ -13,9 +13,16 @@ from app.schemas.device import (
     WriteRequest,
 )
 from app.schemas.common import ResponseModel, PageResponse
+from app.services.org_service import apply_device_org_filter, check_device_visible
 from typing import List
+from fastapi import status as http_status
 
 router = APIRouter(prefix="/devices", tags=["设备管理"])
+
+
+def _ensure_device_visible(db: Session, user: User, device_id: int):
+    if not check_device_visible(db, user, device_id):
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权访问该设备（超出组织数据范围）")
 
 
 # ============ Device Groups ============
@@ -76,15 +83,20 @@ def list_devices(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     group_id: int = None,
+    org_node_id: int = None,
     protocol: str = None,
     status: str = None,
     factory: str = None,
     workshop: str = None,
     search: str = "",
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("device.read")),
+    current_user: User = Depends(require_permission("device.read")),
 ):
-    q = db.query(Device)
+    q = apply_device_org_filter(db.query(Device), db, current_user)
+    if org_node_id is not None:
+        from app.services.org_service import expand_org_subtree
+        subtree = expand_org_subtree(db, {org_node_id})
+        q = q.filter(Device.org_node_id.in_(subtree))
     if group_id is not None:
         q = q.filter(Device.group_id == group_id)
     if protocol:
@@ -103,15 +115,17 @@ def list_devices(
 
 
 @router.get("/all", response_model=List[DeviceOut])
-def list_all_devices(db: Session = Depends(get_db), _: User = Depends(require_permission("device.read"))):
-    return db.query(Device).order_by(Device.id).all()
+def list_all_devices(db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.read"))):
+    q = apply_device_org_filter(db.query(Device), db, current_user)
+    return q.order_by(Device.id).all()
 
 
 @router.get("/{device_id}", response_model=DeviceDetailOut)
-def get_device(device_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("device.read"))):
+def get_device(device_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.read"))):
     device = db.query(Device).filter(Device.id == device_id).first()
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
+    _ensure_device_visible(db, current_user, device_id)
     return device
 
 
@@ -170,7 +184,8 @@ def delete_device(device_id: int, db: Session = Depends(get_db), _: User = Depen
 # ============ Tags ============
 
 @router.get("/{device_id}/tags", response_model=List[TagOut])
-def list_tags(device_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.read"))):
+def list_tags(device_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("tag.read"))):
+    _ensure_device_visible(db, current_user, device_id)
     return db.query(DeviceTag).filter(DeviceTag.device_id == device_id).order_by(DeviceTag.sort_order, DeviceTag.id).all()
 
 
@@ -223,8 +238,9 @@ def batch_create_tags(tags: List[TagCreate], db: Session = Depends(get_db), _: U
 # ============ Write (remote control) ============
 
 @router.post("/{device_id}/write")
-def write_tag_value(device_id: int, req: WriteRequest, db: Session = Depends(get_db), _: User = Depends(require_permission("device.control"))):
+def write_tag_value(device_id: int, req: WriteRequest, db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.control"))):
     """Write a value to a writable tag (any protocol)."""
+    _ensure_device_visible(db, current_user, device_id)
     tag = db.query(DeviceTag).filter(DeviceTag.id == req.tag_id, DeviceTag.device_id == device_id).first()
     if not tag:
         raise HTTPException(status_code=404, detail="Tag不存在")
@@ -242,11 +258,12 @@ def write_tag_value(device_id: int, req: WriteRequest, db: Session = Depends(get
 # ============ Live values ============
 
 @router.get("/{device_id}/live")
-def get_device_live_values(device_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("device.read"))):
+def get_device_live_values(device_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.read"))):
     """Get current live values for all tags of a device."""
     device = db.query(Device).filter(Device.id == device_id).first()
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
+    _ensure_device_visible(db, current_user, device_id)
     from app.engine.protocol_router import protocol_router
     values = protocol_router.get_live_values(device_id, device.protocol)
     return {"device_id": device_id, "values": values}

@@ -145,6 +145,7 @@ class DeviceCreate(BaseModel):
     name: str
     description: str = ""
     group_id: Optional[int] = None
+    org_node_id: Optional[int] = None
     protocol: str = "modbus_tcp"  # modbus_tcp | mqtt | opc_ua
 
     # Location
@@ -196,6 +197,7 @@ class DeviceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     group_id: Optional[int] = None
+    org_node_id: Optional[int] = None
     protocol: Optional[str] = None
 
     factory: Optional[str] = None
@@ -243,6 +245,7 @@ class DeviceOut(BaseModel):
     name: str
     description: str
     group_id: Optional[int]
+    org_node_id: Optional[int] = None
     protocol: str
 
     factory: str

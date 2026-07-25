@@ -135,6 +135,8 @@ export default {
     topology: 'Topology',
     tags: 'Tags',
     groups: 'Groups',
+    org: 'Organization',
+    orgManage: 'Organization Management',
     templates: 'Templates',
     data: 'Data Center',
     history: 'History',

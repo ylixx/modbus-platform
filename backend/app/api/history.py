@@ -9,6 +9,8 @@ from app.models.history import TagHistory
 from app.schemas.common import PageResponse
 from typing import Optional
 from datetime import datetime, timedelta, timezone
+from app.services.org_service import check_device_visible
+from fastapi import HTTPException, status as http_status
 
 router = APIRouter(prefix="/history", tags=["历史数据"])
 
@@ -23,9 +25,11 @@ def query_history(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.read")),
+    current_user: User = Depends(require_permission("history.read")),
 ):
     """Query historical data with optional aggregation."""
+    if not check_device_visible(db, current_user, device_id):
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权访问该设备历史数据（超出组织数据范围）")
     q = db.query(TagHistory).filter(
         TagHistory.device_id == device_id,
         TagHistory.tag_id == tag_id,
@@ -105,9 +109,11 @@ def query_history(
 def get_latest_values(
     device_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.read")),
+    current_user: User = Depends(require_permission("history.read")),
 ):
     """Get the latest value for each tag of a device."""
+    if not check_device_visible(db, current_user, device_id):
+        raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权访问该设备历史数据（超出组织数据范围）")
     from sqlalchemy import text
     subq = db.query(
         TagHistory.tag_id,
