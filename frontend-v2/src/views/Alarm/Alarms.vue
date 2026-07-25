@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
@@ -9,19 +9,28 @@ import {
   ElSelect,
   ElOption,
   ElPagination,
-  ElMessage
+  ElMessage,
+  ElNotification,
+  ElBadge
 } from 'element-plus'
 import { getAlarmRecords, ackAlarm, clearAlarm, unwrapList } from '@/api/modbus'
+import { useWsStore } from '@/store/modules/websocket'
+import { wsManager } from '@/utils/websocket'
 
 defineOptions({ name: 'Alarms' })
 
+const wsStore = useWsStore()
 const loading = ref(false)
 const list = ref<any[]>([])
 const total = ref(0)
 const query = reactive({ page: 1, page_size: 10, status: '' })
+let unsubFns: (() => void)[] = []
+
+const wsConnected = computed(() => wsStore.connected)
+const unreadAlarms = computed(() => wsStore.unreadAlarms)
 
 const levelType = (l?: string) => {
-  if (l === 'critical' || l === 'high') return 'danger'
+  if (l === 'critical' || l === 'high' || l === 'emergency') return 'danger'
   if (l === 'warning' || l === 'medium') return 'warning'
   return 'info'
 }
@@ -59,13 +68,60 @@ const doClear = async (row: any) => {
   fetchList()
 }
 
-onMounted(fetchList)
+// WebSocket 实时报警通知
+const onAlarmCreated = (msg: any) => {
+  const alarm = msg.data
+  if (!alarm) return
+
+  // 弹窗通知
+  const level = alarm.level || 'info'
+  ElNotification({
+    title: '新报警',
+    message: `${alarm.device_name || '设备'} - ${alarm.tag_name || ''}: ${alarm.message || ''}`,
+    type: level === 'critical' || level === 'emergency' ? 'error' : level === 'warning' ? 'warning' : 'info',
+    duration: level === 'emergency' ? 0 : 5000 // 紧急报警不自动关闭
+  })
+
+  // 如果当前在第一页且无状态筛选，自动刷新列表
+  if (query.page === 1 && !query.status) {
+    fetchList()
+  }
+}
+
+const clearUnread = () => {
+  wsStore.clearUnreadAlarms()
+}
+
+onMounted(() => {
+  fetchList()
+
+  // 监听 WebSocket 报警事件
+  unsubFns.push(wsManager.on('alarm_created', onAlarmCreated))
+  unsubFns.push(wsManager.on('alarm_acknowledged', () => {
+    if (query.page === 1) fetchList()
+  }))
+  unsubFns.push(wsManager.on('alarm_cleared', () => {
+    if (query.page === 1) fetchList()
+  }))
+})
+
+onUnmounted(() => {
+  unsubFns.forEach((fn) => fn())
+})
 </script>
 
 <template>
   <ContentWrap title="报警管理">
     <template #header>
       <div class="flex-grow flex justify-end items-center">
+        <ElBadge :type="wsConnected ? 'success' : 'danger'" is-dot class="mr-8px">
+          <span class="text-12px text-gray-400">
+            {{ wsConnected ? '实时监控中' : '离线' }}
+          </span>
+        </ElBadge>
+        <ElBadge v-if="unreadAlarms > 0" :value="unreadAlarms" class="mr-12px">
+          <ElButton size="small" @click="clearUnread">清除未读</ElButton>
+        </ElBadge>
         <ElSelect
           v-model="query.status"
           placeholder="全部状态"

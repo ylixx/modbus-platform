@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { ElRow, ElCol, ElEmpty } from 'element-plus'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ElRow, ElCol, ElEmpty, ElBadge } from 'element-plus'
 import { getDashboardSummary, getAllDevices, unwrap, unwrapList } from '@/api/modbus'
+import { useWsStore } from '@/store/modules/websocket'
+import { wsManager } from '@/utils/websocket'
 
 defineOptions({ name: 'Screen' })
+
+const wsStore = useWsStore()
 
 const summary = ref<any>({ devices: {}, tags: {}, alarms: {}, sms: {} })
 const devices = ref<any[]>([])
 const now = ref('')
-let timer: any = null
+let pollTimer: any = null
+let unsubFns: (() => void)[] = []
+
+const wsConnected = computed(() => wsStore.connected)
+const recentAlarms = computed(() => wsStore.recentAlarms.slice(0, 10))
 
 const statusColor = (s?: string) =>
   s === 'online' ? '#22d3ee' : s === 'error' ? '#f87171' : '#64748b'
@@ -29,16 +37,33 @@ const fetchData = async () => {
 
 onMounted(() => {
   fetchData()
-  timer = setInterval(fetchData, 5000)
+  // 降级轮询 30s（WebSocket 推送为主）
+  pollTimer = setInterval(fetchData, 30000)
+
+  // WebSocket 设备状态变更时刷新
+  unsubFns.push(wsManager.on('device_status', () => setTimeout(fetchData, 500)))
+  unsubFns.push(wsManager.on('alarm_created', () => setTimeout(fetchData, 500)))
+  // 更新时间
+  const timeTimer = setInterval(() => { now.value = new Date().toLocaleString() }, 1000)
+  unsubFns.push(() => clearInterval(timeTimer))
 })
-onUnmounted(() => timer && clearInterval(timer))
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  unsubFns.forEach((fn) => fn())
+})
 </script>
 
 <template>
   <div class="screen">
     <div class="screen-header">
       <div class="screen-title">Modbus 工控数据监控大屏</div>
-      <div class="screen-time">{{ now }}</div>
+      <div class="flex items-center">
+        <ElBadge :type="wsConnected ? 'success' : 'danger'" is-dot class="mr-12px">
+          <span class="screen-time">{{ wsConnected ? '实时连接' : '离线模式' }}</span>
+        </ElBadge>
+        <div class="screen-time">{{ now }}</div>
+      </div>
     </div>
 
     <ElRow :gutter="16" class="mb-16px">
@@ -68,19 +93,50 @@ onUnmounted(() => timer && clearInterval(timer))
       </ElCol>
     </ElRow>
 
-    <div class="panel">
-      <div class="panel-title">设备运行状态</div>
-      <ElEmpty v-if="!devices.length" description="暂无设备" />
-      <ElRow v-else :gutter="12">
-        <ElCol v-for="d in devices" :key="d.id" :xs="12" :sm="8" :md="6" class="mb-12px">
-          <div class="dev-card">
-            <span class="dot" :style="{ background: statusColor(d.status) }"></span>
-            <div class="dev-name">{{ d.name }}</div>
-            <div class="dev-sub">{{ d.host || '—' }}</div>
+    <ElRow :gutter="16">
+      <ElCol :span="16">
+        <div class="panel">
+          <div class="panel-title">设备运行状态</div>
+          <ElEmpty v-if="!devices.length" description="暂无设备" />
+          <ElRow v-else :gutter="12">
+            <ElCol v-for="d in devices" :key="d.id" :xs="12" :sm="8" :md="6" class="mb-12px">
+              <div class="dev-card">
+                <span class="dot" :style="{ background: statusColor(d.status) }"></span>
+                <div class="dev-name">{{ d.name }}</div>
+                <div class="dev-sub">{{ d.host || '—' }}</div>
+              </div>
+            </ElCol>
+          </ElRow>
+        </div>
+      </ElCol>
+      <ElCol :span="8">
+        <div class="panel">
+          <div class="panel-title">实时报警</div>
+          <div v-if="!recentAlarms.length" class="text-gray-500 text-13px py-16px text-center">
+            暂无报警
           </div>
-        </ElCol>
-      </ElRow>
-    </div>
+          <div v-else class="alarm-scroll">
+            <div v-for="a in recentAlarms" :key="a.id || a._time" class="alarm-item">
+              <span
+                class="alarm-dot"
+                :style="{
+                  background:
+                    a.level === 'critical' || a.level === 'emergency'
+                      ? '#f87171'
+                      : a.level === 'warning'
+                        ? '#facc15'
+                        : '#38bdf8'
+                }"
+              ></span>
+              <div class="alarm-text">
+                <div class="alarm-msg">{{ a.message || a.tag_name || '报警' }}</div>
+                <div class="alarm-dev">{{ a.device_name || '' }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </ElCol>
+    </ElRow>
   </div>
 </template>
 
@@ -132,6 +188,7 @@ onUnmounted(() => timer && clearInterval(timer))
   border: 1px solid rgba(56, 189, 248, 0.2);
   border-radius: 8px;
   padding: 16px;
+  height: 100%;
 }
 .panel-title {
   font-size: 16px;
@@ -167,5 +224,39 @@ onUnmounted(() => timer && clearInterval(timer))
   font-size: 12px;
   color: #64748b;
   margin-top: 6px;
+}
+.alarm-scroll {
+  max-height: 400px;
+  overflow-y: auto;
+}
+.alarm-item {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.1);
+}
+.alarm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  margin-right: 10px;
+  flex-shrink: 0;
+}
+.alarm-text {
+  flex: 1;
+  min-width: 0;
+}
+.alarm-msg {
+  font-size: 13px;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alarm-dev {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
 }
 </style>

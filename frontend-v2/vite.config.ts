@@ -143,6 +143,12 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
     server: {
       port: 3001,
       proxy: {
+        // WebSocket 代理
+        '/api/v1/ws': {
+          target: env.VITE_API_BASE_URL,
+          changeOrigin: true,
+          ws: true
+        },
         // 选项写法
         '/api/v1': {
           target: env.VITE_API_BASE_URL, // 后端地址（后端已带 /api/v1 前缀，无需 rewrite）

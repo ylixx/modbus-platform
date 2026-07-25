@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
@@ -9,18 +9,28 @@ import {
   ElTag,
   ElTable,
   ElTableColumn,
-  ElEmpty
+  ElEmpty,
+  ElSwitch,
+  ElBadge
 } from 'element-plus'
 import { getDevice, getDeviceLive, unwrap } from '@/api/modbus'
+import { useWsStore } from '@/store/modules/websocket'
+import { wsManager } from '@/utils/websocket'
+import type { WsLiveValue } from '@/utils/websocket'
 
 defineOptions({ name: 'DeviceDetail' })
 
 const route = useRoute()
 const router = useRouter()
+const wsStore = useWsStore()
 const id = route.params.id as string
 const device = ref<any>({})
 const liveRows = ref<any[]>([])
-let timer: any = null
+const autoRefresh = ref(true)
+let pollTimer: any = null
+let unsubFns: (() => void)[] = []
+
+const wsConnected = computed(() => wsStore.connected)
 
 const statusType = (s?: string) => (s === 'online' ? 'success' : s === 'error' ? 'danger' : 'info')
 const statusText = (s?: string) => (s === 'online' ? '在线' : s === 'error' ? '异常' : '离线')
@@ -37,19 +47,59 @@ const fetchLive = async () => {
   }
 }
 
+// WebSocket 实时数据更新
+const onLiveValue = (msg: any) => {
+  const d = msg.data as WsLiveValue
+  if (!d || d.device_id !== Number(id)) return
+
+  const idx = liveRows.value.findIndex((r: any) => r.tag_name === d.tag_name || r.name === d.tag_name)
+  if (idx !== -1) {
+    const updated = [...liveRows.value]
+    updated[idx] = { ...updated[idx], value: d.value, quality: d.quality }
+    liveRows.value = updated
+  }
+}
+
+// WebSocket 设备状态变更
+const onDeviceStatus = (msg: any) => {
+  const d = msg.data
+  if (d && d.device_id === Number(id)) {
+    device.value = { ...device.value, status: d.status }
+  }
+}
+
+const setupPolling = () => {
+  if (pollTimer) clearInterval(pollTimer)
+  if (autoRefresh.value && !wsConnected.value) {
+    pollTimer = setInterval(fetchLive, 3000)
+  }
+}
+
 onMounted(() => {
   fetchDevice()
   fetchLive()
-  timer = setInterval(fetchLive, 3000)
+
+  unsubFns.push(wsManager.on('live_value', onLiveValue))
+  unsubFns.push(wsManager.on('device_status', onDeviceStatus))
+  setupPolling()
 })
-onUnmounted(() => timer && clearInterval(timer))
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  unsubFns.forEach((fn) => fn())
+})
 </script>
 
 <template>
   <div>
     <ContentWrap title="设备详情">
       <template #header>
-        <div class="flex-grow flex justify-end">
+        <div class="flex-grow flex justify-end items-center">
+          <ElBadge :type="wsConnected ? 'success' : 'danger'" is-dot class="mr-12px">
+            <span class="text-12px text-gray-400">
+              {{ wsConnected ? 'WS 实时' : '轮询模式' }}
+            </span>
+          </ElBadge>
           <ElButton @click="router.push('/device/list')">返回列表</ElButton>
         </div>
       </template>
@@ -72,12 +122,30 @@ onUnmounted(() => timer && clearInterval(timer))
     </ContentWrap>
 
     <ContentWrap title="实时点位数据" class="mt-16px">
+      <template #header>
+        <div class="flex-grow flex justify-end items-center">
+          <span class="text-13px text-gray-500 mr-6px">轮询</span>
+          <ElSwitch v-model="autoRefresh" @change="setupPolling" />
+        </div>
+      </template>
       <ElEmpty v-if="!liveRows.length" description="暂无实时数据" />
       <ElTable v-else :data="liveRows" border stripe>
         <ElTableColumn prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
         <ElTableColumn prop="address" label="地址" width="90" />
         <ElTableColumn label="当前值" min-width="120">
-          <template #default="{ row }">{{ row.value ?? '—' }}{{ row.unit || '' }}</template>
+          <template #default="{ row }">
+            <span
+              class="text-16px font-700"
+              :class="{
+                'text-green-500': row.quality !== 'bad' && !row.error,
+                'text-red-500': row.quality === 'bad' || row.error,
+                'text-gray-400': row.value == null
+              }"
+            >
+              {{ row.value ?? '—' }}
+            </span>
+            <span class="text-12px text-gray-400 ml-4px">{{ row.unit || '' }}</span>
+          </template>
         </ElTableColumn>
         <ElTableColumn prop="data_type" label="类型" width="110" />
       </ElTable>

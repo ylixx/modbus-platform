@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
-import { ElRow, ElCol, ElCard, ElTag, ElEmpty } from 'element-plus'
+import { ElRow, ElCol, ElCard, ElTag, ElEmpty, ElBadge } from 'element-plus'
 import { Icon } from '@/components/Icon'
 import { getDashboardSummary, getAlarmTrend, unwrap } from '@/api/modbus'
+import { useWsStore } from '@/store/modules/websocket'
+import { wsManager } from '@/utils/websocket'
 
 defineOptions({ name: 'Dashboard' })
+
+const wsStore = useWsStore()
 
 const summary = ref<any>({
   devices: { total: 0, online: 0, offline: 0, error: 0 },
@@ -14,12 +18,13 @@ const summary = ref<any>({
   sms: { total: 0, failed: 0 }
 })
 const trend = ref<any>({})
-let timer: any = null
+const lastUpdate = ref('')
+let pollTimer: any = null
+let unsubFns: (() => void)[] = []
 
-const cards = ref<any[]>([])
-const buildCards = () => {
+const cards = computed(() => {
   const s = summary.value
-  cards.value = [
+  return [
     {
       label: '设备总数',
       value: s.devices?.total ?? 0,
@@ -49,13 +54,16 @@ const buildCards = () => {
       sub: `失败 ${s.sms?.failed ?? 0}`
     }
   ]
-}
+})
 
+const wsConnected = computed(() => wsStore.connected)
+
+// HTTP 轮询刷新（兜底，低频）
 const fetchData = async () => {
   try {
     const res = await getDashboardSummary()
     summary.value = unwrap(res) || summary.value
-    buildCards()
+    lastUpdate.value = new Date().toLocaleTimeString()
   } catch (e) {
     // ignore
   }
@@ -67,15 +75,49 @@ const fetchData = async () => {
   }
 }
 
+// WebSocket 实时更新：设备状态变更时刷新 summary
+const onDeviceStatus = () => {
+  // 设备状态变更，延迟 500ms 刷新 summary（等后端统计更新）
+  setTimeout(fetchData, 500)
+}
+
+// WebSocket 实时更新：报警事件时刷新 summary
+const onAlarmEvent = () => {
+  setTimeout(fetchData, 500)
+}
+
 onMounted(() => {
   fetchData()
-  timer = setInterval(fetchData, 10000)
+  // 降级轮询：30s 刷新一次（WebSocket 推送为主，轮询为兜底）
+  pollTimer = setInterval(fetchData, 30000)
+
+  // 监听 WebSocket 事件
+  unsubFns.push(wsManager.on('device_status', onDeviceStatus))
+  unsubFns.push(wsManager.on('alarm_created', onAlarmEvent))
+  unsubFns.push(wsManager.on('alarm_acknowledged', onAlarmEvent))
+  unsubFns.push(wsManager.on('alarm_cleared', onAlarmEvent))
 })
-onUnmounted(() => timer && clearInterval(timer))
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  unsubFns.forEach((fn) => fn())
+})
 </script>
 
 <template>
   <div>
+    <!-- WebSocket 连接状态指示 -->
+    <div class="flex items-center justify-end mb-8px">
+      <ElBadge :type="wsConnected ? 'success' : 'danger'" is-dot class="mr-6px">
+        <span class="text-12px text-gray-400">
+          {{ wsConnected ? '实时连接' : '离线（轮询模式）' }}
+        </span>
+      </ElBadge>
+      <span v-if="lastUpdate" class="text-12px text-gray-400 ml-12px">
+        更新于 {{ lastUpdate }}
+      </span>
+    </div>
+
     <ElRow :gutter="16">
       <ElCol v-for="c in cards" :key="c.label" :xs="24" :sm="12" :md="6" class="mb-16px">
         <ElCard shadow="hover" class="h-full">

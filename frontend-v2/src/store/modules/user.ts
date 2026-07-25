@@ -87,6 +87,8 @@ export const useUserStore = defineStore('user', {
       this.setUserInfo(undefined)
       this.setRoleRouters([])
       this.setPermissions([])
+      // 断开 WebSocket 连接
+      import('@/utils/websocket').then(({ wsManager }) => wsManager.disconnect()).catch(() => {})
       router.replace('/login')
     },
     logout() {

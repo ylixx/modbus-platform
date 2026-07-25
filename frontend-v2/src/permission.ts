@@ -6,10 +6,13 @@ import { usePermissionStoreWithOut } from '@/store/modules/permission'
 import { usePageLoading } from '@/hooks/web/usePageLoading'
 import { NO_REDIRECT_WHITE_LIST } from '@/constants'
 import { useUserStoreWithOut } from '@/store/modules/user'
+import { useWsStoreWithOut } from '@/store/modules/websocket'
 
 const { start, done } = useNProgress()
 
 const { loadStart, loadDone } = usePageLoading()
+
+let wsInitialized = false
 
 router.beforeEach(async (to, from, next) => {
   start()
@@ -17,6 +20,13 @@ router.beforeEach(async (to, from, next) => {
   const permissionStore = usePermissionStoreWithOut()
   const userStore = useUserStoreWithOut()
   if (userStore.getUserInfo) {
+    // 已登录：确保 WebSocket 已连接
+    if (!wsInitialized) {
+      const wsStore = useWsStoreWithOut()
+      wsStore.init()
+      wsInitialized = true
+    }
+
     if (to.path === '/login') {
       next({ path: '/' })
     } else {
@@ -39,6 +49,13 @@ router.beforeEach(async (to, from, next) => {
       next(nextData)
     }
   } else {
+    // 未登录：断开 WebSocket
+    if (wsInitialized) {
+      const wsStore = useWsStoreWithOut()
+      wsStore.destroy()
+      wsInitialized = false
+    }
+
     if (NO_REDIRECT_WHITE_LIST.indexOf(to.path) !== -1) {
       next()
     } else {
