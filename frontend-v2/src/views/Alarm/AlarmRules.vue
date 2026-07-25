@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
@@ -15,7 +15,9 @@ import {
   ElInputNumber,
   ElSwitch,
   ElMessage,
-  ElMessageBox
+  ElMessageBox,
+  ElDivider,
+  ElTooltip
 } from 'element-plus'
 import {
   getAlarmRules,
@@ -23,6 +25,8 @@ import {
   updateAlarmRule,
   deleteAlarmRule,
   getAllDevices,
+  getDeviceTags,
+  unwrap,
   unwrapList
 } from '@/api/modbus'
 
@@ -31,11 +35,33 @@ defineOptions({ name: 'AlarmRules' })
 const loading = ref(false)
 const list = ref<any[]>([])
 const devices = ref<any[]>([])
+const deviceTags = ref<any[]>([])
+
+// ── 报警类型选项 ──
+const alarmTypes = [
+  { value: 'threshold_high', label: '上限报警', desc: '值超过高限时触发' },
+  { value: 'threshold_low', label: '下限报警', desc: '值低于低限时触发' },
+  { value: 'threshold_range', label: '区间报警', desc: '值超出高低限区间时触发' },
+  { value: 'rate_of_change', label: '变化率报警', desc: '值变化速率超限时触发' },
+  { value: 'status', label: '状态报警', desc: '值等于目标值时触发' },
+  { value: 'disconnect', label: '设备离线', desc: '设备离线时触发' }
+]
+
+const alarmLevels = [
+  { value: 'info', label: '提示', type: 'info' },
+  { value: 'warning', label: '警告', type: 'warning' },
+  { value: 'critical', label: '严重', type: 'danger' },
+  { value: 'emergency', label: '紧急', type: 'danger' }
+]
+
+const alarmTypeLabel = (t?: string) => alarmTypes.find((a) => a.value === t)?.label || t || '—'
+const alarmLevelType = (l?: string) => alarmLevels.find((a) => a.value === l)?.type || 'info'
+const alarmLevelLabel = (l?: string) => alarmLevels.find((a) => a.value === l)?.label || l || '—'
 
 const fetchList = async () => {
   loading.value = true
   try {
-    list.value = unwrapList(await getAlarmRules({ page: 1, page_size: 100 })).list
+    list.value = unwrapList(await getAlarmRules({ page: 1, page_size: 200 })).list
   } finally {
     loading.value = false
   }
@@ -44,50 +70,117 @@ const fetchDevices = async () => {
   devices.value = unwrapList(await getAllDevices()).list
 }
 
+// ── 设备 → 点位联动 ──
+const onFormDeviceChange = async (deviceId: number) => {
+  form.tag_id = null
+  deviceTags.value = []
+  if (!deviceId) return
+  const res = await getDeviceTags(deviceId)
+  const body = unwrap(res)
+  deviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
+}
+
+// ── 表单 ──
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增规则')
 const formRef = ref()
 const form = reactive<any>({
   id: null,
   name: '',
+  description: '',
   device_id: null,
-  condition: '>',
-  threshold: 0,
-  level: 'warning',
-  enabled: true
+  tag_id: null,
+  alarm_type: 'threshold_high',
+  alarm_level: 'warning',
+  high_limit: null,
+  low_limit: null,
+  deadband: 0,
+  rate_limit: null,
+  status_value: null,
+  delay_seconds: 0,
+  auto_clear: true,
+  sms_enabled: false
 })
-const rules = { name: [{ required: true, message: '请输入规则名称', trigger: 'blur' }] }
+const rules = {
+  name: [{ required: true, message: '请输入规则名称', trigger: 'blur' }],
+  device_id: [{ required: true, message: '请选择设备', trigger: 'change' }],
+  alarm_type: [{ required: true, message: '请选择报警类型', trigger: 'change' }]
+}
+
+// 根据报警类型显示/隐藏字段
+const showHighLimit = computed(() => ['threshold_high', 'threshold_range'].includes(form.alarm_type))
+const showLowLimit = computed(() => ['threshold_low', 'threshold_range'].includes(form.alarm_type))
+const showRateLimit = computed(() => form.alarm_type === 'rate_of_change')
+const showStatusValue = computed(() => form.alarm_type === 'status')
+const showDeadband = computed(() =>
+  ['threshold_high', 'threshold_low', 'threshold_range'].includes(form.alarm_type)
+)
 
 const openCreate = () => {
   dialogTitle.value = '新增规则'
   Object.assign(form, {
     id: null,
     name: '',
+    description: '',
     device_id: null,
-    condition: '>',
-    threshold: 0,
-    level: 'warning',
-    enabled: true
+    tag_id: null,
+    alarm_type: 'threshold_high',
+    alarm_level: 'warning',
+    high_limit: null,
+    low_limit: null,
+    deadband: 0,
+    rate_limit: null,
+    status_value: null,
+    delay_seconds: 0,
+    auto_clear: true,
+    sms_enabled: false
   })
+  deviceTags.value = []
   dialogVisible.value = true
 }
-const openEdit = (row: any) => {
+const openEdit = async (row: any) => {
   dialogTitle.value = '编辑规则'
   Object.assign(form, {
     id: row.id,
     name: row.name,
-    device_id: row.device_id ?? null,
-    condition: row.condition || '>',
-    threshold: row.threshold ?? 0,
-    level: row.level || 'warning',
-    enabled: row.enabled !== false
+    description: row.description || '',
+    device_id: row.device_id,
+    tag_id: row.tag_id ?? null,
+    alarm_type: row.alarm_type || 'threshold_high',
+    alarm_level: row.alarm_level || 'warning',
+    high_limit: row.high_limit ?? null,
+    low_limit: row.low_limit ?? null,
+    deadband: row.deadband ?? 0,
+    rate_limit: row.rate_limit ?? null,
+    status_value: row.status_value ?? null,
+    delay_seconds: row.delay_seconds ?? 0,
+    auto_clear: row.auto_clear !== false,
+    sms_enabled: !!row.sms_enabled
   })
+  // 加载设备的点位列表
+  if (form.device_id) {
+    await onFormDeviceChange(form.device_id)
+  }
   dialogVisible.value = true
 }
 const submit = async () => {
   await formRef.value?.validate()
-  const payload = { ...form }
-  delete payload.id
+  const payload: any = {
+    name: form.name,
+    description: form.description,
+    device_id: form.device_id,
+    tag_id: form.tag_id || null,
+    alarm_type: form.alarm_type,
+    alarm_level: form.alarm_level,
+    high_limit: form.high_limit,
+    low_limit: form.low_limit,
+    deadband: form.deadband || 0,
+    rate_limit: form.rate_limit,
+    status_value: form.status_value,
+    delay_seconds: form.delay_seconds || 0,
+    auto_clear: form.auto_clear,
+    sms_enabled: form.sms_enabled
+  }
   if (form.id) {
     await updateAlarmRule(form.id, payload)
     ElMessage.success('更新成功')
@@ -121,24 +214,51 @@ onMounted(() => {
       </div>
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="name" label="规则名称" min-width="160" show-overflow-tooltip />
-      <ElTableColumn label="条件" min-width="140">
-        <template #default="{ row }">{{ row.condition }} {{ row.threshold }}</template>
-      </ElTableColumn>
-      <ElTableColumn label="级别" width="100">
-        <template #default="{ row }"
-          ><ElTag>{{ row.level || '—' }}</ElTag></template
-        >
-      </ElTableColumn>
-      <ElTableColumn label="启用" width="90">
+      <ElTableColumn prop="id" label="ID" width="60" />
+      <ElTableColumn prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
+      <ElTableColumn label="设备" min-width="120" show-overflow-tooltip>
         <template #default="{ row }">
-          <ElTag :type="row.enabled !== false ? 'success' : 'info'">{{
-            row.enabled !== false ? '启用' : '停用'
+          {{ devices.find((d) => d.id === row.device_id)?.name || `#${row.device_id}` }}
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="点位" min-width="100" show-overflow-tooltip>
+        <template #default="{ row }">
+          {{ row.tag_id ? `#${row.tag_id}` : '全部' }}
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="类型" width="100">
+        <template #default="{ row }">
+          <ElTag size="small">{{ alarmTypeLabel(row.alarm_type) }}</ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="级别" width="80">
+        <template #default="{ row }">
+          <ElTag :type="alarmLevelType(row.alarm_level)" size="small">
+            {{ alarmLevelLabel(row.alarm_level) }}
+          </ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="条件" min-width="140">
+        <template #default="{ row }">
+          <span v-if="row.high_limit != null">上限: {{ row.high_limit }}</span>
+          <span v-if="row.low_limit != null"> 下限: {{ row.low_limit }}</span>
+          <span v-if="row.rate_limit != null">变化率: {{ row.rate_limit }}/s</span>
+          <span v-if="row.status_value != null">== {{ row.status_value }}</span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="延迟" width="70">
+        <template #default="{ row }">
+          {{ row.delay_seconds || 0 }}s
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="启用" width="70">
+        <template #default="{ row }">
+          <ElTag :type="row.enabled !== false ? 'success' : 'info'" size="small">{{
+            row.enabled !== false ? '是' : '否'
           }}</ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn label="操作" width="160" fixed="right">
+      <ElTableColumn label="操作" width="140" fixed="right">
         <template #default="{ row }">
           <ElButton v-hasPermi="['alarm.write']" link type="primary" @click="openEdit(row)"
             >编辑</ElButton
@@ -150,33 +270,108 @@ onMounted(() => {
       </ElTableColumn>
     </ElTable>
 
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="500px">
-      <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px" top="5vh">
+      <ElForm ref="formRef" :model="form" :rules="rules" label-width="100px">
+        <!-- 基本信息 -->
         <ElFormItem label="规则名称" prop="name">
-          <ElInput v-model="form.name" />
+          <ElInput v-model="form.name" placeholder="如：1号炉温度上限" />
         </ElFormItem>
-        <ElFormItem label="设备">
-          <ElSelect v-model="form.device_id" clearable class="w-full" placeholder="全部设备">
+        <ElFormItem label="描述">
+          <ElInput v-model="form.description" type="textarea" :rows="2" placeholder="可选描述" />
+        </ElFormItem>
+
+        <ElDivider content-position="left">监控目标</ElDivider>
+
+        <ElFormItem label="设备" prop="device_id">
+          <ElSelect
+            v-model="form.device_id"
+            class="w-full"
+            placeholder="选择设备"
+            @change="onFormDeviceChange"
+          >
             <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="条件">
-          <ElSelect v-model="form.condition" class="!w-140px">
-            <ElOption label="大于 >" value=">" />
-            <ElOption label="大于等于 >=" value=">=" />
-            <ElOption label="小于 <" value="<" />
-            <ElOption label="小于等于 <=" value="<=" />
-            <ElOption label="等于 ==" value="==" />
-            <ElOption label="不等于 !=" value="!=" />
+        <ElFormItem label="点位">
+          <ElSelect
+            v-model="form.tag_id"
+            class="w-full"
+            clearable
+            placeholder="全部点位（不选则监控整个设备）"
+            :disabled="!form.device_id"
+          >
+            <ElOption
+              v-for="t in deviceTags"
+              :key="t.id"
+              :label="`${t.name} (地址 ${t.address})`"
+              :value="t.id"
+            />
           </ElSelect>
-          <ElInputNumber v-model="form.threshold" class="ml-10px" />
         </ElFormItem>
-        <ElFormItem label="级别">
-          <ElSelect v-model="form.level" class="w-full">
-            <ElOption label="提示 info" value="info" />
-            <ElOption label="警告 warning" value="warning" />
-            <ElOption label="严重 critical" value="critical" />
+
+        <ElDivider content-position="left">报警定义</ElDivider>
+
+        <ElFormItem label="报警类型" prop="alarm_type">
+          <ElSelect v-model="form.alarm_type" class="w-full">
+            <ElOption
+              v-for="t in alarmTypes"
+              :key="t.value"
+              :label="t.label"
+              :value="t.value"
+            >
+              <div>
+                <span>{{ t.label }}</span>
+                <span class="text-12px text-gray-400 ml-8px">{{ t.desc }}</span>
+              </div>
+            </ElOption>
           </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="报警级别">
+          <ElSelect v-model="form.alarm_level" class="w-full">
+            <ElOption
+              v-for="l in alarmLevels"
+              :key="l.value"
+              :label="l.label"
+              :value="l.value"
+            />
+          </ElSelect>
+        </ElFormItem>
+
+        <!-- 条件参数（根据类型动态显示） -->
+        <ElFormItem v-if="showHighLimit" label="上限值">
+          <ElInputNumber v-model="form.high_limit" :step="0.1" class="w-full" placeholder="超过此值触发报警" />
+        </ElFormItem>
+        <ElFormItem v-if="showLowLimit" label="下限值">
+          <ElInputNumber v-model="form.low_limit" :step="0.1" class="w-full" placeholder="低于此值触发报警" />
+        </ElFormItem>
+        <ElFormItem v-if="showRateLimit" label="变化率限制">
+          <ElInputNumber v-model="form.rate_limit" :step="0.1" class="w-full" placeholder="单位/秒" />
+        </ElFormItem>
+        <ElFormItem v-if="showStatusValue" label="目标状态值">
+          <ElInputNumber v-model="form.status_value" :step="1" class="w-full" placeholder="等于此值时触发" />
+        </ElFormItem>
+        <ElFormItem v-if="showDeadband" label="死区值">
+          <ElInputNumber v-model="form.deadband" :min="0" :step="0.1" class="w-full" />
+          <div class="text-12px text-gray-400 mt-4px">
+            防抖动：值在阈值 ± 死区范围内不触发报警
+          </div>
+        </ElFormItem>
+
+        <ElDivider content-position="left">高级设置</ElDivider>
+
+        <ElFormItem label="报警延迟">
+          <ElInputNumber v-model="form.delay_seconds" :min="0" :max="3600" class="w-full" />
+          <div class="text-12px text-gray-400 mt-4px">
+            条件持续满足 N 秒后才触发报警（防误报）
+          </div>
+        </ElFormItem>
+        <ElFormItem label="自动消除">
+          <ElSwitch v-model="form.auto_clear" />
+          <span class="text-12px text-gray-400 ml-8px">条件不满足时自动消除报警</span>
+        </ElFormItem>
+        <ElFormItem label="短信通知">
+          <ElSwitch v-model="form.sms_enabled" />
+          <span class="text-12px text-gray-400 ml-8px">触发时发送短信通知</span>
         </ElFormItem>
         <ElFormItem label="启用">
           <ElSwitch v-model="form.enabled" />
