@@ -1,6 +1,6 @@
 """User schemas."""
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -29,6 +29,7 @@ class UserOut(BaseModel):
     email: str
     role: str
     is_active: bool
+    permissions: List[str] = []
     created_at: Optional[datetime] = None
 
     class Config:

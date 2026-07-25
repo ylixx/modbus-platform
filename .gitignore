@@ -14,6 +14,8 @@ venv/
 .env
 .env.local
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 
 # Build output
@@ -31,3 +33,4 @@ frontend/dist/
 
 # Logs
 *.log
+/backend/logs/

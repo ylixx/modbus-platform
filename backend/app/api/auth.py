@@ -12,6 +12,16 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def _aggregate_permissions(user: User) -> list[str]:
+    """聚合用户所有角色的权限码（User -> UserRole -> Role -> RolePermission -> Permission.code）。"""
+    perms: set[str] = set()
+    for ur in user.roles:
+        for rp in ur.role.permissions:
+            if rp.permission:
+                perms.add(rp.permission.code)
+    return sorted(perms)
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
@@ -20,12 +30,16 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已禁用")
     token = create_access_token({"sub": str(user.id)})
-    return TokenResponse(access_token=token, user=UserOut.model_validate(user))
+    user_out = UserOut.model_validate(user)
+    user_out.permissions = _aggregate_permissions(user)
+    return TokenResponse(access_token=token, user=user_out)
 
 
 @router.get("/me", response_model=UserOut)
 def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+    user_out = UserOut.model_validate(current_user)
+    user_out.permissions = _aggregate_permissions(current_user)
+    return user_out
 
 
 @router.put("/me", response_model=UserOut)
