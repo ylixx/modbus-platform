@@ -9,6 +9,7 @@ import {
   ElInput,
   ElSelect,
   ElOption,
+  ElTree,
   ElTreeSelect,
   ElTag,
   ElMessage,

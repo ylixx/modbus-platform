@@ -236,11 +236,10 @@ const signIn = async () => {
         const res = await loginApi(formData)
 
         if (res) {
-          const tokenRes = res.data // 后端 TokenResponse
+          const tokenRes = res.data
           userStore.setToken(tokenRes.access_token)
           userStore.setUserInfo(tokenRes.user)
           userStore.setPermissions(tokenRes.user.permissions || [])
-          // 是否记住我
           if (unref(remember)) {
             userStore.setLoginInfo({
               username: formData.username,
@@ -250,15 +249,21 @@ const signIn = async () => {
             userStore.setLoginInfo(undefined)
           }
           userStore.setRememberMe(unref(remember))
-          // 前端静态路由 + 后端权限码过滤
           const permissions = tokenRes.user.permissions || []
-          await permissionStore.generateRoutes('permission', permissions).catch(() => {})
-          permissionStore.getAddRouters.forEach((route) => {
-            addRoute(route as RouteRecordRaw) // 动态添加可访问路由表
+          await permissionStore.generateRoutes('permission', permissions)
+          const addRouters = permissionStore.getAddRouters
+          addRouters.forEach((route) => {
+            addRoute(route as RouteRecordRaw)
           })
+          if (router.hasRoute('TempCatchAll')) {
+            router.removeRoute('TempCatchAll')
+          }
           permissionStore.setIsAddRouters(true)
-          push({ path: redirect.value || permissionStore.addRouters[0]?.path || '/dashboard' })
+          push({ path: redirect.value || addRouters[0]?.path || '/' })
         }
+      } catch (error) {
+        // Error already handled by axios response interceptor (ElMessage)
+        console.error('Login failed:', error)
       } finally {
         loading.value = false
       }

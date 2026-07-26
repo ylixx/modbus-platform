@@ -38,7 +38,7 @@ const router = useRouter()
 const loading = ref(false)
 const list = ref<any[]>([])
 const total = ref(0)
-const query = reactive({ page: 1, page_size: 10, keyword: '', org_node_id: null as number | null })
+const query = reactive({ page: 1, page_size: 30, keyword: '', org_node_id: null as number | null })
 const orgTree = ref<any[]>([])
 const orgNodeName = ref('')
 
@@ -306,16 +306,18 @@ onMounted(() => {
             >查看全部</ElButton
           >
         </div>
-        <ElTree
-          v-loading="!orgTree.length"
-          :data="orgTree"
-          node-key="id"
-          :props="{ label: 'name', children: 'children' }"
-          highlight-current
-          :expand-on-click-node="false"
-          default-expand-all
-          @node-click="onOrgClick"
-        />
+        <div v-if="orgTree.length">
+          <ElTree
+            :data="orgTree"
+            node-key="id"
+            :props="{ label: 'name', children: 'children' }"
+            highlight-current
+            :expand-on-click-node="false"
+            default-expand-all
+            @node-click="onOrgClick"
+          />
+        </div>
+        <div v-else class="text-center text-gray-400 py-20px text-12px">加载中...</div>
         <div v-if="query.org_node_id != null" class="mt-8px text-12px text-gray-500">
           已按「{{ orgNodeName }}」及其下级筛选
         </div>
@@ -383,7 +385,7 @@ onMounted(() => {
             v-model:current-page="query.page"
             v-model:page-size="query.page_size"
             :total="total"
-            :page-sizes="[10, 20, 50]"
+            :page-sizes="[10, 20, 30, 50]"
             layout="total, sizes, prev, pager, next"
             @current-change="fetchList"
             @size-change="((query.page = 1), fetchList())"

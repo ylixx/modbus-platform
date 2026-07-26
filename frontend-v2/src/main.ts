@@ -6,6 +6,9 @@ import '@/plugins/unocss'
 // 导入全局的svg图标
 import '@/plugins/svgIcon'
 
+// 预加载图标集合（离线环境可用）
+import '@/utils/loadIcons'
+
 // 初始化多语言
 import { setupI18n } from '@/plugins/vueI18n'
 

@@ -1,5 +1,6 @@
 """Device management API."""
 import json
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -81,7 +82,7 @@ def get_locations(db: Session = Depends(get_db), _: User = Depends(require_permi
 @router.get("", response_model=PageResponse)
 def list_devices(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(30, ge=1, le=100),
     group_id: int = None,
     org_node_id: int = None,
     protocol: str = None,

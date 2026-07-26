@@ -7,6 +7,7 @@ import { usePageLoading } from '@/hooks/web/usePageLoading'
 import { NO_REDIRECT_WHITE_LIST } from '@/constants'
 import { useUserStoreWithOut } from '@/store/modules/user'
 import { useWsStoreWithOut } from '@/store/modules/websocket'
+import { getMeApi } from '@/api/login'
 
 const { start, done } = useNProgress()
 
@@ -19,8 +20,8 @@ router.beforeEach(async (to, from, next) => {
   loadStart()
   const permissionStore = usePermissionStoreWithOut()
   const userStore = useUserStoreWithOut()
+
   if (userStore.getUserInfo) {
-    // 已登录：确保 WebSocket 已连接
     if (!wsInitialized) {
       const wsStore = useWsStoreWithOut()
       wsStore.init()
@@ -29,27 +30,42 @@ router.beforeEach(async (to, from, next) => {
 
     if (to.path === '/login') {
       next({ path: '/' })
-    } else {
-      if (permissionStore.getIsAddRouters) {
-        next()
-        return
-      }
-
-      // 前端静态路由 + 后端权限码过滤
-      const permissions = userStore.getPermissions || []
-      await permissionStore.generateRoutes('permission', permissions)
-
-      permissionStore.getAddRouters.forEach((route) => {
-        router.addRoute(route as unknown as RouteRecordRaw) // 动态添加可访问路由表
-      })
-      const redirectPath = from.query.redirect || to.path
-      const redirect = decodeURIComponent(redirectPath as string)
-      const nextData = to.path === redirect ? { ...to, replace: true } : { path: redirect }
-      permissionStore.setIsAddRouters(true)
-      next(nextData)
+      return
     }
+
+    try {
+      const res = await getMeApi()
+      if (res?.data) {
+        userStore.setUserInfo(res.data)
+        userStore.setPermissions(res.data.permissions || [])
+      }
+    } catch (_) {
+      // token might be expired, let the interceptor handle it
+    }
+
+    if (permissionStore.getIsAddRouters) {
+      next()
+      return
+    }
+
+    const permissions = userStore.getPermissions || []
+    await permissionStore.generateRoutes('permission', permissions)
+
+    const addRouters = permissionStore.getAddRouters
+    addRouters.forEach((route) => {
+      router.addRoute(route as unknown as RouteRecordRaw)
+    })
+
+    if (router.hasRoute('TempCatchAll')) {
+      router.removeRoute('TempCatchAll')
+    }
+
+    const redirectPath = (from.query.redirect || to.path) as string
+    const redirect = decodeURIComponent(redirectPath)
+    const nextData = to.path === redirect ? { ...to, replace: true } : { path: redirect }
+    permissionStore.setIsAddRouters(true)
+    next(nextData)
   } else {
-    // 未登录：断开 WebSocket
     if (wsInitialized) {
       const wsStore = useWsStoreWithOut()
       wsStore.destroy()
@@ -59,13 +75,13 @@ router.beforeEach(async (to, from, next) => {
     if (NO_REDIRECT_WHITE_LIST.indexOf(to.path) !== -1) {
       next()
     } else {
-      next(`/login?redirect=${to.path}`) // 否则全部重定向到登录页
+      next(`/login?redirect=${to.path}`)
     }
   }
 })
 
 router.afterEach((to) => {
   useTitle(to?.meta?.title as string)
-  done() // 结束Progress
+  done()
   loadDone()
 })

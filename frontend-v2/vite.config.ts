@@ -7,7 +7,6 @@ import progress from 'vite-plugin-progress'
 import EslintPlugin from 'vite-plugin-eslint'
 import { ViteEjsPlugin } from 'vite-plugin-ejs'
 import { viteMockServe } from 'vite-plugin-mock'
-import PurgeIcons from 'vite-plugin-purge-icons'
 import ServerUrlCopy from 'vite-plugin-url-copy'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import { createSvgIconsPlugin } from 'vite-plugin-svg-icons'
@@ -75,7 +74,6 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
         symbolId: 'icon-[dir]-[name]',
         svgoOptions: true
       }),
-      PurgeIcons(),
       env.VITE_USE_MOCK === 'true'
         ? viteMockServe({
             ignore: /^\_/,
@@ -168,6 +166,7 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
         'element-plus/es/locale/lang/zh-cn',
         'element-plus/es/locale/lang/en',
         '@iconify/iconify',
+        '@iconify/vue',
         '@vueuse/core',
         'axios',
         'qs',

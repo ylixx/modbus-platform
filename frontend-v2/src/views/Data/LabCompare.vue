@@ -1,14 +1,5 @@
 <script setup lang="ts">
-/**
- * 化验数据管理 & 对比分析
- *
- * 功能：
- * 1. 录入化验数据（设备 + 点位 + 化验值 + 采样时间）
- * 2. 化验值 vs 采集均值对比表
- * 3. 偏差分析（正常/偏差/异常）
- * 4. 对比时间窗口可调
- */
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
@@ -27,11 +18,14 @@ import {
   ElMessageBox,
   ElEmpty,
   ElAlert,
-  ElDescriptions,
-  ElDescriptionsItem
+  ElPagination,
+  ElBadge,
+  ElTree,
+  ElTreeSelect
 } from 'element-plus'
 import {
-  getAllDevices,
+  getDevices,
+  getOrgTree,
   getDeviceTags,
   getLabData,
   createLabData,
@@ -43,6 +37,35 @@ import {
 
 defineOptions({ name: 'LabCompare' })
 
+// ── 组织架构 ──
+const orgTree = ref<any[]>([])
+const selectedOrg = ref<number | null>(null)
+const orgNodeName = ref('')
+const fetchOrgTree = async () => {
+  const res = await getOrgTree()
+  orgTree.value = res?.data || []
+}
+const onOrgClick = (data: any) => {
+  selectedOrg.value = data.id
+  orgNodeName.value = data.name
+  currentDevice.value = undefined
+  currentTag.value = undefined
+  tags.value = []
+  fetchDevices()
+  allPage.value = 1
+  fetchAllLabData()
+}
+const clearOrgFilter = () => {
+  selectedOrg.value = null
+  orgNodeName.value = ''
+  currentDevice.value = undefined
+  currentTag.value = undefined
+  tags.value = []
+  fetchDevices()
+  allPage.value = 1
+  fetchAllLabData()
+}
+
 // ── 设备/点位 ──
 const devices = ref<any[]>([])
 const labDevices = computed(() => devices.value.filter((d) => d.has_lab_data))
@@ -52,7 +75,10 @@ const currentTag = ref<number | undefined>(undefined)
 const loading = ref(false)
 
 const fetchDevices = async () => {
-  devices.value = unwrapList(await getAllDevices()).list
+  const params: any = { page: 1, page_size: 500 }
+  if (selectedOrg.value != null) params.org_node_id = selectedOrg.value
+  const res = await getDevices(params)
+  devices.value = unwrapList(res).list
 }
 const onDeviceChange = async (deviceId: number) => {
   currentTag.value = undefined
@@ -63,8 +89,96 @@ const onDeviceChange = async (deviceId: number) => {
   tags.value = Array.isArray(body) ? body : unwrapList(res).list
 }
 
+// ── 默认列表（所有化验数据，按设备分组 + 分页） ──
+const listMode = ref<'all' | 'compare'>('all')
+const allLoading = ref(false)
+const allData = ref<any[]>([])
+const allTotal = ref(0)
+const allPage = ref(1)
+const allPageSize = ref(30)
+
+const fetchAllLabData = async () => {
+  allLoading.value = true
+  try {
+    const params: any = { page: allPage.value, page_size: allPageSize.value, compare_window: compareWindow.value }
+    if (selectedOrg.value != null) params.org_node_id = selectedOrg.value
+    if (currentDevice.value != null) params.device_id = currentDevice.value
+    const res = await getLabData(params)
+    const body = unwrap(res)
+    allTotal.value = body?.total ?? 0
+    allData.value = body?.data ?? []
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载化验数据失败')
+  } finally {
+    allLoading.value = false
+  }
+}
+
+const groupedData = computed(() => {
+  const map = new Map<number, any>()
+  for (const item of allData.value) {
+    const key = item.device_id
+    if (!map.has(key)) {
+      map.set(key, {
+        device_id: key,
+        device_name: item.device_name,
+        children: []
+      })
+    }
+    const parent = map.get(key)!
+    parent.children.push({
+      ...item,
+      rowKey: `lab-${item.id}`
+    })
+  }
+
+  const result: any[] = []
+  for (const [key, group] of map) {
+    if (group.children.length <= 1) {
+      const child = group.children[0]
+      if (child) {
+        result.push({
+          ...child,
+          device_name: group.device_name,
+          rowKey: `flat-${key}`,
+          isDevice: false,
+          isFlat: true
+        })
+      }
+    } else {
+      const first = group.children[0]
+      result.push({
+        ...first,
+        rowKey: `device-${key}`,
+        device_id: key,
+        device_name: group.device_name,
+        isDevice: true,
+        isFlat: false,
+        showFirst: true,
+        children: group.children.map((c: any) => ({
+          ...c,
+          isDevice: false,
+          isFlat: false
+        }))
+      })
+    }
+  }
+  return result
+})
+
+const onAllPageChange = (page: number) => {
+  allPage.value = page
+  fetchAllLabData()
+}
+
+const onAllPageSizeChange = (size: number) => {
+  allPageSize.value = size
+  allPage.value = 1
+  fetchAllLabData()
+}
+
 // ── 对比数据 ──
-const compareWindow = ref(86400) // 默认日均对比
+const compareWindow = ref(86400)
 const compareData = ref<any[]>([])
 const compareLoading = ref(false)
 
@@ -81,6 +195,7 @@ const fetchCompare = async () => {
     ElMessage.warning('请先选择设备')
     return
   }
+  listMode.value = 'compare'
   compareLoading.value = true
   try {
     const res = await compareLabData({
@@ -95,6 +210,13 @@ const fetchCompare = async () => {
   } finally {
     compareLoading.value = false
   }
+}
+
+const backToAll = () => {
+  listMode.value = 'all'
+  compareData.value = []
+  allPage.value = 1
+  fetchAllLabData()
 }
 
 const statusTag = (s: string) => {
@@ -148,34 +270,89 @@ const submitEntry = async () => {
   })
   ElMessage.success('化验数据录入成功')
   entryDialogVisible.value = false
-  fetchCompare()
+  if (listMode.value === 'compare') {
+    fetchCompare()
+  } else {
+    fetchAllLabData()
+  }
 }
 
 const removeEntry = async (row: any) => {
   await ElMessageBox.confirm('确认删除此化验记录？', '提示', { type: 'warning' })
   await deleteLabData(row.id)
   ElMessage.success('删除成功')
-  fetchCompare()
+  if (listMode.value === 'compare') {
+    fetchCompare()
+  } else {
+    fetchAllLabData()
+  }
 }
 
 // ── 统计 ──
 const stats = computed(() => {
-  const total = compareData.value.length
-  const normal = compareData.value.filter((d) => d.status === 'normal').length
-  const warning = compareData.value.filter((d) => d.status === 'warning').length
-  const abnormal = compareData.value.filter((d) => d.status === 'abnormal').length
+  const data = listMode.value === 'compare' ? compareData.value : allData.value
+  const total = data.length
+  const normal = data.filter((d) => d.status === 'normal').length
+  const warning = data.filter((d) => d.status === 'warning').length
+  const abnormal = data.filter((d) => d.status === 'abnormal').length
   return { total, normal, warning, abnormal }
 })
 
-onMounted(fetchDevices)
+watch(compareWindow, () => {
+  if (listMode.value === 'all' && allData.value.length > 0) {
+    fetchAllLabData()
+  }
+})
+
+onMounted(async () => {
+  await fetchOrgTree()
+  await fetchDevices()
+  fetchAllLabData()
+})
 </script>
 
 <template>
   <div>
     <ContentWrap title="化验数据对比">
+      <div class="flex items-start">
+        <!-- 左侧组织架构树 -->
+        <div class="w-240px mr-16px shrink-0 border-r border-solid border-gray-200 pr-12px">
+          <div class="flex items-center justify-between mb-8px">
+            <span class="text-14px font-bold">组织架构</span>
+            <ElButton v-if="selectedOrg != null" link type="primary" size="small" @click="clearOrgFilter"
+              >查看全部</ElButton
+            >
+          </div>
+          <div v-if="orgTree.length" class="org-tree-container">
+            <ElTree
+              :data="orgTree"
+              node-key="id"
+              :props="{ label: 'name', children: 'children' }"
+              highlight-current
+              :expand-on-click-node="false"
+              default-expand-all
+              @node-click="onOrgClick"
+            />
+          </div>
+          <div v-else class="text-center text-gray-400 py-20px text-12px">加载中...</div>
+          <div v-if="selectedOrg != null" class="mt-8px text-12px text-gray-500">
+            已按「{{ orgNodeName }}」及其下级筛选
+          </div>
+        </div>
+
+        <!-- 右侧内容 -->
+        <div class="flex-1 min-w-0">
       <ElAlert
-        title="化验数据与自动采集数据对比分析。选择设备后查看化验记录与采集均值的偏差。"
+        v-if="listMode === 'all'"
+        title="默认展示所有开启了化验数据的设备，同一设备的化验记录自动折叠。点击「查询对比」可进入对比分析模式。"
         type="info"
+        :closable="false"
+        class="mb-16px"
+      />
+      <ElAlert
+        v-else
+        title="对比分析模式：化验值与自动采集均值对比。点击「返回全部」回到列表模式。"
+        type="success"
         :closable="false"
         class="mb-16px"
       />
@@ -188,6 +365,7 @@ onMounted(fetchDevices)
           class="!w-200px"
           placeholder="选择设备"
           filterable
+          clearable
           @change="onDeviceChange"
         >
           <ElOption v-for="d in labDevices" :key="d.id" :label="d.name" :value="d.id" />
@@ -210,11 +388,12 @@ onMounted(fetchDevices)
         </ElSelect>
 
         <ElButton type="primary" :loading="compareLoading" @click="fetchCompare">查询对比</ElButton>
+        <ElButton v-if="listMode === 'compare'" @click="backToAll">返回全部</ElButton>
         <ElButton v-hasPermi="['history.write']" type="success" @click="openEntry">录入化验数据</ElButton>
       </div>
 
       <!-- 统计卡片 -->
-      <div v-if="compareData.length" class="flex gap-16px mb-16px">
+      <div v-if="listMode === 'compare' && compareData.length" class="flex gap-16px mb-16px">
         <div class="flex-1 bg-gray-50 rounded p-12px text-center">
           <div class="text-20px font-700">{{ stats.total }}</div>
           <div class="text-12px text-gray-500">总记录</div>
@@ -233,65 +412,199 @@ onMounted(fetchDevices)
         </div>
       </div>
 
-      <!-- 对比表格 -->
-      <ElEmpty v-if="!compareLoading && !compareData.length" description="暂无化验对比数据" />
-      <ElTable v-else v-loading="compareLoading" :data="compareData" border stripe>
-        <ElTableColumn prop="sample_time" label="采样时间" width="170">
-          <template #default="{ row }">{{ row.sample_time?.replace('T', ' ').slice(0, 19) }}</template>
-        </ElTableColumn>
-        <ElTableColumn prop="lab_name" label="化验项目" width="120" />
-        <ElTableColumn prop="tag_name" label="对应点位" width="120" show-overflow-tooltip />
-        <ElTableColumn label="化验值" width="100">
-          <template #default="{ row }">
-            <span class="font-700">{{ row.lab_value }}</span>
-            <span class="text-12px text-gray-400 ml-2px">{{ row.unit }}</span>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="采集均值" width="110">
-          <template #default="{ row }">
-            <span v-if="row.collected_avg != null" class="font-700 text-blue-500">
-              {{ row.collected_avg }}
-            </span>
-            <span v-else class="text-gray-400">—</span>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="偏差" width="100">
-          <template #default="{ row }">
-            <span v-if="row.deviation != null">{{ row.deviation }}</span>
-            <span v-else class="text-gray-400">—</span>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="偏差率" width="100">
-          <template #default="{ row }">
-            <span
-              v-if="row.deviation_pct != null"
-              :class="{
-                'text-green-600': row.status === 'normal',
-                'text-yellow-600': row.status === 'warning',
-                'text-red-600': row.status === 'abnormal'
-              }"
-            >
-              {{ row.deviation_pct }}%
-            </span>
-            <span v-else class="text-gray-400">—</span>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="状态" width="90">
-          <template #default="{ row }">
-            <ElTag :type="statusTag(row.status).type" size="small">
-              {{ statusTag(row.status).text }}
-            </ElTag>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn prop="operator" label="化验员" width="90" />
-        <ElTableColumn label="操作" width="80" fixed="right">
-          <template #default="{ row }">
-            <ElButton v-hasPermi="['history.write']" link type="danger" @click="removeEntry(row)"
-              >删除</ElButton
-            >
-          </template>
-        </ElTableColumn>
-      </ElTable>
+      <!-- 默认列表：按设备分组折叠 -->
+      <template v-if="listMode === 'all'">
+        <ElEmpty v-if="!allLoading && !groupedData.length" description="暂无化验数据，请录入或开启设备的化验数据功能" />
+        <ElTable
+          v-else
+          :data="groupedData"
+          row-key="rowKey"
+          :tree-props="{ children: 'children' }"
+          :default-expand-all="false"
+          border
+          stripe
+        >
+          <ElTableColumn label="设备 / 化验项目" min-width="220">
+            <template #default="{ row }">
+              <div v-if="row.isDevice" class="flex flex-col">
+                <div class="flex items-center gap-8px">
+                  <ElBadge :value="row.children.length" type="primary" :max="99" />
+                  <span class="font-600 text-15px">{{ row.device_name }}</span>
+                  <span class="text-12px text-gray-400">({{ row.children.length }} 条)</span>
+                </div>
+                <span v-if="row.showFirst && row.lab_name" class="text-12px text-gray-500 pl-32px">{{ row.lab_name }}</span>
+              </div>
+              <div v-else-if="row.isFlat" class="flex flex-col">
+                <span class="font-600 text-14px">{{ row.device_name }}</span>
+                <span class="text-12px text-gray-500">{{ row.lab_name }}</span>
+              </div>
+              <div v-else class="pl-24px text-13px">{{ row.lab_name }}</div>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="点位" width="140">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span v-else>{{ row.tag_name || '—' }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="化验值" width="120">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span v-else>
+                <span class="font-700">{{ row.lab_value }}</span>
+                <span class="text-12px text-gray-400 ml-2px">{{ row.unit }}</span>
+              </span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="采集均值" width="110">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span v-else-if="row.collected_avg != null" class="font-700 text-blue-500">
+                {{ row.collected_avg }}
+              </span>
+              <span v-else class="text-gray-400">—</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="偏差" width="90">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span v-else-if="row.deviation != null">{{ row.deviation }}</span>
+              <span v-else class="text-gray-400">—</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="偏差率" width="100">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span
+                v-else-if="row.deviation_pct != null"
+                :class="{
+                  'text-green-600': row.status === 'normal',
+                  'text-yellow-600': row.status === 'warning',
+                  'text-red-600': row.status === 'abnormal'
+                }"
+              >
+                {{ row.deviation_pct }}%
+              </span>
+              <span v-else class="text-gray-400">—</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="状态" width="90">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <ElTag v-else-if="row.status" :type="statusTag(row.status).type" size="small">
+                {{ statusTag(row.status).text }}
+              </ElTag>
+              <span v-else class="text-gray-400">—</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn prop="sample_time" label="采样时间" width="160">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span v-else>{{ row.sample_time?.replace('T', ' ').slice(0, 19) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn prop="operator" label="化验员" width="90">
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span v-else>{{ row.operator || '—' }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn prop="remark" label="备注" min-width="100" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
+              <span v-else>{{ row.remark || '—' }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="操作" width="80" fixed="right">
+            <template #default="{ row }">
+              <ElButton
+                v-if="!row.isDevice"
+                v-hasPermi="['history.write']"
+                link
+                type="danger"
+                @click="removeEntry(row)"
+              >删除</ElButton>
+            </template>
+          </ElTableColumn>
+        </ElTable>
+
+        <div class="flex justify-end mt-16px" v-if="allTotal > 0">
+          <ElPagination
+            v-model:current-page="allPage"
+            :page-size="allPageSize"
+            :total="allTotal"
+            :page-sizes="[30, 50, 100]"
+            layout="total, sizes, prev, pager, next, jumper"
+            background
+            @current-change="onAllPageChange"
+            @size-change="onAllPageSizeChange"
+          />
+        </div>
+      </template>
+
+      <!-- 对比模式表格 -->
+      <template v-else>
+        <ElEmpty v-if="!compareLoading && !compareData.length" description="暂无对比数据，请选择设备并点击查询对比" />
+        <ElTable v-else :data="compareData" border stripe>
+          <ElTableColumn prop="sample_time" label="采样时间" width="170">
+            <template #default="{ row }">{{ row.sample_time?.replace('T', ' ').slice(0, 19) }}</template>
+          </ElTableColumn>
+          <ElTableColumn prop="lab_name" label="化验项目" width="120" />
+          <ElTableColumn prop="tag_name" label="对应点位" width="120" show-overflow-tooltip />
+          <ElTableColumn label="化验值" width="100">
+            <template #default="{ row }">
+              <span class="font-700">{{ row.lab_value }}</span>
+              <span class="text-12px text-gray-400 ml-2px">{{ row.unit }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="采集均值" width="110">
+            <template #default="{ row }">
+              <span v-if="row.collected_avg != null" class="font-700 text-blue-500">
+                {{ row.collected_avg }}
+              </span>
+              <span v-else class="text-gray-400">—</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="偏差" width="100">
+            <template #default="{ row }">
+              <span v-if="row.deviation != null">{{ row.deviation }}</span>
+              <span v-else class="text-gray-400">—</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="偏差率" width="100">
+            <template #default="{ row }">
+              <span
+                v-if="row.deviation_pct != null"
+                :class="{
+                  'text-green-600': row.status === 'normal',
+                  'text-yellow-600': row.status === 'warning',
+                  'text-red-600': row.status === 'abnormal'
+                }"
+              >
+                {{ row.deviation_pct }}%
+              </span>
+              <span v-else class="text-gray-400">—</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="状态" width="90">
+            <template #default="{ row }">
+              <ElTag :type="statusTag(row.status).type" size="small">
+                {{ statusTag(row.status).text }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn prop="operator" label="化验员" width="90" />
+          <ElTableColumn label="操作" width="80" fixed="right">
+            <template #default="{ row }">
+              <ElButton v-hasPermi="['history.write']" link type="danger" @click="removeEntry(row)"
+                >删除</ElButton
+              >
+            </template>
+          </ElTableColumn>
+        </ElTable>
+      </template>
+        </div>
+      </div>
     </ContentWrap>
 
     <!-- 录入对话框 -->

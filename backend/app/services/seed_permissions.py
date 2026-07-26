@@ -27,6 +27,7 @@ DEFAULT_PERMISSIONS = [
 
     # History & Export
     ("history.read",   "查看历史数据", "history",  "查询历史趋势"),
+    ("history.write",  "录入化验数据", "history",  "录入和管理化验对比数据"),
     ("export.download","导出数据",     "export",   "下载CSV/报表"),
 
     # System

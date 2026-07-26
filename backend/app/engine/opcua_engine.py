@@ -151,86 +151,92 @@ class OpcUaDeviceSession:
         backoff_delay = 1.0
 
         while not self._stop_event.is_set():
-            try:
-                # 检查连接状态
-                if not self._connected:
-                    try:
-                        await client.connect()
-                        self._connected = True
-                        consecutive_failures = 0
-                        backoff_delay = 1.0
-                        self._update_status("online", None)
-                        logger.info(f"OPC-UA device '{self.device_name}' reconnected")
-                    except Exception as e:
-                        consecutive_failures += 1
-                        self._update_status("error", f"重连失败: {e}")
-                        sleep_time = min(backoff_delay, 60.0)
-                        backoff_delay *= 2
-                        await asyncio.sleep(sleep_time)
-                        continue
+            # 检查连接状态
+            if not self._connected:
+                try:
+                    await client.connect()
+                    self._connected = True
+                    consecutive_failures = 0
+                    backoff_delay = 1.0
+                    self._update_status("online", None)
+                    logger.info(f"OPC-UA device '{self.device_name}' reconnected")
+                except Exception as e:
+                    consecutive_failures += 1
+                    self._update_status("error", f"重连失败: {e}")
+                    sleep_time = min(backoff_delay, 60.0)
+                    backoff_delay *= 2
+                    await asyncio.sleep(sleep_time)
+                    continue
 
+            try:
                 for nid, (node, tag) in node_map.items():
                     try:
                         raw = await node.read_value()
-                    casted = _cast_opc_value(raw, tag.opc_node_type or "float64")
-                    if casted is None:
-                        continue
+                        casted = _cast_opc_value(raw, tag.opc_node_type or "float64")
+                        if casted is None:
+                            continue
 
-                    processed = casted * tag.scale_factor + tag.offset
-                    if tag.decimal_places is not None and isinstance(processed, float):
-                        processed = round(processed, tag.decimal_places)
+                        processed = casted * tag.scale_factor + tag.offset
+                        if tag.decimal_places is not None and isinstance(processed, float):
+                            processed = round(processed, tag.decimal_places)
 
-                    quality = "good"
+                        quality = "good"
 
-                    # Script processing
-                    if tag.script_id:
-                        from app.models.script import Script
-                        from app.engine.script_engine import script_engine as se
-                        sdb = SessionLocal()
-                        try:
-                            script = sdb.query(Script).filter(Script.id == tag.script_id, Script.enabled == True).first()
-                            if script:
-                                recent = sdb.query(TagHistory.value).filter(
-                                    TagHistory.device_id == self.device_id, TagHistory.tag_id == tag.id,
-                                ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
-                                history = [r[0] for r in reversed(recent)]
-                                tag_cfg = {"name": tag.name, "unit": tag.unit, "scale_factor": tag.scale_factor, "offset": tag.offset, "params": {}}
-                                ctx = {"device_id": self.device_id, "tag_id": tag.id, "timestamp": datetime.now(timezone.utc).isoformat()}
-                                result, quality, _ = se.execute(script.id, script.code, processed, history, tag_cfg, ctx, script.timeout_ms)
-                                if result is not None:
-                                    processed = result
-                        finally:
-                            sdb.close()
+                        # Script processing
+                        if tag.script_id:
+                            from app.models.script import Script
+                            from app.engine.script_engine import script_engine as se
+                            sdb = SessionLocal()
+                            try:
+                                script = sdb.query(Script).filter(Script.id == tag.script_id, Script.enabled == True).first()
+                                if script:
+                                    recent = sdb.query(TagHistory.value).filter(
+                                        TagHistory.device_id == self.device_id, TagHistory.tag_id == tag.id,
+                                    ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
+                                    history = [r[0] for r in reversed(recent)]
+                                    tag_cfg = {"name": tag.name, "unit": tag.unit, "scale_factor": tag.scale_factor, "offset": tag.offset, "params": {}}
+                                    ctx = {"device_id": self.device_id, "tag_id": tag.id, "timestamp": datetime.now(timezone.utc).isoformat()}
+                                    result, quality, _ = se.execute(script.id, script.code, processed, history, tag_cfg, ctx, script.timeout_ms)
+                                    if result is not None:
+                                        processed = result
+                            finally:
+                                sdb.close()
 
-                    self._live_values[tag.id] = {
-                        "value": processed,
-                        "raw_value": str(casted),
-                        "quality": quality,
-                        "time": datetime.now(timezone.utc).isoformat(),
-                    }
+                        self._live_values[tag.id] = {
+                            "value": processed,
+                            "raw_value": str(casted),
+                            "quality": quality,
+                            "time": datetime.now(timezone.utc).isoformat(),
+                        }
 
-                    self._save_history(tag, processed, str(casted))
+                        self._save_history(tag, processed, str(casted))
 
-                    from app.services.alarm_service import alarm_service
-                    alarm_service.evaluate(self.device_id, tag.id, tag.name, processed)
+                        from app.services.alarm_service import alarm_service
+                        alarm_service.evaluate(self.device_id, tag.id, tag.name, processed)
 
-                except Exception as e:
-                    logger.error(f"OPC-UA read error for {nid}: {e}")
-                    consecutive_failures += 1
-                    # 连续读取失败超过 5 次，标记为断开
-                    if consecutive_failures >= 5:
-                        self._connected = False
-                        self._update_status("error", f"连续读取失败: {e}")
-                        try:
-                            await client.disconnect()
-                        except Exception:
-                            pass
-                        break
+                    except Exception as e:
+                        logger.error(f"OPC-UA read error for {nid}: {e}")
+                        consecutive_failures += 1
+                        # 连续读取失败超过 5 次，标记为断开
+                        if consecutive_failures >= 5:
+                            self._connected = False
+                            self._update_status("error", f"连续读取失败: {e}")
+                            try:
+                                await client.disconnect()
+                            except Exception:
+                                pass
+                            break
 
-            if self._connected:
-                consecutive_failures = 0
-                self._update_status("online", None)
-            await asyncio.sleep(self._poll_interval)
+                if self._connected:
+                    consecutive_failures = 0
+                    self._update_status("online", None)
+                await asyncio.sleep(self._poll_interval)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"OPC-UA poll loop error: {e}")
+                await asyncio.sleep(1)
 
         # Cleanup
         try:

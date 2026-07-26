@@ -28,7 +28,10 @@ const getCaches = computed((): string[] => {
     <router-view>
       <template #default="{ Component, route }">
         <keep-alive :include="getCaches">
-          <component :is="Component" :key="route.fullPath" />
+          <component :is="Component" :key="route.fullPath" v-if="Component" />
+          <div v-else class="flex items-center justify-center h-full py-80px text-gray-400">
+            页面加载中...
+          </div>
         </keep-alive>
       </template>
     </router-view>

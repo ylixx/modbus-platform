@@ -50,16 +50,28 @@ class AggregateQuery(BaseModel):
 
 @router.get("")
 def list_lab_data(
-    device_id: int,
+    device_id: Optional[int] = None,
     tag_id: Optional[int] = None,
+    org_node_id: Optional[int] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    compare_window: int = Query(86400, description="对比时间窗口（秒），默认日均"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=500),
+    page_size: int = Query(30, ge=1, le=500),
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("history.read")),
 ):
-    q = db.query(LabData).filter(LabData.device_id == device_id)
+    q = db.query(LabData)
+    if device_id:
+        q = q.filter(LabData.device_id == device_id)
+    else:
+        q = q.join(Device, LabData.device_id == Device.id).filter(Device.has_lab_data == True)
+    if org_node_id is not None:
+        from app.services.org_service import expand_org_subtree
+        subtree = expand_org_subtree(db, {org_node_id})
+        if device_id:
+            q = q.join(Device, LabData.device_id == Device.id)
+        q = q.filter(Device.org_node_id.in_(subtree))
     if tag_id:
         q = q.filter(LabData.tag_id == tag_id)
     if start_time:
@@ -70,23 +82,80 @@ def list_lab_data(
     total = q.count()
     items = q.order_by(LabData.sample_time.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
+    device_ids = list({i.device_id for i in items})
+    tag_ids = list({i.tag_id for i in items if i.tag_id})
+    device_map = {}
+    tag_map = {}
+    if device_ids:
+        for d in db.query(Device).filter(Device.id.in_(device_ids)).all():
+            device_map[d.id] = d.name
+    if tag_ids:
+        for t in db.query(DeviceTag).filter(DeviceTag.id.in_(tag_ids)).all():
+            tag_map[t.id] = t.name
+
+    half_window = timedelta(seconds=compare_window / 2)
+
+    data = []
+    for i in items:
+        collected_avg = None
+        collected_count = 0
+        deviation = None
+        deviation_pct = None
+        status = "no_data"
+
+        if i.tag_id and i.sample_time:
+            window_start = i.sample_time - half_window
+            window_end = i.sample_time + half_window
+
+            stats = db.query(
+                sql_func.avg(TagHistory.value),
+                sql_func.count(TagHistory.id),
+            ).filter(
+                TagHistory.device_id == i.device_id,
+                TagHistory.tag_id == i.tag_id,
+                TagHistory.recorded_at >= window_start,
+                TagHistory.recorded_at <= window_end,
+            ).first()
+
+            if stats and stats[1] > 0:
+                collected_avg = round(float(stats[0]), 4)
+                collected_count = stats[1]
+                if i.lab_value != 0:
+                    deviation = round(abs(collected_avg - i.lab_value), 4)
+                    deviation_pct = round(deviation / abs(i.lab_value) * 100, 2)
+                    if deviation_pct <= 5:
+                        status = "normal"
+                    elif deviation_pct <= 15:
+                        status = "warning"
+                    else:
+                        status = "abnormal"
+                else:
+                    status = "normal" if collected_avg == 0 else "abnormal"
+
+        data.append({
+            "id": i.id,
+            "device_id": i.device_id,
+            "device_name": device_map.get(i.device_id, ""),
+            "tag_id": i.tag_id,
+            "tag_name": tag_map.get(i.tag_id, "") if i.tag_id else "",
+            "lab_name": i.lab_name,
+            "lab_value": i.lab_value,
+            "unit": i.unit,
+            "sample_time": i.sample_time.isoformat() if i.sample_time else None,
+            "operator": i.operator,
+            "remark": i.remark,
+            "created_at": i.created_at.isoformat() if i.created_at else None,
+            "collected_avg": collected_avg,
+            "collected_count": collected_count,
+            "deviation": deviation,
+            "deviation_pct": deviation_pct,
+            "status": status,
+        })
+
     return {
         "total": total,
-        "data": [
-            {
-                "id": i.id,
-                "device_id": i.device_id,
-                "tag_id": i.tag_id,
-                "lab_name": i.lab_name,
-                "lab_value": i.lab_value,
-                "unit": i.unit,
-                "sample_time": i.sample_time.isoformat() if i.sample_time else None,
-                "operator": i.operator,
-                "remark": i.remark,
-                "created_at": i.created_at.isoformat() if i.created_at else None,
-            }
-            for i in items
-        ],
+        "data": data,
+        "compare_window": compare_window,
     }
 
 

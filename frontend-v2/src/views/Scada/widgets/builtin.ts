@@ -415,7 +415,7 @@ export const builtinWidgets: BuiltinWidget[] = [
         // 轨道
         rect({ width: 60, height: 28, left: 5, top: 6, fill: '#2a2a2a', stroke: '#4a6a8a', strokeWidth: 1, rx: 14, ry: 14 }),
         // 滑块
-        { type: 'circle', left: 45, top: 20, radius: 10, fill: '#3a8fd4', stroke: '#5ab0ff', strokeWidth: 1, _bindTarget: 'state', _bindProp: 'left' }),
+        circle({ left: 45, top: 20, radius: 10, fill: '#3a8fd4', stroke: '#5ab0ff', strokeWidth: 1, _bindTarget: 'state', _bindProp: 'left' }),
         text('OFF', { left: 35, top: 40, fontSize: 11, fill: '#a0a0a0', _bindTarget: 'state', _bindProp: 'text' })
       ],
       _widgetType: 'switch',

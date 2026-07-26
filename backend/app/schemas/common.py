@@ -16,5 +16,5 @@ class PageResponse(BaseModel, Generic[T]):
     message: str = "success"
     total: int = 0
     page: int = 1
-    page_size: int = 20
+    page_size: int = 30
     data: list[T] = []
