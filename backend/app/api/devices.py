@@ -89,6 +89,9 @@ def list_devices(
     status: str = None,
     factory: str = None,
     workshop: str = None,
+    production_line: str = None,
+    installation: str = None,
+    ids: str = Query(None, description="按设备 ID 列表精确筛选，逗号分隔（关联列表框多选）"),
     search: str = "",
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("device.read")),
@@ -108,6 +111,17 @@ def list_devices(
         q = q.filter(Device.factory == factory)
     if workshop:
         q = q.filter(Device.workshop == workshop)
+    if production_line:
+        q = q.filter(Device.production_line == production_line)
+    if installation:
+        q = q.filter(Device.installation == installation)
+    if ids:
+        try:
+            id_list = [int(x) for x in ids.split(',') if x.strip()]
+            if id_list:
+                q = q.filter(Device.id.in_(id_list))
+        except ValueError:
+            pass
     if search:
         q = q.filter(Device.name.contains(search) | Device.host.contains(search))
     total = q.count()

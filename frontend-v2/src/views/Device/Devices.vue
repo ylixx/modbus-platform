@@ -14,13 +14,13 @@ import {
   ElFormItem,
   ElSelect,
   ElOption,
-  ElTree,
   ElTreeSelect,
   ElInputNumber,
   ElMessage,
   ElMessageBox,
   ElDivider,
-  ElSwitch
+  ElSwitch,
+  ElAlert
 } from 'element-plus'
 import {
   getDevices,
@@ -31,6 +31,7 @@ import {
   getOrgTree,
   unwrapList
 } from '@/api/modbus'
+import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
 defineOptions({ name: 'Devices' })
 
@@ -38,9 +39,22 @@ const router = useRouter()
 const loading = ref(false)
 const list = ref<any[]>([])
 const total = ref(0)
-const query = reactive({ page: 1, page_size: 30, keyword: '', org_node_id: null as number | null })
+const query = reactive({
+  page: 1,
+  page_size: 30,
+  org_node_id: null as number | null,
+  ids: null as number[] | null
+})
 const orgTree = ref<any[]>([])
-const orgNodeName = ref('')
+
+// 关联列表框：层级路径筛选 + 多选设备
+const cascadeRef = ref()
+// 级联选择结果：{ org_node_id, labels }（org_node_id 用于按组织架构子树筛选设备）
+const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
+const selectedIds = ref<number[]>([])
+const onPathChange = (p: { org_node_id: number | null; labels: string[] } | null) => {
+  query.org_node_id = p?.org_node_id ?? null
+}
 
 const statusType = (s?: string) => {
   if (s === 'online') return 'success'
@@ -59,8 +73,8 @@ const fetchList = async () => {
     const res = await getDevices({
       page: query.page,
       page_size: query.page_size,
-      keyword: query.keyword || undefined,
-      org_node_id: query.org_node_id ?? undefined
+      org_node_id: query.org_node_id ?? undefined,
+      ids: selectedIds.value.length ? selectedIds.value.join(',') : undefined
     })
     const { list: l, total: t } = unwrapList(res)
     list.value = l
@@ -75,17 +89,54 @@ const fetchOrgTree = async () => {
   orgTree.value = res?.data || []
 }
 
-const onOrgClick = (data: any) => {
-  query.org_node_id = data.id
-  orgNodeName.value = data.name
+const clearOrgFilter = () => {
+  query.org_node_id = null
   query.page = 1
   fetchList()
 }
-const clearOrgFilter = () => {
-  query.org_node_id = null
-  orgNodeName.value = ''
-  query.page = 1
-  fetchList()
+
+// ── 批量操作（基于关联列表框多选） ──
+const batchBusy = ref(false)
+const batchEnable = async (enabled: boolean) => {
+  if (!selectedIds.value.length) return
+  await ElMessageBox.confirm(
+    `确认${enabled ? '启用' : '禁用'}选中的 ${selectedIds.value.length} 台设备？`,
+    '批量操作',
+    { type: 'warning' }
+  )
+  batchBusy.value = true
+  try {
+    for (const id of selectedIds.value) {
+      await updateDevice(id, { enabled })
+    }
+    ElMessage.success(`已${enabled ? '启用' : '禁用'} ${selectedIds.value.length} 台设备`)
+    selectedIds.value = []
+    fetchList()
+  } finally {
+    batchBusy.value = false
+  }
+}
+const batchDelete = async () => {
+  if (!selectedIds.value.length) return
+  await ElMessageBox.confirm(
+    `确认删除选中的 ${selectedIds.value.length} 台设备？此操作不可恢复`,
+    '批量删除',
+    { type: 'warning' }
+  )
+  batchBusy.value = true
+  try {
+    for (const id of selectedIds.value) {
+      await deleteDevice(id)
+    }
+    ElMessage.success(`已删除 ${selectedIds.value.length} 台设备`)
+    selectedIds.value = []
+    fetchList()
+  } finally {
+    batchBusy.value = false
+  }
+}
+const clearSelection = () => {
+  selectedIds.value = []
 }
 
 // ── 协议选项 ──
@@ -297,101 +348,113 @@ onMounted(() => {
 
 <template>
   <ContentWrap title="设备管理">
-    <div class="flex items-start">
-      <!-- 左侧组织架构树 -->
-      <div class="w-260px mr-16px shrink-0 border-r border-solid border-gray-200 pr-12px">
-        <div class="flex items-center justify-between mb-8px">
-          <span class="text-14px font-bold">组织架构</span>
-          <ElButton v-if="query.org_node_id != null" link type="primary" size="small" @click="clearOrgFilter"
-            >查看全部</ElButton
-          >
-        </div>
-        <div v-if="orgTree.length">
-          <ElTree
-            :data="orgTree"
-            node-key="id"
-            :props="{ label: 'name', children: 'children' }"
-            highlight-current
-            :expand-on-click-node="false"
-            default-expand-all
-            @node-click="onOrgClick"
-          />
-        </div>
-        <div v-else class="text-center text-gray-400 py-20px text-12px">加载中...</div>
-        <div v-if="query.org_node_id != null" class="mt-8px text-12px text-gray-500">
-          已按「{{ orgNodeName }}」及其下级筛选
-        </div>
+    <!-- 关联列表框筛选器（厂区/班/站/位置/设备名称 + 多选） -->
+    <OrgCascadeSelect
+      ref="cascadeRef"
+      v-model="selectedIds"
+      v-model:path="orgPath"
+      @update:path="onPathChange"
+      @search="fetchList"
+      class="mb-12px"
+    />
+
+    <!-- 批量操作栏 -->
+    <div
+      v-if="selectedIds.length"
+      class="flex items-center gap-10px mb-12px px-12px py-10px rounded border border-solid border-gray-200 bg-gray-50"
+    >
+      <span class="text-13px"
+        >已选 <b class="text-primary">{{ selectedIds.length }}</b> 台设备</span
+      >
+      <ElButton :loading="batchBusy" size="small" type="success" @click="batchEnable(true)"
+        >批量启用</ElButton
+      >
+      <ElButton :loading="batchBusy" size="small" @click="batchEnable(false)">批量禁用</ElButton>
+      <ElButton :loading="batchBusy" size="small" type="danger" @click="batchDelete"
+        >批量删除</ElButton
+      >
+      <ElButton size="small" link type="primary" @click="clearSelection">清空选择</ElButton>
+    </div>
+
+    <!-- 搜索 + 新增 -->
+    <div class="flex items-center justify-between mb-12px">
+      <div class="flex items-center gap-10px">
+        <ElButton
+          v-if="orgPath"
+          link
+          type="primary"
+          size="small"
+          @click="(cascadeRef?.clearPath(), fetchList())"
+          >清除层级筛选</ElButton
+        >
       </div>
+      <ElButton v-hasPermi="['device.write']" type="success" @click="openCreate">新增设备</ElButton>
+    </div>
 
-      <!-- 右侧设备列表 -->
-      <div class="flex-1 min-w-0">
-        <div class="flex-grow flex justify-end mb-12px">
-          <ElInput
-            v-model="query.keyword"
-            placeholder="搜索设备名称"
-            clearable
-            class="!w-200px mr-10px"
-            @keyup.enter="((query.page = 1), fetchList())"
-          />
-          <ElButton type="primary" @click="((query.page = 1), fetchList())">查询</ElButton>
-          <ElButton v-hasPermi="['device.write']" type="success" class="ml-10px" @click="openCreate"
-            >新增设备</ElButton
+    <ElTable v-loading="loading" :data="list" border stripe>
+      <ElTableColumn prop="id" label="ID" width="70" />
+      <ElTableColumn prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn label="层级" min-width="200" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="text-gray-500">{{
+            [row.factory, row.production_line, row.workshop, row.installation]
+              .filter(Boolean)
+              .join(' / ') || '—'
+          }}</span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="协议" width="110">
+        <template #default="{ row }">
+          <ElTag size="small">{{ protocolLabel(row.protocol) }}</ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="连接" min-width="180">
+        <template #default="{ row }">
+          <span v-if="row.protocol === 'modbus_tcp'"
+            >{{ row.host }}:{{ row.port }} / #{{ row.slave_id }}</span
           >
-        </div>
+          <span v-else-if="row.protocol === 'modbus_rtu'"
+            >{{ row.serial_port }} / {{ row.baudrate }}bps</span
+          >
+          <span v-else-if="row.protocol === 'mqtt'">{{ row.broker_url || '—' }}</span>
+          <span v-else-if="row.protocol === 'opcua'">{{ row.endpoint_url || '—' }}</span>
+          <span v-else>—</span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="状态" width="90">
+        <template #default="{ row }">
+          <ElTag :type="statusType(row.status)">{{ statusText(row.status) }}</ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn prop="description" label="描述" min-width="160" show-overflow-tooltip />
+      <ElTableColumn label="操作" width="280" fixed="right">
+        <template #default="{ row }">
+          <ElButton link type="primary" @click="router.push(`/device/detail/${row.id}`)"
+            >详情</ElButton
+          >
+          <ElButton v-hasPermi="['device.write']" link type="primary" @click="openEdit(row)"
+            >编辑</ElButton
+          >
+          <ElButton v-hasPermi="['device.write']" link type="primary" @click="openDuplicate(row)"
+            >复制</ElButton
+          >
+          <ElButton v-hasPermi="['device.write']" link type="danger" @click="remove(row)"
+            >删除</ElButton
+          >
+        </template>
+      </ElTableColumn>
+    </ElTable>
 
-        <ElTable v-loading="loading" :data="list" border stripe>
-          <ElTableColumn prop="id" label="ID" width="70" />
-          <ElTableColumn prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
-          <ElTableColumn label="协议" width="110">
-            <template #default="{ row }">
-              <ElTag size="small">{{ protocolLabel(row.protocol) }}</ElTag>
-            </template>
-          </ElTableColumn>
-          <ElTableColumn label="连接" min-width="180">
-            <template #default="{ row }">
-              <span v-if="row.protocol === 'modbus_tcp'">{{ row.host }}:{{ row.port }} / #{{ row.slave_id }}</span>
-              <span v-else-if="row.protocol === 'modbus_rtu'">{{ row.serial_port }} / {{ row.baudrate }}bps</span>
-              <span v-else-if="row.protocol === 'mqtt'">{{ row.broker_url || '—' }}</span>
-              <span v-else-if="row.protocol === 'opcua'">{{ row.endpoint_url || '—' }}</span>
-              <span v-else>—</span>
-            </template>
-          </ElTableColumn>
-          <ElTableColumn label="状态" width="90">
-            <template #default="{ row }">
-              <ElTag :type="statusType(row.status)">{{ statusText(row.status) }}</ElTag>
-            </template>
-          </ElTableColumn>
-          <ElTableColumn prop="description" label="描述" min-width="160" show-overflow-tooltip />
-          <ElTableColumn label="操作" width="280" fixed="right">
-            <template #default="{ row }">
-              <ElButton link type="primary" @click="router.push(`/device/detail/${row.id}`)"
-                >详情</ElButton
-              >
-              <ElButton v-hasPermi="['device.write']" link type="primary" @click="openEdit(row)"
-                >编辑</ElButton
-              >
-              <ElButton v-hasPermi="['device.write']" link type="primary" @click="openDuplicate(row)"
-                >复制</ElButton
-              >
-              <ElButton v-hasPermi="['device.write']" link type="danger" @click="remove(row)"
-                >删除</ElButton
-              >
-            </template>
-          </ElTableColumn>
-        </ElTable>
-
-        <div class="flex justify-end mt-16px">
-          <ElPagination
-            v-model:current-page="query.page"
-            v-model:page-size="query.page_size"
-            :total="total"
-            :page-sizes="[10, 20, 30, 50]"
-            layout="total, sizes, prev, pager, next"
-            @current-change="fetchList"
-            @size-change="((query.page = 1), fetchList())"
-          />
-        </div>
-      </div>
+    <div class="flex justify-end mt-16px">
+      <ElPagination
+        v-model:current-page="query.page"
+        v-model:page-size="query.page_size"
+        :total="total"
+        :page-sizes="[10, 20, 30, 50]"
+        layout="total, sizes, prev, pager, next"
+        @current-change="fetchList"
+        @size-change="((query.page = 1), fetchList())"
+      />
     </div>
 
     <!-- 新增/编辑对话框 -->
@@ -484,7 +547,12 @@ onMounted(() => {
             <ElInput v-model="form.mqtt_username" placeholder="可选" />
           </ElFormItem>
           <ElFormItem label="密码">
-            <ElInput v-model="form.mqtt_password" type="password" placeholder="可选" show-password />
+            <ElInput
+              v-model="form.mqtt_password"
+              type="password"
+              placeholder="可选"
+              show-password
+            />
           </ElFormItem>
           <ElFormItem label="QoS">
             <ElSelect v-model="form.mqtt_qos" class="w-full">
@@ -502,7 +570,8 @@ onMounted(() => {
               class="font-mono"
             />
             <div class="text-12px text-gray-400 mt-4px">
-              占位符：${device_id} ${device_name} ${timestamp} ${timestamp_ms} ${values_json} ${values_detail}
+              占位符：${device_id} ${device_name} ${timestamp} ${timestamp_ms} ${values_json}
+              ${values_detail}
             </div>
           </ElFormItem>
         </template>

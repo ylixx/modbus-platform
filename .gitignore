@@ -17,6 +17,8 @@ venv/
 *.db-shm
 *.db-wal
 *.sqlite3
+*.db.bak_*
+*.bak_*
 
 # Build output
 dist/

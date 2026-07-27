@@ -204,6 +204,19 @@ export default [
                   meta: {
                     title: '菜单2'
                   }
+                },
+                {
+                  path: 'org-cascade',
+                  name: 'OrgCascade',
+                  component: 'views/Level/OrgCascade',
+                  status: Mock.Random.integer(0, 1),
+                  id: 12,
+                  type: 1,
+                  parentId: 6,
+                  title: '关联列表框',
+                  meta: {
+                    title: '关联列表框'
+                  }
                 }
               ]
             },

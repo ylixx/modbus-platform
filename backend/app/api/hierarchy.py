@@ -118,6 +118,53 @@ def get_hierarchy_tree(
     return {"config": _parse_levels(cfg), "tree": tree}
 
 
+# ── Org cascade (关联列表框) ──
+
+@router.get("/org-tree")
+def get_org_cascade_tree(
+    with_devices: bool = True,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("hierarchy.read")),
+):
+    """组织架构级联数据（关联列表框）：厂区 → 班 → 站 → 位置 → 设备名称。
+
+    返回嵌套树，前端可将其逐层展开为多个关联列表框，并在最后一级列出设备名称。
+
+    - with_devices=true（默认）：设备作为叶子节点返回，便于纵览整体结构（演示/详情页用）。
+    - with_devices=false：仅返回层级结构（厂区/班/站/位置），不带设备，负载小；设备由前端按层级
+      范围单独查询 /devices 填充下拉框，避免设备量大时一次性加载全部。
+    """
+    levels = [
+        {"key": "factory",         "label": "厂区", "field": "factory",         "icon": "🏭"},
+        {"key": "production_line", "label": "班",   "field": "production_line", "icon": "👷"},
+        {"key": "workshop",        "label": "站",   "field": "workshop",        "icon": "📍"},
+        {"key": "installation",    "label": "位置", "field": "installation",    "icon": "📌"},
+        {"key": "device",          "label": "设备名称", "field": "_device",     "icon": "📡"},
+    ]
+    if with_devices:
+        # 组织架构展示全部设备（含未启用），便于纵览整体结构
+        devices = db.query(Device).order_by(Device.id).all()
+        tree = _build_tree(devices, levels)
+    else:
+        # 仅层级结构：用 DISTINCT 取 厂区/班/站/位置 的组合，避免加载全部设备
+        rows = (
+            db.query(Device.factory, Device.production_line, Device.workshop, Device.installation)
+            .distinct()
+            .all()
+        )
+        row_dicts = [
+            {
+                "factory": r[0] or "",
+                "production_line": r[1] or "",
+                "workshop": r[2] or "",
+                "installation": r[3] or "",
+            }
+            for r in rows
+        ]
+        tree = _build_hierarchy_only(row_dicts, levels[:-1])
+    return {"levels": levels, "tree": tree}
+
+
 # ── Available fields ──
 
 @router.get("/fields")
@@ -200,6 +247,38 @@ def _build_tree(devices: list, levels: list) -> list:
             "children": children,
         })
 
+    return result
+
+
+def _build_hierarchy_only(rows: list, levels: list) -> list:
+    """仅层级结构：根据 (厂区, 班, 站, 位置) 字典列表递归构建分组节点，不带设备叶子。"""
+    if not levels or not rows:
+        return []
+
+    level = levels[0]
+    field = level["field"]
+    remaining = levels[1:]
+    icon = level.get("icon", "")
+
+    groups: dict[str, list] = {}
+    for r in rows:
+        value = r.get(field) or ""
+        if not value:
+            value = f"未设置{level['label']}"
+        groups.setdefault(value, []).append(r)
+
+    result = []
+    for group_name, subgroup in sorted(groups.items()):
+        children = _build_hierarchy_only(subgroup, remaining) if remaining else []
+        result.append(
+            {
+                "label": group_name,
+                "type": "level",
+                "level_key": level["key"],
+                "icon": icon,
+                "children": children,
+            }
+        )
     return result
 
 

@@ -14,6 +14,14 @@ router = APIRouter(prefix="/orgs", tags=["组织架构"])
 
 NODE_TYPES = {"factory", "area", "team", "location", "other"}
 
+NODE_ICONS = {
+    "factory": "🏭",
+    "team": "👷",
+    "area": "📍",
+    "location": "📌",
+    "other": "🏢",
+}
+
 
 # ── Schemas ──
 
@@ -105,6 +113,86 @@ def get_org_tree(
     counts = _device_counts(db)
     visible = get_user_org_scope(db, current_user)
     return _build_tree(nodes, counts, visible)
+
+
+@router.get("/cascade")
+def get_org_cascade(
+    with_devices: bool = True,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("org.read")),
+):
+    """组织架构级联数据（关联列表框）：厂区→班→站→位置→设备名称。
+
+    返回与前端 OrgCascadeSelect 兼容的 {levels, tree} 形状：
+    - with_devices=true（默认）：设备在所属组织节点下作为叶子返回（演示/详情页用）。
+    - with_devices=false：仅返回组织节点结构（不含设备），设备由前端按 org_node_id
+      单独查询 /devices?org_node_id=<节点id>（自动展开子树），避免设备量大时一次性加载。
+    树节点带 id，便于前端按选中节点做子树筛选。
+    """
+    nodes = db.query(OrgNode).all()
+    visible = get_user_org_scope(db, current_user)
+    node_map = {n.id: n for n in nodes}
+    by_parent: dict = {}
+    for n in nodes:
+        by_parent.setdefault(n.parent_id, []).append(n.id)
+
+    devices_by_node: dict = {}
+    for d in db.query(Device).all():
+        if d.org_node_id is not None:
+            devices_by_node.setdefault(d.org_node_id, []).append(d)
+
+    def device_leaf(d: Device):
+        return {
+            "label": d.name,
+            "type": "device",
+            "icon": "📡",
+            "device": {
+                "id": d.id,
+                "name": d.name,
+                "protocol": d.protocol,
+                "status": d.status,
+                "factory": d.factory,
+                "workshop": d.workshop,
+                "production_line": d.production_line,
+                "installation": d.installation,
+                "group_id": d.group_id,
+                "host": d.host,
+                "port": d.port,
+                "mqtt_broker": d.mqtt_broker,
+                "opc_endpoint": d.opc_endpoint,
+            },
+        }
+
+    def build(nid: int):
+        if visible is not None and nid not in visible:
+            return None
+        n = node_map[nid]
+        children = []
+        for cid in by_parent.get(nid, []):
+            c = build(cid)
+            if c:
+                children.append(c)
+        if with_devices:
+            for d in devices_by_node.get(nid, []):
+                children.append(device_leaf(d))
+        return {
+            "id": n.id,
+            "label": n.name,
+            "type": "level",
+            "level_key": n.node_type or "other",
+            "icon": NODE_ICONS.get(n.node_type, "🏢"),
+            "children": children,
+        }
+
+    roots = [r for nid in by_parent.get(None, []) if (r := build(nid)) is not None]
+    levels = [
+        {"key": "factory", "label": "厂区", "field": "factory", "icon": "🏭"},
+        {"key": "team", "label": "班", "field": "team", "icon": "👷"},
+        {"key": "area", "label": "站", "field": "area", "icon": "📍"},
+        {"key": "location", "label": "位置", "field": "location", "icon": "📌"},
+        {"key": "device", "label": "设备名称", "field": "_device", "icon": "📡"},
+    ]
+    return {"levels": levels, "tree": roots}
 
 
 @router.get("", response_model=List[OrgNodeOut])
