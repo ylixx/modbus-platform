@@ -180,7 +180,7 @@ onMounted(fetchDevices)
         </div>
         <ElInput
           v-model="confirmText"
-          placeholder="请输入"确认""
+          placeholder="请输入'确认'"
           @keyup.enter="confirmAndWrite"
         />
       </div>

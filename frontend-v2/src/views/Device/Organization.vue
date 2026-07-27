@@ -24,13 +24,22 @@ defineOptions({ name: 'Organization' })
 const NODE_TYPES = [
   { value: 'factory', label: '厂级' },
   { value: 'area', label: '区级' },
-  { value: 'team', label: '班组级' },
+  { value: 'team', label: '班级' },
+  { value: 'station', label: '站级' },
   { value: 'location', label: '位置' },
   { value: 'other', label: '其他' }
 ]
 const nodeTypeLabel = (t?: string) => NODE_TYPES.find((o) => o.value === t)?.label || (t || '其他')
 const nodeTypeTag = (t?: string) =>
-  t === 'factory' ? 'danger' : t === 'area' ? 'warning' : t === 'team' ? 'success' : 'info'
+  t === 'factory'
+    ? 'danger'
+    : t === 'area'
+      ? 'warning'
+      : t === 'team'
+        ? 'success'
+        : t === 'station'
+          ? 'primary'
+          : 'info'
 
 const NodeRow = defineComponent({
   name: 'NodeRow',
@@ -157,7 +166,7 @@ const remove = async (data: any) => {
     ElMessage.success('删除成功')
     fetchTree()
   } catch (e: any) {
-    const msg = e?.response?.data?.detail || e?.message || ''
+    const msg = e?.response?.data?.detail || e?.response?.data?.message || e?.message || ''
     if (msg.includes('设备')) {
       await ElMessageBox.confirm(`${msg}，是否强制删除（将解除相关设备归属）？`, '提示', {
         type: 'warning',

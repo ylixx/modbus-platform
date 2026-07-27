@@ -88,9 +88,11 @@ class ModbusEngineV2:
         finally:
             db.close()
 
-        # 等待所有任务（或直到 stop）
-        if self._tasks:
-            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        # 常驻：保持事件循环存活（即使启动时无启用设备），
+        # 否则 run_until_complete 立即返回 → loop 被 close，
+        # 之后 reload_device 无法动态启动新设备任务。
+        while self._running:
+            await asyncio.sleep(1)
 
     def _start_device_task(self, device: Device):
         device_id = device.id

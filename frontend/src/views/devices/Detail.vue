@@ -287,11 +287,26 @@ function showTagDialog(tag) {
 
 async function saveTag() {
   if (!tagForm.name) { ElMessage.warning('请输入名称'); return }
+  const proto = device.value?.protocol || 'modbus_tcp'
+  if ((proto === 'modbus_tcp' || proto === 'modbus_rtu') && !tagForm.function_code) {
+    ElMessage.warning('功能码为必选项，请选择功能码'); return
+  }
+  if (proto === 'mqtt' && !String(tagForm.mqtt_topic || '').trim() && !device.value?.mqtt_topic_prefix) {
+    ElMessage.warning('MQTT 点位必须填写订阅主题（或先在设备上配置 Topic 前缀）'); return
+  }
+  if (proto === 'opc_ua' && !String(tagForm.opc_node_id || '').trim()) {
+    ElMessage.warning('OPC UA 点位必须填写 Node ID，如 ns=2;s=Temperature'); return
+  }
   const payload = { ...tagForm, device_id: parseInt(deviceId) }
-  if (editingTagId.value) {
-    await api.put(`/devices/tags/${editingTagId.value}`, payload)
-  } else {
-    await api.post('/devices/tags', payload)
+  try {
+    if (editingTagId.value) {
+      await api.put(`/devices/tags/${editingTagId.value}`, payload)
+    } else {
+      await api.post('/devices/tags', payload)
+    }
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e?.response?.data?.message || '保存失败')
+    return
   }
   ElMessage.success('保存成功')
   tagDialogVisible.value = false

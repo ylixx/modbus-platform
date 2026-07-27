@@ -10,8 +10,14 @@ const props = withDefaults(
   defineProps<{
     modelValue?: number[]
     path?: OrgPath | null
+    // 是否显示「设备名称」多选框；为 false 时（如设备管理页改用表格行勾选）
+    // 不再加载并渲染全量设备，避免大数据量下卡顿
+    showDeviceSelect?: boolean
+    // footer 是否显示「已选 N 台 / 全选当前 / 清空已选」操作；
+    // 设备管理页在自身工具栏放置了这些按钮，故传 false 关闭，避免重复
+    showDeviceActions?: boolean
   }>(),
-  { modelValue: () => [], path: null }
+  { modelValue: () => [], path: null, showDeviceSelect: true, showDeviceActions: true }
 )
 const emit = defineEmits<{
   'update:modelValue': [number[]]
@@ -22,7 +28,7 @@ const emit = defineEmits<{
 const loading = ref(false)
 const levels = ref<OrgLevel[]>([])
 const tree = ref<OrgNode[]>([])
-// 分组层级（厂区/班/站/位置）的当前选中节点
+// 分组层级（厂/区/班/站/位置）的当前选中节点
 const selections = ref<(OrgNode | null)[]>([])
 // 设备下拉选项：仅在级联改变时按范围从 /devices 查询，默认不加载全部设备
 const deviceOptions = ref<OrgDevice[]>([])
@@ -87,37 +93,31 @@ function onGroupChange(index: number, val: string | null) {
   for (let i = index + 1; i < selections.value.length; i++) selections.value[i] = null
   selections.value = [...selections.value]
   emit('update:path', buildPath())
-  // 层级变化：清空已选设备，并按新范围查询设备下拉项
-  selectedIds.value = []
-  fetchDeviceOptions()
+  // 层级变化：清空已选设备与旧搜索结果；设备框改为「输入关键词才搜索」，不再预读全量
+  if (props.showDeviceSelect) {
+    selectedIds.value = []
+    deviceOptions.value = []
+  }
 }
 
-// 按当前层级范围查询设备（用于填充设备下拉框）
-// 注意：后端 page_size 上限为 100（Query(..., le=100)），超过会返回 422。
-// 故用 page_size=100 且分页循环拉取，确保范围设备超过 100 台时也能全部载入。
-async function fetchDeviceOptions() {
+// 设备框远程搜索：输入关键词时才按名称/主机查询（不预读全量，避免卡顿）
+// 支持在当前层级范围内（org_node_id）过滤；关键词为空时返回范围内前 50 条作为提示
+async function remoteSearch(query: string) {
   const p = buildPath()
-  if (!p) {
+  if (!p && !query) {
     deviceOptions.value = []
     return
   }
   loadingDevices.value = true
   try {
-    const all: any[] = []
-    let page = 1
-    const PAGE_SIZE = 100
-    while (true) {
-      const res = await getDevices({
-        page,
-        page_size: PAGE_SIZE,
-        org_node_id: p.org_node_id ?? undefined
-      })
-      const { list, total } = unwrapList(res)
-      all.push(...list)
-      if (all.length >= total || list.length < PAGE_SIZE) break
-      page += 1
-    }
-    deviceOptions.value = all
+    const res = await getDevices({
+      page: 1,
+      page_size: 50,
+      org_node_id: p?.org_node_id ?? undefined,
+      search: query || undefined
+    })
+    const { list } = unwrapList(res)
+    deviceOptions.value = list
   } finally {
     loadingDevices.value = false
   }
@@ -191,12 +191,12 @@ onMounted(async () => {
 })
 
 // 暴露给宿主页面调用
-defineExpose({ clearPath, clearSelection, resetAll })
+defineExpose({ clearPath, clearSelection, resetAll, selectAllVisible, deviceOptionCount: computed(() => deviceOptions.value.length) })
 </script>
 
 <template>
   <div class="org-cascade" v-loading="loading">
-    <!-- 一行级联下拉框：厂区/班/站/位置 + 设备名称(可输入/检索/多选/逗号分隔) -->
+    <!-- 一行级联下拉框：厂/区/班/站/位置 + 设备名称(可输入/检索/多选/逗号分隔) -->
     <div class="oc-bar">
       <ElSelect
         v-for="(lv, i) in groupLevels"
@@ -216,14 +216,15 @@ defineExpose({ clearPath, clearSelection, resetAll })
       </ElSelect>
 
       <ElSelect
+        v-if="showDeviceSelect"
         :model-value="selectedIds"
-        :disabled="!hasCascade"
         :loading="loadingDevices"
-        :placeholder="hasCascade ? deviceLevel?.label || '设备名称' : '请先选择上级层级'"
+        remote
+        :remote-method="remoteSearch"
+        remote-show-suffix
+        :placeholder="hasCascade ? '输入设备名/主机搜索' : '输入设备名/主机搜索（不限层级）'"
         multiple
         filterable
-        allow-create
-        default-first-option
         collapse-tags
         collapse-tags-tooltip
         clearable
@@ -245,13 +246,12 @@ defineExpose({ clearPath, clearSelection, resetAll })
       <ElButton @click="resetAll">重置</ElButton>
     </div>
 
-    <!-- 底部摘要 + 批量快捷操作 -->
-    <div class="oc-footer">
+    <!-- 底部摘要 + 批量快捷操作（showDeviceActions 控制，设备管理页关闭） -->
+    <div v-if="showDeviceActions && showDeviceSelect" class="oc-footer">
       <span v-if="selectedIds.length" class="oc-sel"
         >已选 <b>{{ selectedIds.length }}</b> 台设备</span
       >
       <span v-else class="oc-sel muted">未选择设备（显示全部）</span>
-      <span v-if="path" class="oc-path"> 层级筛选：{{ path.labels.join(' / ') }} </span>
       <span class="oc-actions">
         <ElButton link type="primary" :disabled="!deviceOptions.length" @click="selectAllVisible"
           >全选当前</ElButton

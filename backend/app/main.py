@@ -273,7 +273,8 @@ app.include_router(templates.router, prefix=prefix)
 app.include_router(scripts.router, prefix=prefix)
 app.include_router(config_export.router, prefix=prefix)
 app.include_router(lab_data.router, prefix=prefix)
-app.include_router(websocket.router)
+app.include_router(websocket.router)          # 兼容 v1 前端: /ws
+app.include_router(websocket.router, prefix=prefix)  # v2 前端: /api/v1/ws
 
 
 @app.get("/")

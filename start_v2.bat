@@ -1,7 +1,7 @@
 @echo off
 REM Modbus 平台一键启动（前端运行 V2，端口 3001）
 setlocal
-set ROOT=E:\zigbee\modbus-platform
+set ROOT=E:\modbus-platform
 set NODE=C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2
 set PATH=%NODE%;%PATH%
 set PYTHON=%ROOT%\backend\.venv\Scripts\python.exe

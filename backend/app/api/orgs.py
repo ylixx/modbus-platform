@@ -1,4 +1,4 @@
-"""Organization structure API — 组织架构（厂-区-班组-位置 灵活树）."""
+"""Organization structure API — 组织架构（厂-区-班-站-位置 灵活树）."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -12,12 +12,13 @@ from app.services.org_service import expand_org_subtree, get_user_org_scope
 
 router = APIRouter(prefix="/orgs", tags=["组织架构"])
 
-NODE_TYPES = {"factory", "area", "team", "location", "other"}
+NODE_TYPES = {"factory", "area", "team", "station", "location", "other"}
 
 NODE_ICONS = {
     "factory": "🏭",
-    "team": "👷",
     "area": "📍",
+    "team": "👷",
+    "station": "⛽",
     "location": "📌",
     "other": "🏢",
 }
@@ -121,7 +122,7 @@ def get_org_cascade(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.read")),
 ):
-    """组织架构级联数据（关联列表框）：厂区→班→站→位置→设备名称。
+    """组织架构级联数据（关联列表框）：厂→区→班→站→位置→设备名称。
 
     返回与前端 OrgCascadeSelect 兼容的 {levels, tree} 形状：
     - with_devices=true（默认）：设备在所属组织节点下作为叶子返回（演示/详情页用）。
@@ -186,9 +187,10 @@ def get_org_cascade(
 
     roots = [r for nid in by_parent.get(None, []) if (r := build(nid)) is not None]
     levels = [
-        {"key": "factory", "label": "厂区", "field": "factory", "icon": "🏭"},
+        {"key": "factory", "label": "厂", "field": "factory", "icon": "🏭"},
+        {"key": "area", "label": "区", "field": "area", "icon": "📍"},
         {"key": "team", "label": "班", "field": "team", "icon": "👷"},
-        {"key": "area", "label": "站", "field": "area", "icon": "📍"},
+        {"key": "station", "label": "站", "field": "station", "icon": "⛽"},
         {"key": "location", "label": "位置", "field": "location", "icon": "📌"},
         {"key": "device", "label": "设备名称", "field": "_device", "icon": "📡"},
     ]

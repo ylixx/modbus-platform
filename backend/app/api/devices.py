@@ -26,6 +26,35 @@ def _ensure_device_visible(db: Session, user: User, device_id: int):
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权访问该设备（超出组织数据范围）")
 
 
+def _org_path_map(db: Session) -> dict:
+    """构建 {org_node_id: '厂 / 区 / 班 / 站 / 位置'} 全路径映射（一次查询，内存拼接）。"""
+    from app.models.org import OrgNode
+    nodes = db.query(OrgNode.id, OrgNode.name, OrgNode.parent_id).all()
+    by_id = {n.id: (n.name, n.parent_id) for n in nodes}
+    cache: dict = {}
+
+    def build(nid, depth=0):
+        if nid in cache:
+            return cache[nid]
+        info = by_id.get(nid)
+        if info is None or depth > 20:  # 防环
+            return ""
+        name, pid = info
+        parent = build(pid, depth + 1) if pid else ""
+        path = f"{parent} / {name}" if parent else name
+        cache[nid] = path
+        return path
+
+    return {nid: build(nid) for nid in by_id}
+
+
+def _device_out(device: Device, pmap: dict) -> DeviceOut:
+    out = DeviceOut.model_validate(device)
+    if device.org_node_id:
+        out.org_path = pmap.get(device.org_node_id, "")
+    return out
+
+
 # ============ Device Groups ============
 
 @router.get("/groups", response_model=List[GroupOut])
@@ -126,13 +155,15 @@ def list_devices(
         q = q.filter(Device.name.contains(search) | Device.host.contains(search))
     total = q.count()
     items = q.order_by(Device.id).offset((page - 1) * page_size).limit(page_size).all()
-    return PageResponse(total=total, page=page, page_size=page_size, data=[DeviceOut.model_validate(i) for i in items])
+    pmap = _org_path_map(db)
+    return PageResponse(total=total, page=page, page_size=page_size, data=[_device_out(i, pmap) for i in items])
 
 
 @router.get("/all", response_model=List[DeviceOut])
 def list_all_devices(db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.read"))):
     q = apply_device_org_filter(db.query(Device), db, current_user)
-    return q.order_by(Device.id).all()
+    pmap = _org_path_map(db)
+    return [_device_out(i, pmap) for i in q.order_by(Device.id).all()]
 
 
 @router.get("/{device_id}", response_model=DeviceDetailOut)
@@ -141,7 +172,10 @@ def get_device(device_id: int, db: Session = Depends(get_db), current_user: User
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
     _ensure_device_visible(db, current_user, device_id)
-    return device
+    out = DeviceDetailOut.model_validate(device)
+    if device.org_node_id:
+        out.org_path = _org_path_map(db).get(device.org_node_id, "")
+    return out
 
 
 @router.post("", response_model=DeviceOut)
@@ -154,8 +188,9 @@ def create_device(req: DeviceCreate, db: Session = Depends(get_db), _: User = De
     try:
         from app.engine.protocol_router import protocol_router
         protocol_router.reload_device(device.id, device.protocol)
-    except Exception:
-        pass
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"reload_device({device.id}) failed: {e}")
     return device
 
 
@@ -165,16 +200,30 @@ def update_device(device_id: int, req: DeviceUpdate, db: Session = Depends(get_d
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
     old_protocol = device.protocol
-    for k, v in req.model_dump(exclude_unset=True).items():
+    data = req.model_dump(exclude_unset=True)
+    for k, v in data.items():
         setattr(device, k, v)
+    # 显式禁用设备：立即将状态置为离线并广播，避免列表仍显示「在线」
+    if data.get('enabled') is False:
+        device.status = 'offline'
+        device.last_error = '已手动禁用'
     db.commit()
     db.refresh(device)
     # Reload engine with updated config
     try:
         from app.engine.protocol_router import protocol_router
         protocol_router.reload_device(device.id, device.protocol)
-    except Exception:
-        pass
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"reload_device({device.id}) failed: {e}")
+    # 禁用后推送状态变化（前端列表刷新即可看到离线，WS 实时推送更快）
+    if data.get('enabled') is False:
+        try:
+            from app.engine.websocket_manager import push_device_status
+            push_device_status(device.id, device.name, 'offline', '已手动禁用')
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"push_device_status(disabled {device.id}) failed: {e}")
     return device
 
 
@@ -291,10 +340,33 @@ def list_tags(device_id: int, db: Session = Depends(get_db), current_user: User 
     return db.query(DeviceTag).filter(DeviceTag.device_id == device_id).order_by(DeviceTag.sort_order, DeviceTag.id).all()
 
 
+VALID_FUNCTION_CODES = {"coil", "discrete_input", "input_register", "holding_register"}
+
+
+def _validate_tag_required(device: Device, function_code: str, mqtt_topic: str, opc_node_id: str, tag_name: str = ""):
+    """按设备协议校验点位必填字段（Modbus 功能码 / MQTT 订阅主题 / OPC 节点ID）。"""
+    prefix = f"点位「{tag_name}」" if tag_name else "点位"
+    protocol = device.protocol
+    if protocol in ("modbus_tcp", "modbus_rtu"):
+        if not function_code:
+            raise HTTPException(status_code=400, detail=f"{prefix}：功能码为必选项，请选择 线圈/离散输入/输入寄存器/保持寄存器")
+        if function_code not in VALID_FUNCTION_CODES:
+            raise HTTPException(status_code=400, detail=f"{prefix}：功能码 '{function_code}' 无效，可选值：{'/'.join(sorted(VALID_FUNCTION_CODES))}")
+    elif protocol == "mqtt":
+        # 点位 topic 可留空回退到 设备Topic前缀/点位名，两者都空才拒绝
+        if not (mqtt_topic or "").strip() and not (getattr(device, "mqtt_topic_prefix", "") or "").strip():
+            raise HTTPException(status_code=400, detail=f"{prefix}：MQTT 设备必须填写订阅主题 (mqtt_topic)，或先在设备上配置 Topic 前缀")
+    elif protocol == "opc_ua":
+        if not (opc_node_id or "").strip():
+            raise HTTPException(status_code=400, detail=f"{prefix}：OPC UA 设备必须填写节点ID (opc_node_id)，如 ns=2;s=Temperature")
+
+
 @router.post("/tags", response_model=TagOut)
 def create_tag(req: TagCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
-    if not db.query(Device).filter(Device.id == req.device_id).first():
+    device = db.query(Device).filter(Device.id == req.device_id).first()
+    if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
+    _validate_tag_required(device, req.function_code, req.mqtt_topic, req.opc_node_id, req.name)
     tag = DeviceTag(**req.model_dump())
     db.add(tag)
     db.commit()
@@ -309,6 +381,9 @@ def update_tag(tag_id: int, req: TagUpdate, db: Session = Depends(get_db), _: Us
         raise HTTPException(status_code=404, detail="Tag不存在")
     for k, v in req.model_dump(exclude_unset=True).items():
         setattr(tag, k, v)
+    device = db.query(Device).filter(Device.id == tag.device_id).first()
+    if device:
+        _validate_tag_required(device, tag.function_code, tag.mqtt_topic, tag.opc_node_id, tag.name)
     db.commit()
     db.refresh(tag)
     return tag
@@ -327,7 +402,14 @@ def delete_tag(tag_id: int, db: Session = Depends(get_db), _: User = Depends(req
 @router.post("/tags/batch", response_model=List[TagOut])
 def batch_create_tags(tags: List[TagCreate], db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
     result = []
+    device_cache: dict = {}
     for req in tags:
+        if req.device_id not in device_cache:
+            device_cache[req.device_id] = db.query(Device).filter(Device.id == req.device_id).first()
+        device = device_cache[req.device_id]
+        if not device:
+            raise HTTPException(status_code=404, detail=f"点位「{req.name}」：设备 {req.device_id} 不存在")
+        _validate_tag_required(device, req.function_code, req.mqtt_topic, req.opc_node_id, req.name)
         tag = DeviceTag(**req.model_dump())
         db.add(tag)
         result.append(tag)

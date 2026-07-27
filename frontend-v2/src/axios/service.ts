@@ -42,7 +42,7 @@ axiosInstance.interceptors.response.use(
       userStore.logout()
     }
     const data = error.response?.data as any
-    const msg = (data && data.detail) || error.message || '请求失败'
+    const msg = (data && (data.detail || data.message)) || error.message || '请求失败'
     ElMessage.error(msg)
     return Promise.reject(error)
   }

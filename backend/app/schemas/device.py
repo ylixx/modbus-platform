@@ -250,6 +250,7 @@ class DeviceOut(BaseModel):
     description: str
     group_id: Optional[int]
     org_node_id: Optional[int] = None
+    org_path: str = ""  # 组织架构全路径：厂 / 区 / 班 / 站 / 位置
     protocol: str
 
     factory: str

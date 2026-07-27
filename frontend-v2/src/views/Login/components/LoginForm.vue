@@ -22,7 +22,8 @@ const userStore = useUserStore()
 
 const permissionStore = usePermissionStore()
 
-const { currentRoute, addRoute, push } = useRouter()
+const router = useRouter()
+const { currentRoute, addRoute, push } = router
 
 const { t } = useI18n()
 

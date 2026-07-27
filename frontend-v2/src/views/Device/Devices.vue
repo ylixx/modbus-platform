@@ -29,7 +29,10 @@ import {
   deleteDevice,
   duplicateDevice,
   getOrgTree,
-  unwrapList
+  unwrapList,
+  exportDevicesCsv,
+  getImportTemplateDevices,
+  importDevices
 } from '@/api/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
@@ -51,9 +54,20 @@ const orgTree = ref<any[]>([])
 const cascadeRef = ref()
 // 级联选择结果：{ org_node_id, labels }（org_node_id 用于按组织架构子树筛选设备）
 const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
-const selectedIds = ref<number[]>([])
+const selectedIds = ref<number[]>([]) // 设备名称框（远程搜索）选中的设备
+const checkedIds = ref<number[]>([]) // 设备表格行勾选选中的设备
+// 两种选择方式合并后用于批量操作
+const effectiveIds = computed(() => Array.from(new Set([...selectedIds.value, ...checkedIds.value])))
+const tableRef = ref()
+// 表格行勾选变化
+const onTableSelection = (rows: any[]) => {
+  checkedIds.value = rows.map((r) => r.id)
+}
 const onPathChange = (p: { org_node_id: number | null; labels: string[] } | null) => {
   query.org_node_id = p?.org_node_id ?? null
+  query.page = 1
+  // 层级筛选变化：清空表格勾选，避免跨范围残留选中
+  tableRef.value?.clearSelection()
 }
 
 const statusType = (s?: string) => {
@@ -73,8 +87,7 @@ const fetchList = async () => {
     const res = await getDevices({
       page: query.page,
       page_size: query.page_size,
-      org_node_id: query.org_node_id ?? undefined,
-      ids: selectedIds.value.length ? selectedIds.value.join(',') : undefined
+      org_node_id: query.org_node_id ?? undefined
     })
     const { list: l, total: t } = unwrapList(res)
     list.value = l
@@ -98,45 +111,121 @@ const clearOrgFilter = () => {
 // ── 批量操作（基于关联列表框多选） ──
 const batchBusy = ref(false)
 const batchEnable = async (enabled: boolean) => {
-  if (!selectedIds.value.length) return
+  if (!effectiveIds.value.length) return
   await ElMessageBox.confirm(
-    `确认${enabled ? '启用' : '禁用'}选中的 ${selectedIds.value.length} 台设备？`,
+    `确认${enabled ? '启用' : '禁用'}选中的 ${effectiveIds.value.length} 台设备？`,
     '批量操作',
     { type: 'warning' }
   )
   batchBusy.value = true
   try {
-    for (const id of selectedIds.value) {
+    for (const id of effectiveIds.value) {
       await updateDevice(id, { enabled })
     }
-    ElMessage.success(`已${enabled ? '启用' : '禁用'} ${selectedIds.value.length} 台设备`)
-    selectedIds.value = []
+    ElMessage.success(`已${enabled ? '启用' : '禁用'} ${effectiveIds.value.length} 台设备`)
+    clearAllSelection()
     fetchList()
   } finally {
     batchBusy.value = false
   }
 }
 const batchDelete = async () => {
-  if (!selectedIds.value.length) return
+  if (!effectiveIds.value.length) return
   await ElMessageBox.confirm(
-    `确认删除选中的 ${selectedIds.value.length} 台设备？此操作不可恢复`,
+    `确认删除选中的 ${effectiveIds.value.length} 台设备？此操作不可恢复`,
     '批量删除',
     { type: 'warning' }
   )
   batchBusy.value = true
   try {
-    for (const id of selectedIds.value) {
+    for (const id of effectiveIds.value) {
       await deleteDevice(id)
     }
-    ElMessage.success(`已删除 ${selectedIds.value.length} 台设备`)
-    selectedIds.value = []
+    ElMessage.success(`已删除 ${effectiveIds.value.length} 台设备`)
+    clearAllSelection()
     fetchList()
   } finally {
     batchBusy.value = false
   }
 }
-const clearSelection = () => {
+const clearAllSelection = () => {
   selectedIds.value = []
+  checkedIds.value = []
+  tableRef.value?.clearSelection()
+  cascadeRef.value?.clearSelection()
+}
+// 「全选当前」：针对表格——勾选当前页全部设备行（跨页通过 reserve-selection 保留，可累计）
+const selectAllCurrent = () => {
+  if (!list.value.length) return
+  list.value.forEach((row) => tableRef.value?.toggleRowSelection(row, true))
+}
+
+// ── 导入 / 导出 ──
+const saveBlob = (res: any, fallbackName: string) => {
+  const blob = res?.data instanceof Blob ? res.data : new Blob([res?.data ?? res])
+  const cd: string = res?.headers?.['content-disposition'] || ''
+  const m = cd.match(/filename="?([^";]+)"?/)
+  const name = m ? decodeURIComponent(m[1]) : fallbackName
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const exporting = ref(false)
+const doExport = async () => {
+  exporting.value = true
+  try {
+    const res: any = await exportDevicesCsv()
+    saveBlob(res, `devices_${new Date().toISOString().slice(0, 10)}.csv`)
+    ElMessage.success('导出成功')
+  } finally {
+    exporting.value = false
+  }
+}
+
+const importDialogVisible = ref(false)
+const importing = ref(false)
+const importFile = ref<File | null>(null)
+const importResult = ref<{ created: number; errors: string[] } | null>(null)
+const fileInputRef = ref<HTMLInputElement>()
+
+const openImport = () => {
+  importFile.value = null
+  importResult.value = null
+  importDialogVisible.value = true
+}
+const onFilePick = (e: Event) => {
+  const f = (e.target as HTMLInputElement).files?.[0] || null
+  importFile.value = f
+  importResult.value = null
+}
+const downloadTemplate = async () => {
+  const res: any = await getImportTemplateDevices()
+  saveBlob(res, 'device_template.csv')
+}
+const doImport = async () => {
+  if (!importFile.value) {
+    ElMessage.warning('请先选择 CSV 文件')
+    return
+  }
+  importing.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', importFile.value)
+    const res: any = await importDevices(fd)
+    const body = res?.data || res
+    importResult.value = { created: body?.created ?? 0, errors: body?.errors ?? [] }
+    ElMessage.success(body?.message || '导入完成')
+    if (fileInputRef.value) fileInputRef.value.value = ''
+    importFile.value = null
+    fetchList()
+    fetchOrgTree()
+  } finally {
+    importing.value = false
+  }
 }
 
 // ── 协议选项 ──
@@ -351,6 +440,7 @@ onMounted(() => {
     <!-- 关联列表框筛选器（厂区/班/站/位置/设备名称 + 多选） -->
     <OrgCascadeSelect
       ref="cascadeRef"
+      :show-device-actions="false"
       v-model="selectedIds"
       v-model:path="orgPath"
       @update:path="onPathChange"
@@ -358,48 +448,73 @@ onMounted(() => {
       class="mb-12px"
     />
 
-    <!-- 批量操作栏 -->
-    <div
-      v-if="selectedIds.length"
-      class="flex items-center gap-10px mb-12px px-12px py-10px rounded border border-solid border-gray-200 bg-gray-50"
-    >
-      <span class="text-13px"
-        >已选 <b class="text-primary">{{ selectedIds.length }}</b> 台设备</span
-      >
-      <ElButton :loading="batchBusy" size="small" type="success" @click="batchEnable(true)"
-        >批量启用</ElButton
-      >
-      <ElButton :loading="batchBusy" size="small" @click="batchEnable(false)">批量禁用</ElButton>
-      <ElButton :loading="batchBusy" size="small" type="danger" @click="batchDelete"
-        >批量删除</ElButton
-      >
-      <ElButton size="small" link type="primary" @click="clearSelection">清空选择</ElButton>
-    </div>
-
-    <!-- 搜索 + 新增 -->
+    <!-- 搜索 + 新增 + 批量操作（统一同一排，按钮高度与「搜索/重置」一致，批量删除不重复） -->
     <div class="flex items-center justify-between mb-12px">
       <div class="flex items-center gap-10px">
         <ElButton
           v-if="orgPath"
           link
           type="primary"
-          size="small"
           @click="(cascadeRef?.clearPath(), fetchList())"
           >清除层级筛选</ElButton
         >
+        <span v-if="effectiveIds.length" class="text-13px"
+          >已选 <b class="text-primary">{{ effectiveIds.length }}</b> 台设备</span
+        >
       </div>
-      <ElButton v-hasPermi="['device.write']" type="success" @click="openCreate">新增设备</ElButton>
+      <div class="flex items-center gap-10px">
+        <ElButton v-hasPermi="['device.write']" type="success" @click="openCreate"
+          >新增设备</ElButton
+        >
+        <ElButton v-hasPermi="['device.write']" type="primary" plain @click="openImport"
+          >导入</ElButton
+        >
+        <ElButton :loading="exporting" plain @click="doExport">导出</ElButton>
+        <ElButton
+          :disabled="!list.length"
+          title="勾选当前表格页全部设备行（跨页保留，翻页后可累计）"
+          @click="selectAllCurrent"
+          >全选当前</ElButton
+        >
+        <ElButton
+          :disabled="!effectiveIds.length"
+          @click="clearAllSelection"
+          >清空选择</ElButton
+        >
+        <ElButton
+          :loading="batchBusy"
+          :disabled="!effectiveIds.length"
+          @click="batchEnable(true)"
+          >批量启用</ElButton
+        >
+        <ElButton
+          :loading="batchBusy"
+          :disabled="!effectiveIds.length"
+          @click="batchEnable(false)"
+          >批量禁用</ElButton
+        >
+        <ElButton
+          type="danger"
+          :loading="batchBusy"
+          :disabled="!effectiveIds.length"
+          @click="batchDelete"
+          >批量删除</ElButton
+        >
+      </div>
     </div>
 
-    <ElTable v-loading="loading" :data="list" border stripe>
+    <ElTable ref="tableRef" v-loading="loading" :data="list" row-key="id" border stripe @selection-change="onTableSelection">
+      <ElTableColumn type="selection" width="50" :reserve-selection="true" />
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
       <ElTableColumn label="层级" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">
           <span class="text-gray-500">{{
-            [row.factory, row.production_line, row.workshop, row.installation]
+            row.org_path ||
+            [row.factory, row.workshop, row.production_line, row.installation]
               .filter(Boolean)
-              .join(' / ') || '—'
+              .join(' / ') ||
+            '—'
           }}</span>
         </template>
       </ElTableColumn>
@@ -622,6 +737,50 @@ onMounted(() => {
       <template #footer>
         <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">确定</ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- 设备导入对话框 -->
+    <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px">
+      <ElAlert
+        title="请使用 CSV 模板格式填写设备数据后上传，重名设备会被跳过"
+        type="info"
+        :closable="false"
+        class="mb-16px"
+      />
+      <div class="flex items-center gap-10px mb-16px">
+        <ElButton link type="primary" @click="downloadTemplate">下载导入模板 (CSV)</ElButton>
+      </div>
+      <div class="mb-16px">
+        <input
+          ref="fileInputRef"
+          type="file"
+          accept=".csv,text/csv"
+          @change="onFilePick"
+          class="text-13px"
+        />
+      </div>
+      <div v-if="importFile" class="text-13px text-gray-500 mb-8px">
+        已选择：{{ importFile.name }}（{{ (importFile.size / 1024).toFixed(1) }} KB）
+      </div>
+      <div v-if="importResult" class="mt-8px">
+        <ElAlert
+          :title="`导入完成：成功 ${importResult.created} 条${importResult.errors.length ? `，失败 ${importResult.errors.length} 条` : ''}`"
+          :type="importResult.errors.length ? 'warning' : 'success'"
+          :closable="false"
+        />
+        <div
+          v-if="importResult.errors.length"
+          class="mt-8px max-h-160px overflow-auto text-12px text-red-500 leading-20px"
+        >
+          <div v-for="(err, i) in importResult.errors" :key="i">{{ err }}</div>
+        </div>
+      </div>
+      <template #footer>
+        <ElButton @click="importDialogVisible = false">关闭</ElButton>
+        <ElButton type="primary" :loading="importing" :disabled="!importFile" @click="doImport"
+          >开始导入</ElButton
+        >
       </template>
     </ElDialog>
 

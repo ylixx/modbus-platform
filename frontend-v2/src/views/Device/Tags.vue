@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
@@ -37,6 +37,15 @@ const currentDevice = ref<number | undefined>(undefined)
 const loading = ref(false)
 const list = ref<any[]>([])
 
+// 当前选中设备的协议（决定点位表单显示哪些必填字段）
+const currentProtocol = computed(() => {
+  const d = devices.value.find((x) => x.id === currentDevice.value)
+  return d?.protocol || 'modbus_tcp'
+})
+const isModbus = computed(() => ['modbus_tcp', 'modbus_rtu'].includes(currentProtocol.value))
+const isMqtt = computed(() => currentProtocol.value === 'mqtt')
+const isOpc = computed(() => currentProtocol.value === 'opc_ua')
+
 const fetchDevices = async () => {
   devices.value = unwrapList(await getAllDevices()).list
   if (devices.value.length && currentDevice.value == null) {
@@ -59,43 +68,58 @@ const fetchTags = async () => {
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增点位')
 const formRef = ref()
-const form = reactive<any>({
+const emptyForm = () => ({
   id: null,
   name: '',
+  // Modbus
+  function_code: '',
   address: 0,
-  data_type: 'int16',
-  register_type: 'holding',
+  data_type: 'uint16',
+  // MQTT
+  mqtt_topic: '',
+  mqtt_json_path: '',
+  mqtt_value_type: 'float64',
+  // OPC UA
+  opc_node_id: '',
+  opc_node_type: 'float64',
+  // 通用
   unit: '',
-  scale: 1,
+  scale_factor: 1,
   writable: false
 })
-const rules = {
-  name: [{ required: true, message: '请输入点位名称', trigger: 'blur' }]
-}
+const form = reactive<any>(emptyForm())
+const rules = computed(() => ({
+  name: [{ required: true, message: '请输入点位名称', trigger: 'blur' }],
+  ...(isModbus.value
+    ? { function_code: [{ required: true, message: '请选择功能码', trigger: 'change' }] }
+    : {}),
+  ...(isMqtt.value
+    ? { mqtt_topic: [{ required: true, message: '请输入订阅主题', trigger: 'blur' }] }
+    : {}),
+  ...(isOpc.value
+    ? { opc_node_id: [{ required: true, message: '请输入节点ID', trigger: 'blur' }] }
+    : {})
+}))
 const openCreate = () => {
   dialogTitle.value = '新增点位'
-  Object.assign(form, {
-    id: null,
-    name: '',
-    address: 0,
-    data_type: 'int16',
-    register_type: 'holding',
-    unit: '',
-    scale: 1,
-    writable: false
-  })
+  Object.assign(form, emptyForm())
   dialogVisible.value = true
 }
 const openEdit = (row: any) => {
   dialogTitle.value = '编辑点位'
-  Object.assign(form, {
+  Object.assign(form, emptyForm(), {
     id: row.id,
     name: row.name,
+    function_code: row.function_code || '',
     address: row.address ?? 0,
-    data_type: row.data_type || 'int16',
-    register_type: row.register_type || 'holding',
+    data_type: row.data_type || 'uint16',
+    mqtt_topic: row.mqtt_topic || '',
+    mqtt_json_path: row.mqtt_json_path || '',
+    mqtt_value_type: row.mqtt_value_type || 'float64',
+    opc_node_id: row.opc_node_id || '',
+    opc_node_type: row.opc_node_type || 'float64',
     unit: row.unit || '',
-    scale: row.scale ?? 1,
+    scale_factor: row.scale_factor ?? 1,
     writable: !!row.writable
   })
   dialogVisible.value = true
@@ -104,15 +128,20 @@ const submit = async () => {
   await formRef.value?.validate()
   const payload = { ...form, device_id: currentDevice.value }
   delete payload.id
-  if (form.id) {
-    await updateTag(form.id, payload)
-    ElMessage.success('更新成功')
-  } else {
-    await createTag(payload)
-    ElMessage.success('创建成功')
+  try {
+    if (form.id) {
+      await updateTag(form.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await createTag(payload)
+      ElMessage.success('创建成功')
+    }
+    dialogVisible.value = false
+    fetchTags()
+  } catch (e: any) {
+    const msg = e?.response?.data?.detail || e?.response?.data?.message || e?.message || '保存失败'
+    ElMessage.error(msg)
   }
-  dialogVisible.value = false
-  fetchTags()
 }
 const remove = async (row: any) => {
   await ElMessageBox.confirm(`确认删除点位「${row.name}」？`, '提示', { type: 'warning' })
@@ -220,9 +249,33 @@ onMounted(fetchDevices)
     <ElTable v-else v-loading="loading" :data="list" border stripe>
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="name" label="点位名称" min-width="150" show-overflow-tooltip />
-      <ElTableColumn prop="address" label="地址" width="90" />
-      <ElTableColumn prop="register_type" label="寄存器" width="110" />
-      <ElTableColumn prop="data_type" label="数据类型" width="110" />
+      <template v-if="isModbus">
+        <ElTableColumn prop="address" label="地址" width="90" />
+        <ElTableColumn label="功能码" width="130">
+          <template #default="{ row }">
+            <ElTag v-if="row.function_code" size="small">{{
+              (
+                {
+                  coil: '线圈 FC01',
+                  discrete_input: '离散输入 FC02',
+                  input_register: '输入寄存器 FC04',
+                  holding_register: '保持寄存器 FC03'
+                } as any
+              )[row.function_code] || row.function_code
+            }}</ElTag>
+            <ElTag v-else type="danger" size="small">未设置</ElTag>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn prop="data_type" label="数据类型" width="110" />
+      </template>
+      <template v-else-if="isMqtt">
+        <ElTableColumn prop="mqtt_topic" label="订阅主题" min-width="180" show-overflow-tooltip />
+        <ElTableColumn prop="mqtt_json_path" label="JSON路径" width="130" show-overflow-tooltip />
+      </template>
+      <template v-else-if="isOpc">
+        <ElTableColumn prop="opc_node_id" label="节点ID" min-width="180" show-overflow-tooltip />
+        <ElTableColumn prop="opc_node_type" label="节点类型" width="110" />
+      </template>
       <ElTableColumn label="当前值" width="110">
         <template #default="{ row }">{{ row.value ?? '—' }}{{ row.unit || '' }}</template>
       </ElTableColumn>
@@ -248,32 +301,66 @@ onMounted(fetchDevices)
         <ElFormItem label="点位名称" prop="name">
           <ElInput v-model="form.name" />
         </ElFormItem>
-        <ElFormItem label="地址">
-          <ElInputNumber v-model="form.address" :min="0" />
-        </ElFormItem>
-        <ElFormItem label="寄存器">
-          <ElSelect v-model="form.register_type" class="w-full">
-            <ElOption label="保持寄存器 holding" value="holding" />
-            <ElOption label="输入寄存器 input" value="input" />
-            <ElOption label="线圈 coil" value="coil" />
-            <ElOption label="离散输入 discrete" value="discrete" />
-          </ElSelect>
-        </ElFormItem>
-        <ElFormItem label="数据类型">
-          <ElSelect v-model="form.data_type" class="w-full">
-            <ElOption label="int16" value="int16" />
-            <ElOption label="uint16" value="uint16" />
-            <ElOption label="int32" value="int32" />
-            <ElOption label="uint32" value="uint32" />
-            <ElOption label="float32" value="float32" />
-            <ElOption label="bool" value="bool" />
-          </ElSelect>
-        </ElFormItem>
+        <!-- Modbus 专属：功能码必选 -->
+        <template v-if="isModbus">
+          <ElFormItem label="功能码" prop="function_code">
+            <ElSelect v-model="form.function_code" class="w-full" placeholder="请选择功能码（必选）">
+              <ElOption label="保持寄存器 Holding (FC03/06)" value="holding_register" />
+              <ElOption label="输入寄存器 Input (FC04)" value="input_register" />
+              <ElOption label="线圈 Coil (FC01/05)" value="coil" />
+              <ElOption label="离散输入 Discrete (FC02)" value="discrete_input" />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem label="地址">
+            <ElInputNumber v-model="form.address" :min="0" :controls="false" class="!w-full" />
+          </ElFormItem>
+          <ElFormItem label="数据类型">
+            <ElSelect v-model="form.data_type" class="w-full">
+              <ElOption label="int16" value="int16" />
+              <ElOption label="uint16" value="uint16" />
+              <ElOption label="int32" value="int32" />
+              <ElOption label="uint32" value="uint32" />
+              <ElOption label="float32" value="float32" />
+              <ElOption label="bool" value="bool" />
+            </ElSelect>
+          </ElFormItem>
+        </template>
+        <!-- MQTT 专属：订阅主题必填 -->
+        <template v-else-if="isMqtt">
+          <ElFormItem label="订阅主题" prop="mqtt_topic">
+            <ElInput v-model="form.mqtt_topic" placeholder="如 factory/line1/temp（必填）" />
+          </ElFormItem>
+          <ElFormItem label="JSON路径">
+            <ElInput v-model="form.mqtt_json_path" placeholder="如 data.temperature（留空取整个消息体）" />
+          </ElFormItem>
+          <ElFormItem label="值类型">
+            <ElSelect v-model="form.mqtt_value_type" class="w-full">
+              <ElOption label="float64" value="float64" />
+              <ElOption label="int64" value="int64" />
+              <ElOption label="bool" value="bool" />
+              <ElOption label="string" value="string" />
+            </ElSelect>
+          </ElFormItem>
+        </template>
+        <!-- OPC UA 专属：节点ID必填 -->
+        <template v-else-if="isOpc">
+          <ElFormItem label="节点ID" prop="opc_node_id">
+            <ElInput v-model="form.opc_node_id" placeholder="如 ns=2;s=Temperature 或 i=1001（必填）" />
+          </ElFormItem>
+          <ElFormItem label="节点类型">
+            <ElSelect v-model="form.opc_node_type" class="w-full">
+              <ElOption label="float64" value="float64" />
+              <ElOption label="int64" value="int64" />
+              <ElOption label="bool" value="bool" />
+              <ElOption label="string" value="string" />
+            </ElSelect>
+          </ElFormItem>
+        </template>
         <ElFormItem label="单位">
           <ElInput v-model="form.unit" placeholder="如 ℃ / kPa" />
         </ElFormItem>
         <ElFormItem label="缩放系数">
-          <ElInputNumber v-model="form.scale" :step="0.1" />
+          <ElInputNumber v-model="form.scale_factor" :step="0.1" :controls="false" class="!w-full" />
         </ElFormItem>
         <ElFormItem label="可写">
           <ElSwitch v-model="form.writable" />
