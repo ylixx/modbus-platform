@@ -66,6 +66,7 @@ class TagCreate(BaseModel):
     max_value: Optional[float] = None
     script_id: Optional[int] = None
     writable: bool = False
+    readback_tag_id: Optional[int] = None
     sort_order: int = 0
     enabled: bool = True
 
@@ -98,6 +99,7 @@ class TagUpdate(BaseModel):
     max_value: Optional[float] = None
     script_id: Optional[int] = None
     writable: Optional[bool] = None
+    readback_tag_id: Optional[int] = None
     sort_order: Optional[int] = None
     enabled: Optional[bool] = None
 
@@ -132,6 +134,7 @@ class TagOut(BaseModel):
     max_value: Optional[float]
     script_id: Optional[int]
     writable: bool
+    readback_tag_id: Optional[int]
     sort_order: int
     enabled: bool
     created_at: Optional[datetime] = None

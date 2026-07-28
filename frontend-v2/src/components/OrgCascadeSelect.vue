@@ -16,8 +16,16 @@ const props = withDefaults(
     // footer 是否显示「已选 N 台 / 全选当前 / 清空已选」操作；
     // 设备管理页在自身工具栏放置了这些按钮，故传 false 关闭，避免重复
     showDeviceActions?: boolean
+    // 设备下拉/搜索是否只返回「含可写点位」的设备（批量控制等写值场景用）
+    writableOnly?: boolean
   }>(),
-  { modelValue: () => [], path: null, showDeviceSelect: true, showDeviceActions: true }
+  {
+    modelValue: () => [],
+    path: null,
+    showDeviceSelect: true,
+    showDeviceActions: true,
+    writableOnly: false
+  }
 )
 const emit = defineEmits<{
   'update:modelValue': [number[]]
@@ -114,7 +122,8 @@ async function remoteSearch(query: string) {
       page: 1,
       page_size: 50,
       org_node_id: p?.org_node_id ?? undefined,
-      search: query || undefined
+      search: query || undefined,
+      writable: props.writableOnly || undefined
     })
     const { list } = unwrapList(res)
     deviceOptions.value = list

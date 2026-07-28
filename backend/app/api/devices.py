@@ -122,6 +122,7 @@ def list_devices(
     installation: str = None,
     ids: str = Query(None, description="按设备 ID 列表精确筛选，逗号分隔（关联列表框多选）"),
     search: str = "",
+    writable: bool = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("device.read")),
 ):
@@ -153,6 +154,14 @@ def list_devices(
             pass
     if search:
         q = q.filter(Device.name.contains(search) | Device.host.contains(search))
+    if writable is not None:
+        # 仅返回「至少含一个可写点位」的设备（批量控制等场景使用）
+        writable_subq = (
+            db.query(DeviceTag.device_id)
+            .filter(DeviceTag.writable == True)  # noqa: E712
+            .distinct()
+        )
+        q = q.filter(Device.id.in_(writable_subq))
     total = q.count()
     items = q.order_by(Device.id).offset((page - 1) * page_size).limit(page_size).all()
     pmap = _org_path_map(db)
@@ -436,7 +445,28 @@ def write_tag_value(device_id: int, req: WriteRequest, db: Session = Depends(get
     success = protocol_router.write_value(device_id, tag, req.value, device.protocol)
     if not success:
         raise HTTPException(status_code=500, detail="写入失败，请检查设备连接")
-    return {"message": "写入成功", "tag_id": tag.id, "value": req.value}
+
+    # 写后尽力读回读寄存器（回读寄存器本身是设备的采集点位），作为即时反馈返回。
+    # 若引擎缓存尚未刷新，readback_value 可能为 None，前端会靠 WS/轮询持续同步。
+    readback_tag_id = None
+    readback_value = None
+    if tag.readback_tag_id:
+        try:
+            live = protocol_router.get_live_values(device_id, device.protocol) or {}
+            rb = live.get(tag.readback_tag_id)
+            if isinstance(rb, dict) and "value" in rb:
+                readback_tag_id = tag.readback_tag_id
+                readback_value = rb.get("value")
+        except Exception:
+            pass
+
+    return {
+        "message": "写入成功",
+        "tag_id": tag.id,
+        "value": req.value,
+        "readback_tag_id": readback_tag_id,
+        "readback_value": readback_value,
+    }
 
 
 # ============ Batch Write ============
@@ -493,6 +523,16 @@ def batch_write_tag_values(
                 if ok:
                     result["success"] = True
                     result["message"] = "写入成功"
+                    # 写后尽力读回读寄存器，作为即时反馈
+                    if tag.readback_tag_id:
+                        try:
+                            live = protocol_router.get_live_values(item.device_id, device.protocol) or {}
+                            rb = live.get(tag.readback_tag_id)
+                            if isinstance(rb, dict) and "value" in rb:
+                                result["readback_tag_id"] = tag.readback_tag_id
+                                result["readback_value"] = rb.get("value")
+                        except Exception:
+                            pass
                     success_count += 1
                 else:
                     result["message"] = "写入失败，请检查设备连接"

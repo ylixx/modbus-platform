@@ -151,6 +151,20 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         meta: {
           title: t('router.deviceDetail'),
           hidden: true,
+          canTo: true,
+          noTagsView: false,
+          activeMenu: '/device/list',
+          permission: 'device.read'
+        }
+      },
+      {
+        path: 'detail/:id/tag/:tagId/chart',
+        component: () => import('@/views/Device/TagChart.vue'),
+        name: 'TagChart',
+        meta: {
+          title: '点位曲线',
+          hidden: true,
+          canTo: true,
           noTagsView: false,
           activeMenu: '/device/list',
           permission: 'device.read'

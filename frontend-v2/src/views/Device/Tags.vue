@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
@@ -29,6 +29,7 @@ import {
   unwrap,
   unwrapList
 } from '@/api/modbus'
+import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
 defineOptions({ name: 'Tags' })
 
@@ -45,6 +46,23 @@ const currentProtocol = computed(() => {
 const isModbus = computed(() => ['modbus_tcp', 'modbus_rtu'].includes(currentProtocol.value))
 const isMqtt = computed(() => currentProtocol.value === 'mqtt')
 const isOpc = computed(() => currentProtocol.value === 'opc_ua')
+// 回读寄存器下拉：本设备其它点位（排除自身）。回读寄存器通常是只读采集点位
+const readbackOptions = computed(() => list.value.filter((t) => t.id !== form.id))
+
+// 当前设备的展示信息（用于工具栏与表格「归属设备」列）
+const currentDeviceName = computed(() => {
+  const d = devices.value.find((x) => x.id === currentDevice.value)
+  return d?.name || '—'
+})
+const currentProtocolText = computed(() => {
+  const map: Record<string, string> = {
+    modbus_tcp: 'Modbus TCP',
+    modbus_rtu: 'Modbus RTU',
+    mqtt: 'MQTT',
+    opc_ua: 'OPC-UA'
+  }
+  return map[currentProtocol.value] || currentProtocol.value
+})
 
 const fetchDevices = async () => {
   devices.value = unwrapList(await getAllDevices()).list
@@ -85,7 +103,8 @@ const emptyForm = () => ({
   // 通用
   unit: '',
   scale_factor: 1,
-  writable: false
+  writable: false,
+  readback_tag_id: null
 })
 const form = reactive<any>(emptyForm())
 const rules = computed(() => ({
@@ -120,7 +139,8 @@ const openEdit = (row: any) => {
     opc_node_type: row.opc_node_type || 'float64',
     unit: row.unit || '',
     scale_factor: row.scale_factor ?? 1,
-    writable: !!row.writable
+    writable: !!row.writable,
+    readback_tag_id: row.readback_tag_id ?? null
   })
   dialogVisible.value = true
 }
@@ -209,45 +229,66 @@ const doImport = async (opt: any) => {
   }
 }
 
+// 组织架构级联筛选（与实时数据页一致）：选中设备即加载该设备点位
+const selectedIds = ref<number[]>([])
+const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
+const onCascadeSearch = () => {
+  if (selectedIds.value.length) {
+    currentDevice.value = selectedIds.value[0]
+    fetchTags()
+  } else {
+    ElMessage.info('请在级联中选择设备')
+  }
+}
+// 级联直接选设备（不点搜索按钮）也联动加载该设备点位
+watch(selectedIds, (ids) => {
+  if (ids.length && ids[0] !== currentDevice.value) {
+    currentDevice.value = ids[0]
+    fetchTags()
+  }
+})
+
 onMounted(fetchDevices)
 </script>
 
 <template>
   <ContentWrap title="采集点位">
-    <template #header>
-      <div class="flex-grow flex justify-end items-center">
-        <span class="text-14px text-gray-500 mr-8px">设备：</span>
-        <ElSelect v-model="currentDevice" class="!w-220px mr-10px" @change="fetchTags">
-          <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
-        </ElSelect>
-        <ElButton
-          v-hasPermi="['export.download']"
-          :loading="exportLoading"
-          :disabled="currentDevice == null"
-          @click="doExport"
-        >
-          导出点位
-        </ElButton>
-        <ElButton
-          v-hasPermi="['import.write']"
-          @click="openImport"
-        >
-          导入点位
-        </ElButton>
-        <ElButton
-          v-hasPermi="['tag.write']"
-          type="success"
-          :disabled="currentDevice == null"
-          @click="openCreate"
-        >
-          新增点位
-        </ElButton>
-      </div>
-    </template>
+    <!-- 组织架构级联筛选（与实时数据页一致） -->
+    <div class="mb-16px">
+      <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="onCascadeSearch" />
+    </div>
 
-    <ElEmpty v-if="currentDevice == null" description="请先选择设备" />
+    <!-- 操作工具栏：当前设备信息 + 导入/导出/新增点位（从右侧 header 移至此） -->
+    <div class="flex items-center mb-12px flex-wrap gap-8px">
+      <ElTag v-if="currentDevice != null" type="primary" effect="plain" size="small">
+        当前设备：{{ currentDeviceName }}（{{ currentProtocolText }}）
+      </ElTag>
+      <span class="flex-grow" />
+      <ElButton v-hasPermi="['import.write']" @click="openImport">导入点位</ElButton>
+      <ElButton
+        v-hasPermi="['export.download']"
+        :loading="exportLoading"
+        :disabled="currentDevice == null"
+        @click="doExport"
+      >
+        导出点位
+      </ElButton>
+      <ElButton
+        v-hasPermi="['tag.write']"
+        type="success"
+        :disabled="currentDevice == null"
+        @click="openCreate"
+      >
+        新增点位
+      </ElButton>
+    </div>
+
+    <ElEmpty v-if="currentDevice == null" description="请在上方级联中选择设备" />
     <ElTable v-else v-loading="loading" :data="list" border stripe>
       <ElTableColumn prop="id" label="ID" width="70" />
+      <ElTableColumn label="归属设备" min-width="150" show-overflow-tooltip>
+        <template #default>{{ currentDeviceName }}</template>
+      </ElTableColumn>
       <ElTableColumn prop="name" label="点位名称" min-width="150" show-overflow-tooltip />
       <template v-if="isModbus">
         <ElTableColumn prop="address" label="地址" width="90" />
@@ -364,6 +405,21 @@ onMounted(fetchDevices)
         </ElFormItem>
         <ElFormItem label="可写">
           <ElSwitch v-model="form.writable" />
+        </ElFormItem>
+        <ElFormItem label="回读寄存器">
+          <ElSelect
+            v-model="form.readback_tag_id"
+            class="w-full"
+            clearable
+            placeholder="绑定写操作后回读的寄存器（可选）"
+          >
+            <ElOption
+              v-for="t in readbackOptions"
+              :key="t.id"
+              :label="`${t.name}（${t.address ?? '—'}）${t.writable ? ' · 可写' : ''}`"
+              :value="t.id"
+            />
+          </ElSelect>
         </ElFormItem>
       </ElForm>
       <template #footer>
