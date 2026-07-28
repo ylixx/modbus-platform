@@ -141,7 +141,7 @@ def publish_event(event_type: str, data: dict):
 
 def stop_broadcast():
     """Stop the subscriber thread."""
-    _stop_event.clear()
+    _stop_event.set()
     if _subscriber_thread:
         _subscriber_thread.join(timeout=3)
 

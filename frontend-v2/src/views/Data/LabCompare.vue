@@ -42,8 +42,12 @@ const orgTree = ref<any[]>([])
 const selectedOrg = ref<number | null>(null)
 const orgNodeName = ref('')
 const fetchOrgTree = async () => {
-  const res = await getOrgTree()
-  orgTree.value = res?.data || []
+  try {
+    const res = await getOrgTree()
+    orgTree.value = res?.data || []
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取组织架构失败')
+  }
 }
 const onOrgClick = (data: any) => {
   selectedOrg.value = data.id
@@ -75,18 +79,26 @@ const currentTag = ref<number | undefined>(undefined)
 const loading = ref(false)
 
 const fetchDevices = async () => {
-  const params: any = { page: 1, page_size: 500 }
-  if (selectedOrg.value != null) params.org_node_id = selectedOrg.value
-  const res = await getDevices(params)
-  devices.value = unwrapList(res).list
+  try {
+    const params: any = { page: 1, page_size: 500 }
+    if (selectedOrg.value != null) params.org_node_id = selectedOrg.value
+    const res = await getDevices(params)
+    devices.value = unwrapList(res).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取设备列表失败')
+  }
 }
 const onDeviceChange = async (deviceId: number) => {
   currentTag.value = undefined
   tags.value = []
   if (!deviceId) return
-  const res = await getDeviceTags(deviceId)
-  const body = unwrap(res)
-  tags.value = Array.isArray(body) ? body : unwrapList(res).list
+  try {
+    const res = await getDeviceTags(deviceId)
+    const body = unwrap(res)
+    tags.value = Array.isArray(body) ? body : unwrapList(res).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  }
 }
 
 // ── 默认列表（所有化验数据，按设备分组 + 分页） ──
@@ -257,34 +269,44 @@ const openEntry = () => {
 }
 
 const submitEntry = async () => {
-  await entryFormRef.value?.validate()
-  await createLabData({
-    device_id: entryForm.device_id,
-    tag_id: entryForm.tag_id || null,
-    lab_name: entryForm.lab_name,
-    lab_value: entryForm.lab_value,
-    unit: entryForm.unit,
-    sample_time: entryForm.sample_time,
-    operator: entryForm.operator,
-    remark: entryForm.remark
-  })
-  ElMessage.success('化验数据录入成功')
-  entryDialogVisible.value = false
-  if (listMode.value === 'compare') {
-    fetchCompare()
-  } else {
-    fetchAllLabData()
+  try {
+    await entryFormRef.value?.validate()
+    await createLabData({
+      device_id: entryForm.device_id,
+      tag_id: entryForm.tag_id || null,
+      lab_name: entryForm.lab_name,
+      lab_value: entryForm.lab_value,
+      unit: entryForm.unit,
+      sample_time: entryForm.sample_time,
+      operator: entryForm.operator,
+      remark: entryForm.remark
+    })
+    ElMessage.success('化验数据录入成功')
+    entryDialogVisible.value = false
+    if (listMode.value === 'compare') {
+      fetchCompare()
+    } else {
+      fetchAllLabData()
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '录入失败')
   }
 }
 
 const removeEntry = async (row: any) => {
-  await ElMessageBox.confirm('确认删除此化验记录？', '提示', { type: 'warning' })
-  await deleteLabData(row.id)
-  ElMessage.success('删除成功')
-  if (listMode.value === 'compare') {
-    fetchCompare()
-  } else {
-    fetchAllLabData()
+  try {
+    await ElMessageBox.confirm('确认删除此化验记录？', '提示', { type: 'warning' })
+    await deleteLabData(row.id)
+    ElMessage.success('删除成功')
+    if (listMode.value === 'compare') {
+      fetchCompare()
+    } else {
+      fetchAllLabData()
+    }
+  } catch (e: any) {
+    if (e !== 'cancel' && e?.message !== 'cancel') {
+      ElMessage.error(e?.message || '删除失败')
+    }
   }
 }
 
@@ -305,9 +327,13 @@ watch(compareWindow, () => {
 })
 
 onMounted(async () => {
-  await fetchOrgTree()
-  await fetchDevices()
-  fetchAllLabData()
+  try {
+    await fetchOrgTree()
+    await fetchDevices()
+    fetchAllLabData()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '初始化失败')
+  }
 })
 </script>
 

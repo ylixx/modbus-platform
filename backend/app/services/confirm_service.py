@@ -6,31 +6,35 @@ Provides a two-step confirmation flow:
 
 Confirmation codes expire after 60 seconds.
 """
-import random
+import secrets
 import string
+import threading
 import time
+from datetime import datetime, timezone
 from loguru import logger
 from app.services.audit_service import log_action
 
 
 # In-memory store: code -> {device_id, tag_id, value, user_id, expire_at}
 _pending: dict[str, dict] = {}
+_lock = threading.Lock()
 
 CODE_EXPIRE_SECONDS = 60
 
 
 def create_confirmation(device_id: int, tag_id: int, value, user_id: int, username: str) -> str:
     """Create a pending confirmation, return the code."""
-    code = ''.join(random.choices(string.digits, k=6))
-    _pending[code] = {
-        "device_id": device_id,
-        "tag_id": tag_id,
-        "value": value,
-        "user_id": user_id,
-        "username": username,
-        "expire_at": time.time() + CODE_EXPIRE_SECONDS,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+    code = ''.join(secrets.choice(string.digits) for _ in range(6))
+    with _lock:
+        _pending[code] = {
+            "device_id": device_id,
+            "tag_id": tag_id,
+            "value": value,
+            "user_id": user_id,
+            "username": username,
+            "expire_at": time.time() + CODE_EXPIRE_SECONDS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     log_action(
         action="control.initiate",
@@ -48,18 +52,22 @@ def create_confirmation(device_id: int, tag_id: int, value, user_id: int, userna
 
 def execute_confirmation(code: str, user_id: int, username: str) -> tuple[bool, str]:
     """Execute a pending confirmation. Returns (success, message)."""
-    pending = _pending.get(code)
-    if not pending:
-        return False, "确认码无效或已过期"
+    with _lock:
+        pending = _pending.get(code)
+        if not pending:
+            return False, "确认码无效或已过期"
 
-    if time.time() > pending["expire_at"]:
+        if time.time() > pending["expire_at"]:
+            _pending.pop(code, None)
+            return False, "确认码已过期，请重新发起操作"
+
+        # Remove code atomically to prevent double-execution
         del _pending[code]
-        return False, "确认码已过期，请重新发起操作"
 
-    # Execute the write
+    # Execute the write (outside lock to avoid holding it during I/O)
     from app.engine.protocol_router import protocol_router
     from app.core.database import SessionLocal
-    from app.models.device import DeviceTag
+    from app.models.device import DeviceTag, Device
 
     db = SessionLocal()
     try:
@@ -83,7 +91,6 @@ def execute_confirmation(code: str, user_id: int, username: str) -> tuple[bool, 
                 user_id=user_id,
                 username=username,
             )
-            del _pending[code]
             return True, "写入成功"
         else:
             return False, "写入失败，请检查设备连接"
@@ -93,19 +100,18 @@ def execute_confirmation(code: str, user_id: int, username: str) -> tuple[bool, 
 
 def cancel_confirmation(code: str) -> bool:
     """Cancel a pending confirmation."""
-    if code in _pending:
-        del _pending[code]
-        return True
+    with _lock:
+        if code in _pending:
+            del _pending[code]
+            return True
     return False
 
 
 def cleanup_expired():
     """Remove expired confirmations."""
     now = time.time()
-    expired = [k for k, v in _pending.items() if now > v["expire_at"]]
-    for k in expired:
-        del _pending[k]
+    with _lock:
+        expired = [k for k, v in _pending.items() if now > v["expire_at"]]
+        for k in expired:
+            del _pending[k]
     return len(expired)
-
-
-from datetime import datetime, timezone

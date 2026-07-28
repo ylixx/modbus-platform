@@ -77,7 +77,8 @@ class WebSocketManager {
     const base = import.meta.env.VITE_API_BASE_PATH || '/api/v1'
     // 开发环境走 vite proxy（相对路径），生产环境用当前 host
     const host = window.location.host
-    const url = `${protocol}//${host}${base}/ws?token=${token}`
+    // 不再通过 URL query 传递 JWT（避免泄露到日志/代理），改为连接后首条消息认证
+    const url = `${protocol}//${host}${base}/ws`
 
     try {
       this.ws = new WebSocket(url)
@@ -91,6 +92,8 @@ class WebSocketManager {
       console.log('[WS] Connected')
       this._connected = true
       this.reconnectAttempts = 0
+      // 通过首条消息发送 JWT 认证
+      this.ws!.send(JSON.stringify({ type: 'auth', token }))
       this.startHeartbeat()
       this.emit({ type: '__connected' } as any)
     }

@@ -17,7 +17,7 @@ import {
   ElInput,
   ElUpload
 } from 'element-plus'
-import { getScadaWidgets, deleteScadaWidget, unwrapList } from '@/api/modbus'
+import { getScadaWidgets, deleteScadaWidget, uploadScadaWidget, unwrapList } from '@/api/modbus'
 import { builtinWidgets, widgetCategories, getWidgetsByCategory } from './widgets/builtin'
 
 defineOptions({ name: 'ScadaWidgets' })
@@ -67,12 +67,7 @@ const doUpload = async () => {
   fd.append('description', uploadForm.value.description)
 
   try {
-    const res = await fetch('/api/v1/scada/widgets/upload', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
-      body: fd
-    })
-    if (!res.ok) throw new Error('上传失败')
+    await uploadScadaWidget(fd)
     ElMessage.success('上传成功')
     uploadDialogVisible.value = false
     uploadFile.value = null

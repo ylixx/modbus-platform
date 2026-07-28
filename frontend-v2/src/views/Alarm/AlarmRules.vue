@@ -17,13 +17,18 @@ import {
   ElMessage,
   ElMessageBox,
   ElDivider,
-  ElTooltip
+  ElTooltip,
+  ElPagination,
+  ElTabs,
+  ElTabPane
 } from 'element-plus'
 import {
   getAlarmRules,
   createAlarmRule,
   updateAlarmRule,
   deleteAlarmRule,
+  getEscalationConfig,
+  updateEscalationConfig,
   getAllDevices,
   getDeviceTags,
   unwrap,
@@ -32,10 +37,16 @@ import {
 
 defineOptions({ name: 'AlarmRules' })
 
+const activeTab = ref('rules')
 const loading = ref(false)
 const list = ref<any[]>([])
 const devices = ref<any[]>([])
 const deviceTags = ref<any[]>([])
+
+// ── 分页 ──
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
 // ── 报警类型选项 ──
 const alarmTypes = [
@@ -61,13 +72,30 @@ const alarmLevelLabel = (l?: string) => alarmLevels.find((a) => a.value === l)?.
 const fetchList = async () => {
   loading.value = true
   try {
-    list.value = unwrapList(await getAlarmRules({ page: 1, page_size: 200 })).list
+    const res = unwrapList(await getAlarmRules({ page: page.value, page_size: pageSize.value }))
+    list.value = res.list
+    total.value = res.total
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取报警规则失败')
   } finally {
     loading.value = false
   }
 }
+const onPageChange = (p: number) => {
+  page.value = p
+  fetchList()
+}
+const onSizeChange = (s: number) => {
+  pageSize.value = s
+  page.value = 1
+  fetchList()
+}
 const fetchDevices = async () => {
-  devices.value = unwrapList(await getAllDevices()).list
+  try {
+    devices.value = unwrapList(await getAllDevices()).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取设备列表失败')
+  }
 }
 
 // ── 设备 → 点位联动 ──
@@ -75,9 +103,13 @@ const onFormDeviceChange = async (deviceId: number) => {
   form.tag_id = null
   deviceTags.value = []
   if (!deviceId) return
-  const res = await getDeviceTags(deviceId)
-  const body = unwrap(res)
-  deviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
+  try {
+    const res = await getDeviceTags(deviceId)
+    const body = unwrap(res)
+    deviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  }
 }
 
 // ── 表单 ──
@@ -99,12 +131,14 @@ const form = reactive<any>({
   status_value: null,
   delay_seconds: 0,
   auto_clear: true,
-  sms_enabled: false
+  sms_enabled: false,
+  enabled: true
 })
 const rules = {
   name: [{ required: true, message: '请输入规则名称', trigger: 'blur' }],
   device_id: [{ required: true, message: '请选择设备', trigger: 'change' }],
-  alarm_type: [{ required: true, message: '请选择报警类型', trigger: 'change' }]
+  alarm_type: [{ required: true, message: '请选择报警类型', trigger: 'change' }],
+  alarm_level: [{ required: true, message: '请选择报警级别', trigger: 'change' }]
 }
 
 // 根据报警类型显示/隐藏字段
@@ -133,7 +167,8 @@ const openCreate = () => {
     status_value: null,
     delay_seconds: 0,
     auto_clear: true,
-    sms_enabled: false
+    sms_enabled: false,
+    enabled: true
   })
   deviceTags.value = []
   dialogVisible.value = true
@@ -155,7 +190,8 @@ const openEdit = async (row: any) => {
     status_value: row.status_value ?? null,
     delay_seconds: row.delay_seconds ?? 0,
     auto_clear: row.auto_clear !== false,
-    sms_enabled: !!row.sms_enabled
+    sms_enabled: !!row.sms_enabled,
+    enabled: row.enabled !== false
   })
   // 加载设备的点位列表
   if (form.device_id) {
@@ -164,43 +200,110 @@ const openEdit = async (row: any) => {
   dialogVisible.value = true
 }
 const submit = async () => {
-  await formRef.value?.validate()
-  const payload: any = {
-    name: form.name,
-    description: form.description,
-    device_id: form.device_id,
-    tag_id: form.tag_id || null,
-    alarm_type: form.alarm_type,
-    alarm_level: form.alarm_level,
-    high_limit: form.high_limit,
-    low_limit: form.low_limit,
-    deadband: form.deadband || 0,
-    rate_limit: form.rate_limit,
-    status_value: form.status_value,
-    delay_seconds: form.delay_seconds || 0,
-    auto_clear: form.auto_clear,
-    sms_enabled: form.sms_enabled
+  try {
+    await formRef.value?.validate()
+    // 根据报警类型动态校验条件字段
+    if (['threshold_high', 'threshold_range'].includes(form.alarm_type) && form.high_limit == null) {
+      ElMessage.warning('上限报警类型必须填写上限值')
+      return
+    }
+    if (['threshold_low', 'threshold_range'].includes(form.alarm_type) && form.low_limit == null) {
+      ElMessage.warning('下限报警类型必须填写下限值')
+      return
+    }
+    if (form.alarm_type === 'rate_of_change' && form.rate_limit == null) {
+      ElMessage.warning('变化率报警类型必须填写变化率限制')
+      return
+    }
+    const payload: any = {
+      name: form.name,
+      description: form.description,
+      device_id: form.device_id,
+      tag_id: form.tag_id || null,
+      alarm_type: form.alarm_type,
+      alarm_level: form.alarm_level,
+      high_limit: form.high_limit,
+      low_limit: form.low_limit,
+      deadband: form.deadband || 0,
+      rate_limit: form.rate_limit,
+      status_value: form.status_value,
+      delay_seconds: form.delay_seconds || 0,
+      auto_clear: form.auto_clear,
+      sms_enabled: form.sms_enabled,
+      enabled: form.enabled !== false
+    }
+    if (form.id) {
+      await updateAlarmRule(form.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await createAlarmRule(payload)
+      ElMessage.success('创建成功')
+    }
+    dialogVisible.value = false
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
   }
-  if (form.id) {
-    await updateAlarmRule(form.id, payload)
-    ElMessage.success('更新成功')
-  } else {
-    await createAlarmRule(payload)
-    ElMessage.success('创建成功')
-  }
-  dialogVisible.value = false
-  fetchList()
 }
 const remove = async (row: any) => {
-  await ElMessageBox.confirm(`确认删除规则「${row.name}」？`, '提示', { type: 'warning' })
-  await deleteAlarmRule(row.id)
-  ElMessage.success('删除成功')
-  fetchList()
+  try {
+    await ElMessageBox.confirm(`确认删除规则「${row.name}」？`, '提示', { type: 'warning' })
+    await deleteAlarmRule(row.id)
+    ElMessage.success('删除成功')
+    fetchList()
+  } catch (e: any) {
+    if (e !== 'cancel' && e?.message !== 'cancel') {
+      ElMessage.error(e?.message || '删除失败')
+    }
+  }
 }
+
+// ── 升级配置 ──
+const escalationConfig = reactive<any>({
+  info: 30,
+  warning: 15,
+  critical: 10,
+  emergency: 0
+})
+const escalationLoading = ref(false)
+
+const fetchEscalationConfig = async () => {
+  try {
+    const res = unwrap(await getEscalationConfig())
+    if (res && typeof res === 'object') {
+      Object.assign(escalationConfig, res)
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取升级配置失败')
+  }
+}
+
+const saveEscalationConfig = async () => {
+  escalationLoading.value = true
+  try {
+    const res = unwrap(await updateEscalationConfig({ ...escalationConfig }))
+    if (res && typeof res === 'object') {
+      Object.assign(escalationConfig, res)
+    }
+    ElMessage.success('升级配置已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存升级配置失败')
+  } finally {
+    escalationLoading.value = false
+  }
+}
+
+const escalationItems = computed(() => [
+  { key: 'info', label: '提示 → 警告', desc: '提示级别报警持续未确认后升级为警告' },
+  { key: 'warning', label: '警告 → 严重', desc: '警告级别报警持续未确认后升级为严重' },
+  { key: 'critical', label: '严重 → 紧急', desc: '严重级别报警持续未确认后升级为紧急' },
+  { key: 'emergency', label: '紧急 (无升级)', desc: '紧急级别为最高等级，无法继续升级' }
+])
 
 onMounted(() => {
   fetchList()
   fetchDevices()
+  fetchEscalationConfig()
 })
 </script>
 
@@ -213,7 +316,12 @@ onMounted(() => {
         >
       </div>
     </template>
+    <ElTabs v-model="activeTab">
+      <ElTabPane label="报警规则" name="rules">
     <ElTable v-loading="loading" :data="list" border stripe>
+      <template #empty>
+        <div class="py-20px text-center text-gray-400">暂无报警规则</div>
+      </template>
       <ElTableColumn prop="id" label="ID" width="60" />
       <ElTableColumn prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
       <ElTableColumn label="设备" min-width="120" show-overflow-tooltip>
@@ -268,9 +376,54 @@ onMounted(() => {
           >
         </template>
       </ElTableColumn>
-    </ElTable>
+      </ElTable>
+      <div class="flex justify-end mt-12px">
+        <ElPagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[10, 20, 50, 100]"
+          @current-change="onPageChange"
+          @size-change="onSizeChange"
+        />
+      </div>
+      </ElTabPane>
 
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px" top="5vh">
+      <ElTabPane label="升级配置" name="escalation">
+        <div class="mb-12px text-13px text-gray-400">
+          配置各等级报警未确认时自动升级的超时时间（分钟）。超时后系统将自动将报警升级到更高等级并发送短信通知。
+        </div>
+        <ElForm label-width="160px" class="max-w-600px">
+          <ElFormItem
+            v-for="item in escalationItems"
+            :key="item.key"
+            :label="item.label"
+          >
+            <ElInputNumber
+              v-model="escalationConfig[item.key]"
+              :min="0"
+              :max="1440"
+              :step="5"
+              :disabled="item.key === 'emergency'"
+              class="w-200px"
+            />
+            <span class="text-12px text-gray-400 ml-8px">分钟</span>
+            <div class="text-12px text-gray-400 ml-12px">{{ item.desc }}</div>
+          </ElFormItem>
+          <ElFormItem>
+            <ElButton
+              v-hasPermi="['alarm.write']"
+              type="primary"
+              :loading="escalationLoading"
+              @click="saveEscalationConfig"
+            >保存配置</ElButton>
+          </ElFormItem>
+        </ElForm>
+      </ElTabPane>
+    </ElTabs>
+
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px" top="5vh" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="100px">
         <!-- 基本信息 -->
         <ElFormItem label="规则名称" prop="name">
@@ -292,7 +445,7 @@ onMounted(() => {
             <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="点位">
+        <ElFormItem label="点位" prop="tag_id">
           <ElSelect
             v-model="form.tag_id"
             class="w-full"
@@ -326,7 +479,7 @@ onMounted(() => {
             </ElOption>
           </ElSelect>
         </ElFormItem>
-        <ElFormItem label="报警级别">
+        <ElFormItem label="报警级别" prop="alarm_level">
           <ElSelect v-model="form.alarm_level" class="w-full">
             <ElOption
               v-for="l in alarmLevels"

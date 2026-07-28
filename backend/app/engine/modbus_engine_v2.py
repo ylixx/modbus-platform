@@ -32,8 +32,11 @@ class ModbusEngineV2:
     # 重连退避
     BACKOFF_BASE = 1.0
     BACKOFF_MAX = 60.0
+    BACKOFF_MULTIPLIER = 2.0
     MAX_CONSECUTIVE_FAILURES = 50
     OFFLINE_ALARM_THRESHOLD = 3
+    # 事件循环崩溃后自动重启等待时间
+    RESTART_DELAY = 5.0
 
     def __init__(self):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -77,6 +80,14 @@ class ModbusEngineV2:
             logger.error(f"AsyncIO loop error: {e}")
         finally:
             self._loop.close()
+        # 事件循环异常退出后，如果引擎仍在运行状态，自动重启
+        if self._running:
+            logger.warning(f"Event loop exited unexpectedly, restarting in {self.RESTART_DELAY}s...")
+            import time as _time
+            _time.sleep(self.RESTART_DELAY)
+            self._loop = asyncio.new_event_loop()
+            self._loop_thread = threading.Thread(target=self._run_loop, daemon=True, name="modbus-asyncio-restart")
+            self._loop_thread.start()
 
     async def _async_start(self):
         """加载所有设备并启动采集协程。"""
@@ -105,6 +116,28 @@ class ModbusEngineV2:
 
         task = self._loop.create_task(self._device_coroutine(device))
         self._tasks[device_id] = task
+        task.add_done_callback(lambda t: self._on_task_done(device_id, t))
+
+    @staticmethod
+    def _on_task_done(device_id: int, task: asyncio.Task):
+        """Task 完成回调：记录异常、清理状态。"""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error(f"Device {device_id} coroutine exited with exception: {exc}")
+
+    def stop_device(self, device_id: int):
+        """停止单个设备的采集（用于 API 层删除/禁用设备）。"""
+        task = self._tasks.pop(device_id, None)
+        if task and not task.done():
+            task.cancel()
+        self._device_states.pop(device_id, None)
+        # 清理实时缓存
+        prefix = f"{device_id}_"
+        keys_to_remove = [k for k in self._live_values if k.startswith(prefix)]
+        for k in keys_to_remove:
+            del self._live_values[k]
 
     def reload_device(self, device_id: int):
         """重新加载设备（配置变更后调用）。"""
@@ -128,11 +161,14 @@ class ModbusEngineV2:
         from pymodbus.client import AsyncModbusTcpClient
 
         device_id = device.id
+        device_name = device.name
         state = self._device_states[device_id]
         client = AsyncModbusTcpClient(
             host=device.host, port=device.port,
             timeout=device.timeout, retries=device.retries,
         )
+
+        logger.info(f"[采集] 设备 {device_name}(ID={device_id}) 采集协程启动 → {device.host}:{device.port} slave={device.slave_id}")
 
         backoff = self.BACKOFF_BASE
 
@@ -140,6 +176,7 @@ class ModbusEngineV2:
             try:
                 # 连接
                 if not client.connected:
+                    logger.debug(f"[采集] 设备 {device_name}(ID={device_id}) 正在连接 {device.host}:{device.port}...")
                     connected = await client.connect()
                     if not connected:
                         state["consecutive_failures"] += 1
@@ -162,6 +199,7 @@ class ModbusEngineV2:
                         continue
 
                 # 采集
+                logger.debug(f"[采集] 设备 {device_name}(ID={device_id}) 开始本轮采集 ({len(tags) if 'tags' in dir() else '?'} 点位)")
                 await self._poll_device_async(device_id, client, device.slave_id)
 
                 # 恢复
@@ -204,6 +242,7 @@ class ModbusEngineV2:
                 continue
 
             # 正常间隔
+            logger.debug(f"[采集] 设备 {device_name}(ID={device_id}) 本轮完成，等待 {device.poll_interval}s")
             await asyncio.sleep(device.poll_interval)
 
         # 清理
@@ -212,6 +251,12 @@ class ModbusEngineV2:
         except Exception:
             pass
         self._tasks.pop(device_id, None)
+        self._device_states.pop(device_id, None)
+        # 清理实时缓存
+        prefix = f"{device_id}_"
+        keys_to_remove = [k for k in self._live_values if k.startswith(prefix)]
+        for k in keys_to_remove:
+            del self._live_values[k]
 
     async def _poll_device_async(self, device_id: int, client, slave_id: int):
         """异步采集单个设备的所有点位。"""
@@ -222,11 +267,13 @@ class ModbusEngineV2:
             ).all()
 
             groups = self._group_tags(tags)
+            logger.debug(f"[采集] 设备ID={device_id}: {len(tags)} 个点位, {len(groups)} 组读取请求")
 
             for (fc, start_addr, count), tag_list in groups.items():
                 try:
                     raw_values = await self._read_registers_async(client, slave_id, fc, start_addr, count)
                     if raw_values is None:
+                        logger.warning(f"[采集] 设备ID={device_id}: FC={fc} addr={start_addr}+{count} 读取返回空")
                         continue
 
                     for tag in tag_list:
@@ -244,6 +291,8 @@ class ModbusEngineV2:
 
                             # 脚本处理（同步，但很快）
                             processed, quality, alarm_msg = self._apply_script(db, tag, device_id, processed)
+
+                            logger.info(f"[采集] 设备ID={device_id} 点位={tag.name} 原始值={value} 处理值={processed} 质量={quality}")
 
                             # 更新实时缓存
                             key = f"{device_id}_{tag.id}"
@@ -272,7 +321,7 @@ class ModbusEngineV2:
                             alarm_service.evaluate(device_id, tag.id, tag.name, processed)
 
                 except Exception as e:
-                    logger.error(f"Read error for device {device_id} group at {start_addr}: {e}")
+                    logger.error(f"[采集] 设备ID={device_id}: FC={fc} addr={start_addr} 读取异常: {e}")
 
             # 更新最后采集时间
             device = db.query(Device).filter(Device.id == device_id).first()
@@ -281,7 +330,7 @@ class ModbusEngineV2:
             db.commit()
 
         except Exception as e:
-            logger.error(f"Poll device {device_id} error: {e}")
+            logger.error(f"[采集] 设备ID={device_id} 采集过程异常: {e}")
             db.rollback()
         finally:
             db.close()
@@ -520,7 +569,7 @@ class ModbusEngineV2:
         finally:
             db.close()
 
-    BACKOFF_MULTIPLIER = 2.0
+    BACKOFF_MULTIPLIER = 2.0  # kept at class end for backward compat
 
 
 # 全局实例

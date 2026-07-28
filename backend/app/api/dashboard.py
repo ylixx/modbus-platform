@@ -1,5 +1,5 @@
 """Dashboard API."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from app.core.database import get_db
@@ -88,27 +88,30 @@ def get_device_status_distribution(db: Session = Depends(get_db), current_user: 
 
 
 @router.get("/alarm-trend")
-def get_alarm_trend(days: int = 7, db: Session = Depends(get_db), current_user: User = Depends(require_permission("dashboard.read"))):
+def get_alarm_trend(days: int = Query(7, ge=1, le=365), db: Session = Depends(get_db), current_user: User = Depends(require_permission("dashboard.read"))):
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import text
 
     visible = get_visible_device_ids(db, current_user)
     start = datetime.now(timezone.utc) - timedelta(days=days)
-    q = db.query(
-        text("DATE(triggered_at) as date"),
-        AlarmRecord.alarm_level,
-        sql_func.count().label("count"),
-    ).filter(AlarmRecord.triggered_at >= start)
+
+    # 用 Python 端聚合代替 DATE()，兼容 SQLite / MySQL / PostgreSQL
+    base_q = db.query(AlarmRecord.triggered_at, AlarmRecord.alarm_level).filter(
+        AlarmRecord.triggered_at >= start
+    )
     if visible is not None:
         if not visible:
             return {}
-        q = q.filter(AlarmRecord.device_id.in_(visible))
-    rows = q.group_by(text("date"), AlarmRecord.alarm_level).order_by(text("date")).all()
+        base_q = base_q.filter(AlarmRecord.device_id.in_(visible))
+
+    rows = base_q.order_by(AlarmRecord.triggered_at.asc()).all()
 
     result = {}
-    for row in rows:
-        date_str = str(row.date)
+    for triggered_at, alarm_level in rows:
+        if triggered_at is None:
+            continue
+        # 统一用 UTC 日期字符串做 key（兼容所有数据库）
+        date_str = triggered_at.strftime("%Y-%m-%d")
         if date_str not in result:
             result[date_str] = {}
-        result[date_str][row.alarm_level] = row.count
+        result[date_str][alarm_level] = result[date_str].get(alarm_level, 0) + 1
     return result

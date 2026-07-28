@@ -166,6 +166,13 @@ class DeviceCreate(BaseModel):
     timeout: float = 3.0
     retries: int = 3
 
+    # Modbus RTU
+    serial_port: str = ""
+    baudrate: int = 9600
+    parity: str = "none"
+    data_bits: int = 8
+    stop_bits: int = 1
+
     # MQTT
     mqtt_broker: str = ""
     mqtt_port: int = 1883
@@ -218,6 +225,12 @@ class DeviceUpdate(BaseModel):
     timeout: Optional[float] = None
     retries: Optional[int] = None
 
+    serial_port: Optional[str] = None
+    baudrate: Optional[int] = None
+    parity: Optional[str] = None
+    data_bits: Optional[int] = None
+    stop_bits: Optional[int] = None
+
     mqtt_broker: Optional[str] = None
     mqtt_port: Optional[int] = None
     mqtt_username: Optional[str] = None
@@ -268,6 +281,12 @@ class DeviceOut(BaseModel):
     slave_id: int
     timeout: float
     retries: int
+
+    serial_port: str
+    baudrate: int
+    parity: str
+    data_bits: int
+    stop_bits: int
 
     mqtt_broker: str
     mqtt_port: int

@@ -15,7 +15,7 @@ from pymodbus.client import ModbusTcpClient
 from pymodbus.constants import Endian
 from pymodbus.payload import BinaryPayloadDecoder, BinaryPayloadBuilder
 from app.core.database import SessionLocal
-from app.models.device import Device, DeviceTag, FunctionCode
+from app.models.device import Device, DeviceTag, FunctionCode, DataType
 from app.models.history import TagHistory
 from app.core.config import settings
 from app.engine.modbus_codec import get_register_count, decode_value, decode_32bit, decode_float32, decode_float64, bcd_to_int
@@ -439,9 +439,12 @@ class ModbusEngine:
             return None
 
     def write_value(self, device_id: int, tag: DeviceTag, value) -> bool:
-        """Write a value to a Modbus device."""
-        client = self._clients.get(device_id)
-        if not client or not client.connected:
+        """Write a value to a Modbus device (thread-safe)."""
+        with self._lock:
+            client = self._clients.get(device_id)
+            need_connect = not client or not client.connected
+
+        if need_connect:
             # Try to connect
             db = SessionLocal()
             try:
@@ -454,7 +457,8 @@ class ModbusEngine:
                 )
                 if not client.connect():
                     return False
-                self._clients[device_id] = client
+                with self._lock:
+                    self._clients[device_id] = client
             finally:
                 db.close()
 

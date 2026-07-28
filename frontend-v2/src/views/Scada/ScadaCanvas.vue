@@ -114,7 +114,7 @@ const loadFromJSON = async (json: string | object): Promise<void> => {
 
 /** 导出 Fabric JSON */
 const toJSON = (): object => {
-  return canvas?.toJSON(['_widgetType', '_bindable', '_bindTarget', '_bindProp']) || {}
+  return canvas?.toJSON(['_widgetType', '_bindable', '_bindTarget', '_bindProp', '_bindDeviceId', '_bindTagId', '_bindTagName']) || {}
 }
 
 /** 添加图元对象 */
@@ -182,28 +182,48 @@ const clear = () => {
   canvas?.setBackgroundColor(props.background || '#1a1a2e', () => {})
 }
 
-/** 更新对象的绑定数据（运行时） */
+/** 更新对象的绑定数据（运行时）
+ *  fabricId: 图元的 name/id（用于精确定位），为空则匹配所有
+ */
 const updateBoundValue = (
-  widgetType: string,
+  fabricId: string,
   bindTarget: string,
   newValue: any,
   prop: string = 'text'
 ) => {
   if (!canvas) return
+  const applyToChild = (child: any) => {
+    if (child._bindTarget === bindTarget) {
+      // 如果指定了 fabricId，只匹配该图元
+      if (fabricId && child.name !== fabricId && child.id !== fabricId) return
+      if (prop === 'text' && child.type === 'textbox') {
+        child.set({ text: String(newValue) })
+      } else if (prop === 'fill') {
+        child.set({ fill: newValue })
+      } else if (prop === 'width' || prop === 'height') {
+        child.set({ [prop]: Number(newValue) })
+      }
+    }
+  }
   canvas.forEachObject((obj) => {
+    // 顶层对象自身可能有绑定
+    if (obj._bindTarget === bindTarget) {
+      if (!fabricId || obj.name === fabricId || obj.id === fabricId) {
+        if (prop === 'text' && (obj as any).type === 'textbox') {
+          ;(obj as any).set({ text: String(newValue) })
+        } else if (prop === 'fill') {
+          obj.set({ fill: newValue })
+        } else if (prop === 'width' || prop === 'height') {
+          obj.set({ [prop]: Number(newValue) })
+        }
+      }
+    }
+    // group 内子对象
     if (obj.type === 'group') {
       const group = obj as fabric.Group
       const objects = group.getObjects()
       objects.forEach((child: any) => {
-        if (child._bindTarget === bindTarget) {
-          if (prop === 'text' && child.type === 'textbox') {
-            child.set({ text: String(newValue) })
-          } else if (prop === 'fill') {
-            child.set({ fill: newValue })
-          } else if (prop === 'width' || prop === 'height') {
-            child.set({ [prop]: Number(newValue) })
-          }
-        }
+        applyToChild(child)
       })
     }
   })

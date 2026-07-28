@@ -25,7 +25,8 @@ defineOptions({ name: 'Control' })
 
 const devices = ref<any[]>([])
 const tags = ref<any[]>([])
-const form = reactive<any>({ device_id: null, tag_id: null, value: '' })
+const tagsLoading = ref(false)
+const form = reactive<any>({ device_id: null, tag_id: null, value: null })
 
 const writableTags = computed(() => tags.value.filter((t) => t.writable))
 
@@ -33,15 +34,26 @@ const selectedDevice = computed(() => devices.value.find((d) => d.id === form.de
 const selectedTag = computed(() => tags.value.find((t) => t.id === form.tag_id))
 
 const fetchDevices = async () => {
-  devices.value = unwrapList(await getAllDevices()).list
+  try {
+    devices.value = unwrapList(await getAllDevices()).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取设备列表失败')
+  }
 }
 const onDeviceChange = async () => {
   form.tag_id = null
   tags.value = []
   if (form.device_id == null) return
-  const res = await getDeviceTags(form.device_id)
-  const body = unwrap(res)
-  tags.value = Array.isArray(body) ? body : unwrapList(res).list
+  tagsLoading.value = true
+  try {
+    const res = await getDeviceTags(form.device_id)
+    const body = unwrap(res)
+    tags.value = Array.isArray(body) ? body : unwrapList(res).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  } finally {
+    tagsLoading.value = false
+  }
 }
 
 // ── 二次确认 ──
@@ -54,7 +66,7 @@ const doWrite = () => {
     ElMessage.warning('请选择设备和点位')
     return
   }
-  if (form.value === '' || form.value == null) {
+  if (form.value == null) {
     ElMessage.warning('请输入写入值')
     return
   }
@@ -119,7 +131,7 @@ onMounted(fetchDevices)
         </ElSelect>
       </ElFormItem>
       <ElFormItem label="写入值">
-        <ElInput v-model="form.value" placeholder="请输入要写入的数值" />
+        <ElInputNumber v-model="form.value" :step="0.1" :precision="2" class="w-full" placeholder="请输入要写入的数值" />
       </ElFormItem>
       <ElFormItem>
         <ElButton v-hasPermi="['device.control']" type="danger" @click="doWrite">
@@ -131,7 +143,7 @@ onMounted(fetchDevices)
     <div class="mt-16px">
       <div class="text-14px font-600 mb-8px">当前设备可写点位</div>
       <ElEmpty v-if="form.device_id == null" description="请先选择设备" :image-size="70" />
-      <ElTable v-else :data="writableTags" border stripe>
+      <ElTable v-else v-loading="tagsLoading" :data="writableTags" border stripe>
         <ElTableColumn prop="name" label="点位名称" min-width="140" />
         <ElTableColumn prop="address" label="地址" width="90" />
         <ElTableColumn prop="register_type" label="寄存器" width="120" />

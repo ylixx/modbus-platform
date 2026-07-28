@@ -1,6 +1,6 @@
 """Batch import API — devices and tags from CSV/Excel."""
 import json
-from fastapi import APIRouter, Depends, UploadFile, File, Form
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
@@ -16,6 +16,8 @@ async def import_devices(
 ):
     """Import devices from CSV file."""
     content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件大小超过5MB限制")
     result = import_devices_csv(content)
     return {
         "message": f"导入完成：成功 {result['created']} 条",
@@ -31,6 +33,8 @@ async def import_tags(
 ):
     """Import tags from CSV file."""
     content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件大小超过5MB限制")
     result = import_tags_csv(content)
     return {
         "message": f"导入完成：成功 {result['created']} 条",

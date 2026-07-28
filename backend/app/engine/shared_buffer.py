@@ -21,6 +21,7 @@ class WriteBuffer:
 
     FLUSH_SIZE = 500
     FLUSH_INTERVAL = 2.0
+    MAX_RETRY_COUNT = 3  # 单批最大重试次数
 
     def __init__(self):
         self._buffer: list[dict] = []
@@ -67,14 +68,30 @@ class WriteBuffer:
             return
 
         db = SessionLocal()
+        retry_batch = None
         try:
             db.bulk_insert_mappings(TagHistory, batch)
             db.commit()
-            logger.debug(f"WriteBuffer: 批量写入 {len(batch)} 条")
+            logger.info(f"[入库] WriteBuffer 批量写入 {len(batch)} 条历史记录")
             self._update_aggregates(db, batch)
         except Exception as e:
             logger.error(f"WriteBuffer flush error: {e}")
             db.rollback()
+            # flush 失败时将数据放回缓冲区，但标记重试次数
+            retry_batch = []
+            for record in batch:
+                retry_count = record.get('_retry_count', 0) + 1
+                if retry_count <= self.MAX_RETRY_COUNT:
+                    record['_retry_count'] = retry_count
+                    retry_batch.append(record)
+                else:
+                    logger.error(f"WriteBuffer: record discarded after {self.MAX_RETRY_COUNT} retries: device_id={record.get('device_id')}, tag_id={record.get('tag_id')}")
+            if retry_batch:
+                with self._lock:
+                    self._buffer.extend(retry_batch)
+                    if len(self._buffer) > self.FLUSH_SIZE * 10:
+                        self._buffer = self._buffer[-self.FLUSH_SIZE * 5:]
+                        logger.warning(f"WriteBuffer: buffer overflow, trimmed to {len(self._buffer)} records")
         finally:
             db.close()
 
@@ -188,8 +205,8 @@ class WsBatchPusher:
                 asyncio.run_coroutine_threadsafe(
                     ws_manager.broadcast({"type": "batch_live", "data": batch}), loop,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"WsBatchPusher push error: {e}")
 
 
 def _get_event_loop():

@@ -53,8 +53,12 @@ def create_config(req: HierarchyConfigCreate, db: Session = Depends(get_db), _: 
         is_default=req.is_default,
     )
     db.add(cfg)
-    db.commit()
-    db.refresh(cfg)
+    try:
+        db.commit()
+        db.refresh(cfg)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return _parse_levels(cfg)
 
 
@@ -73,8 +77,12 @@ def update_config(config_id: int, req: HierarchyConfigUpdate, db: Session = Depe
         if req.is_default:
             db.query(HierarchyConfig).update({"is_default": False})
         cfg.is_default = req.is_default
-    db.commit()
-    db.refresh(cfg)
+    try:
+        db.commit()
+        db.refresh(cfg)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return _parse_levels(cfg)
 
 
@@ -84,7 +92,11 @@ def delete_config(config_id: int, db: Session = Depends(get_db), _: User = Depen
     if not cfg:
         raise HTTPException(status_code=404, detail="配置不存在")
     db.delete(cfg)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"message": "删除成功"}
 
 
@@ -195,8 +207,12 @@ def _create_default(db: Session) -> HierarchyConfig:
         is_default=True,
     )
     db.add(cfg)
-    db.commit()
-    db.refresh(cfg)
+    try:
+        db.commit()
+        db.refresh(cfg)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return cfg
 
 

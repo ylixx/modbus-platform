@@ -4,6 +4,7 @@ import { useForm } from '@/hooks/web/useForm'
 import { reactive, ref } from 'vue'
 import { useValidator } from '@/hooks/web/useValidator'
 import { ElMessage, ElMessageBox, ElDivider } from 'element-plus'
+import { changeMyPassword } from '@/api/modbus'
 
 const { required } = useValidator()
 
@@ -78,11 +79,9 @@ const { getFormData, getElFormExpose } = formMethods
 const saveLoading = ref(false)
 const save = async () => {
   const elForm = await getElFormExpose()
-  const valid = await elForm?.validate().catch((err) => {
-    console.log(err)
-  })
+  const valid = await elForm?.validate().catch(() => {})
   if (valid) {
-    ElMessageBox.confirm('是否确认修改?', '提示', {
+    ElMessageBox.confirm('是否确认修改密码？修改后需重新登录。', '提示', {
       confirmButtonText: '确认',
       cancelButtonText: '取消',
       type: 'warning'
@@ -90,10 +89,14 @@ const save = async () => {
       .then(async () => {
         try {
           saveLoading.value = true
-          // 这里可以调用修改密码的接口
-          ElMessage.success('修改成功')
-        } catch (error) {
-          console.log(error)
+          const formData = await getFormData()
+          await changeMyPassword({
+            old_password: formData.password,
+            new_password: formData.newPassword
+          })
+          ElMessage.success('密码修改成功，请重新登录')
+        } catch (error: any) {
+          ElMessage.error(error?.response?.data?.detail || error?.message || '修改失败')
         } finally {
           saveLoading.value = false
         }
@@ -106,5 +109,5 @@ const save = async () => {
 <template>
   <Form :rules="rules" @register="formRegister" :schema="formSchema" />
   <ElDivider />
-  <BaseButton type="primary" @click="save">确认修改</BaseButton>
+  <BaseButton type="primary" :loading="saveLoading" @click="save">确认修改</BaseButton>
 </template>

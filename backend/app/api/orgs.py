@@ -1,5 +1,5 @@
 """Organization structure API — 组织架构（厂-区-班-站-位置 灵活树）."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -9,6 +9,8 @@ from app.models.user import User
 from app.models.device import Device
 from app.models.org import OrgNode
 from app.services.org_service import expand_org_subtree, get_user_org_scope
+from app.services.audit_service import log_action
+import json
 
 router = APIRouter(prefix="/orgs", tags=["组织架构"])
 
@@ -219,8 +221,9 @@ def list_org_nodes(
 @router.post("", response_model=OrgNodeOut)
 def create_org_node(
     req: OrgNodeCreate,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("org.write")),
+    user: User = Depends(require_permission("org.write")),
 ):
     if req.node_type not in NODE_TYPES:
         raise HTTPException(status_code=400, detail=f"无效节点类型: {req.node_type}")
@@ -235,8 +238,15 @@ def create_org_node(
         raise HTTPException(status_code=400, detail="同级下已存在同名节点")
     node = OrgNode(**req.model_dump())
     db.add(node)
-    db.commit()
-    db.refresh(node)
+    try:
+        db.commit()
+        db.refresh(node)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="org.create", resource_type="org_node", resource_id=node.id,
+               resource_name=node.name or str(node.id), detail=json.dumps({"node_type": node.node_type, "parent_id": node.parent_id}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return OrgNodeOut.model_validate(node)
 
 
@@ -244,8 +254,9 @@ def create_org_node(
 def update_org_node(
     node_id: int,
     req: OrgNodeUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("org.write")),
+    user: User = Depends(require_permission("org.write")),
 ):
     node = db.query(OrgNode).filter(OrgNode.id == node_id).first()
     if not node:
@@ -264,17 +275,25 @@ def update_org_node(
             raise HTTPException(status_code=404, detail="父节点不存在")
     for k, v in data.items():
         setattr(node, k, v)
-    db.commit()
-    db.refresh(node)
+    log_action(action="org.update", resource_type="org_node", resource_id=node.id,
+               resource_name=node.name or str(node.id), detail=json.dumps(data, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+        db.refresh(node)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return OrgNodeOut.model_validate(node)
 
 
 @router.delete("/{node_id}")
 def delete_org_node(
     node_id: int,
+    request: Request,
     force: bool = False,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("org.write")),
+    user: User = Depends(require_permission("org.write")),
 ):
     node = db.query(OrgNode).filter(OrgNode.id == node_id).first()
     if not node:
@@ -287,12 +306,19 @@ def delete_org_node(
             detail=f"该节点及子节点下还有 {device_count} 台设备，请先移走设备或使用强制删除",
         )
     # 解除设备归属，再删除整个子树
+    log_action(action="org.delete", resource_type="org_node", resource_id=node.id,
+               resource_name=node.name or str(node.id), detail=json.dumps({"force": force, "removed_nodes": len(subtree), "detached_devices": device_count}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     if device_count:
         db.query(Device).filter(Device.org_node_id.in_(subtree)).update(
             {"org_node_id": None}, synchronize_session=False
         )
     db.query(OrgNode).filter(OrgNode.id.in_(subtree)).delete(synchronize_session=False)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"message": "删除成功", "removed_nodes": len(subtree), "detached_devices": device_count}
 
 
@@ -300,8 +326,9 @@ def delete_org_node(
 def move_devices_to_node(
     node_id: int,
     device_ids: List[int],
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("org.write")),
+    user: User = Depends(require_permission("org.write")),
 ):
     """批量把设备挂到指定组织节点。"""
     node = db.query(OrgNode).filter(OrgNode.id == node_id).first()
@@ -312,5 +339,12 @@ def move_devices_to_node(
         .filter(Device.id.in_(device_ids))
         .update({"org_node_id": node_id}, synchronize_session=False)
     )
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="org.move_devices", resource_type="org_node", resource_id=node.id,
+               resource_name=node.name or str(node.id), detail=json.dumps({"device_ids": device_ids, "updated": updated}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return {"message": "移动成功", "updated": updated}

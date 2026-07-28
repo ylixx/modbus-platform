@@ -36,6 +36,9 @@ def _cast_opc_value(raw, target_type: str):
 class OpcUaDeviceSession:
     """Manages one OPC-UA connection for a single device."""
 
+    MAX_CONSECUTIVE_FAILURES = 50
+    OFFLINE_ALARM_THRESHOLD = 3
+
     def __init__(self, device: Device):
         self.device_id = device.id
         self.device_name = device.name
@@ -122,6 +125,7 @@ class OpcUaDeviceSession:
                 )
             except Exception as e:
                 logger.warning(f"OPC-UA security setup failed: {e}, falling back to None")
+                self._update_status("error", f"安全模式降级: {e}")
 
         try:
             await client.connect()
@@ -162,7 +166,12 @@ class OpcUaDeviceSession:
                     logger.info(f"OPC-UA device '{self.device_name}' reconnected")
                 except Exception as e:
                     consecutive_failures += 1
-                    self._update_status("error", f"重连失败: {e}")
+                    self._update_status("error", f"重连失败({consecutive_failures}): {e}")
+                    # 超过最大重连次数，自动禁用
+                    if consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
+                        logger.error(f"OPC-UA device '{self.device_name}' auto-disable after {consecutive_failures} failures")
+                        self._auto_disable(f"连续 {consecutive_failures} 次连接失败")
+                        break
                     sleep_time = min(backoff_delay, 60.0)
                     backoff_delay *= 2
                     await asyncio.sleep(sleep_time)
@@ -275,6 +284,21 @@ class OpcUaDeviceSession:
             "recorded_at": datetime.now(timezone.utc),
         })
         ws_pusher.push_live_value(self.device_id, tag.id, tag.name, value, "good")
+
+    def _auto_disable(self, reason: str):
+        """连续失败后自动禁用设备。"""
+        db = SessionLocal()
+        try:
+            device = db.query(Device).filter(Device.id == self.device_id).first()
+            if device:
+                device.enabled = False
+                device.status = "error"
+                device.last_error = f"自动禁用: {reason}"
+                db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
 
     def _update_status(self, status: str, error: Optional[str]):
         from app.engine.shared_buffer import ws_pusher

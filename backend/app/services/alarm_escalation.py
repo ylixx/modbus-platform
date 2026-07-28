@@ -7,24 +7,38 @@ If an alarm is active and unacknowledged for N minutes:
 
 Runs periodically via scheduler or heartbeat.
 """
+import json
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.models.alarm import AlarmRecord, AlarmStatus, AlarmLevel
 from app.models.sms import SmsContact, SmsPushRule
+from app.models.system_config import SystemConfig
 from app.services.sms_service import sms_service
 
 
 LEVEL_ORDER = ["info", "warning", "critical", "emergency"]
 
-# Escalation config: if alarm at level X is unacknowledged for N minutes, escalate
 DEFAULT_ESCALATION = {
     "info": 30,       # info → warning after 30min
     "warning": 15,    # warning → critical after 15min
     "critical": 10,   # critical → emergency after 10min
     "emergency": 0,   # no further escalation
 }
+
+ESCALATION_CONFIG_KEY = "alarm_escalation_config"
+
+
+def _get_escalation_config(db: Session) -> dict:
+    """从数据库读取升级配置，若无则返回默认值。"""
+    row = db.query(SystemConfig).filter(SystemConfig.key == ESCALATION_CONFIG_KEY).first()
+    if row and row.value:
+        try:
+            return json.loads(row.value)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return dict(DEFAULT_ESCALATION)
 
 
 def check_escalations():
@@ -38,13 +52,16 @@ def check_escalations():
 
         now = datetime.now(timezone.utc)
 
+        # 从数据库读取可配置的升级阈值
+        escalation_config = _get_escalation_config(db)
+
         for alarm in active_alarms:
             if not alarm.triggered_at:
                 continue
 
             elapsed = (now - alarm.triggered_at).total_seconds() / 60
             current_level = alarm.alarm_level
-            threshold = DEFAULT_ESCALATION.get(current_level, 0)
+            threshold = escalation_config.get(current_level, 0)
 
             if threshold <= 0:
                 continue  # No escalation for this level
@@ -55,7 +72,8 @@ def check_escalations():
                 if new_level and new_level != current_level:
                     old_level = alarm.alarm_level
                     alarm.alarm_level = new_level
-                    alarm.alarm_message = f"[升级] {alarm.alarm_message} (从{old_level}升级到{new_level})"
+                    # Do NOT modify alarm_message — only upgrade the level.
+                    # Previous code appended "[升级]" prefix repeatedly, causing message bloat.
                     db.commit()
                     escalated += 1
 
@@ -96,6 +114,8 @@ def _send_escalation_sms(db: Session, alarm: AlarmRecord, old_level: str, new_le
         push_rules = db.query(SmsPushRule).filter(SmsPushRule.enabled == True).all()
         import json
 
+        now_time = datetime.now(timezone.utc).strftime("%H:%M")
+
         for pr in push_rules:
             # Check level filter
             if pr.alarm_levels:
@@ -106,9 +126,12 @@ def _send_escalation_sms(db: Session, alarm: AlarmRecord, old_level: str, new_le
                 except (json.JSONDecodeError, TypeError):
                     continue
 
-            # Check time window
-            now_time = datetime.now(timezone.utc).strftime("%H:%M")
-            if not (pr.time_start <= now_time <= pr.time_end):
+            # Check time window (supports cross-midnight, e.g. 22:00~06:00)
+            if pr.time_start <= pr.time_end:
+                in_window = pr.time_start <= now_time <= pr.time_end
+            else:
+                in_window = now_time >= pr.time_start or now_time <= pr.time_end
+            if not in_window:
                 continue
 
             # Send to contacts

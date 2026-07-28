@@ -15,10 +15,10 @@ Script contract:
         float — processed value (quality=good)
         dict  — {value: float, quality?: str, alarm?: str}
 """
-import signal
-import traceback
 import ast
 import hashlib
+import threading
+import traceback
 from typing import Optional
 from loguru import logger
 from datetime import datetime, timezone
@@ -51,12 +51,8 @@ class TimeoutError(Exception):
     pass
 
 
-def _timeout_handler(signum, frame):
-    raise TimeoutError("Script execution timed out")
-
-
 class ScriptEngine:
-    """Executes user scripts in a sandboxed environment."""
+    """Executes user scripts in a sandboxed environment with cross-platform timeout."""
 
     def __init__(self):
         # Cache compiled scripts: script_id -> (code_object, source_hash)
@@ -93,29 +89,42 @@ class ScriptEngine:
                 "datetime": datetime,
             }
 
-            # Execute with timeout (Unix only via signal)
-            try:
-                signal.signal(signal.SIGALRM, _timeout_handler)
-                signal.setitimer(signal.ITIMER_REAL, timeout_ms / 1000.0)
-            except (AttributeError, ValueError):
-                pass  # Windows — no SIGALRM support
+            # Cross-platform timeout: run exec+process in a worker thread
+            result_holder: dict = {}
+            error_holder: list = []
+            timeout_event = threading.Event()
 
-            exec(compiled, namespace)
+            def _run():
+                try:
+                    exec(compiled, namespace)
+                    process_fn = namespace.get("process")
+                    if not process_fn or not callable(process_fn):
+                        error_holder.append("Script must define: def process(raw_value, history, tag, context)")
+                        return
+                    result = process_fn(raw_value, history, tag_config, context)
+                    result_holder["result"] = result
+                except Exception as e:
+                    error_holder.append(f"{type(e).__name__}: {str(e)}")
 
-            try:
-                signal.alarm(0)
-            except (AttributeError, ValueError):
-                pass
+            worker = threading.Thread(target=_run, daemon=True)
+            worker.start()
+            finished = worker.join(timeout=timeout_ms / 1000.0)
 
-            # Get the process function
-            process_fn = namespace.get("process")
-            if not process_fn or not callable(process_fn):
-                return None, "bad", "Script must define: def process(raw_value, history, tag, context)"
+            if not finished:
+                # Worker thread is still running — it timed out.
+                # Since it's daemon, it will be cleaned up at process exit.
+                logger.warning(f"Script {script_id} timed out after {timeout_ms}ms")
+                return None, "bad", f"脚本执行超时 ({timeout_ms}ms)"
 
-            # Call process()
-            result = process_fn(raw_value, history, tag_config, context)
+            # Worker finished within timeout
+            if error_holder:
+                error_msg = error_holder[0]
+                if "Script must define" in error_msg:
+                    return None, "bad", error_msg
+                logger.warning(f"Script {script_id} error: {error_msg}")
+                return None, "bad", error_msg
 
-            # Parse result
+            result = result_holder.get("result")
             if isinstance(result, dict):
                 value = result.get("value")
                 quality = result.get("quality", "good")
@@ -129,6 +138,9 @@ class ScriptEngine:
         except TimeoutError:
             logger.warning(f"Script {script_id} timed out after {timeout_ms}ms")
             return None, "bad", f"脚本执行超时 ({timeout_ms}ms)"
+        except ValueError as e:
+            # From _validate_ast
+            return None, "bad", str(e)
         except Exception as e:
             error_msg = f"{type(e).__name__}: {str(e)}"
             logger.warning(f"Script {script_id} error: {error_msg}")
@@ -182,10 +194,6 @@ class ScriptEngine:
             raise ValueError(f"脚本语法错误：{e}")
 
         for node in ast.walk(tree):
-            # NOTE: top-level imports are neutralized (commented out) by
-            # _sanitize(), so they are intentionally NOT rejected here — that
-            # would break legit scripts that write `import math` and rely on
-            # the namespace. We only hard-block the actual escape vectors.
             if isinstance(node, ast.Attribute):
                 # Block dunder access: __class__, __subclasses__, __bases__, __globals__ ...
                 if node.attr.startswith("__") or node.attr.endswith("__"):

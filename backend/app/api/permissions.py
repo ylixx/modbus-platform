@@ -1,12 +1,13 @@
 """Permission & Role management API."""
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.permission import Permission, Role, RolePermission, UserRole
 from app.models.org import RoleOrgScope
+from app.services.audit_service import log_action
 from app.schemas.common import ResponseModel
 from pydantic import BaseModel
 from typing import Optional, List
@@ -102,7 +103,7 @@ def list_roles(db: Session = Depends(get_db), _: User = Depends(require_permissi
 
 
 @router.post("/roles", response_model=RoleOut)
-def create_role(req: RoleCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("rbac.write"))):
+def create_role(req: RoleCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("rbac.write"))):
     if db.query(Role).filter(Role.code == req.code).first():
         raise HTTPException(status_code=400, detail="角色代码已存在")
     if req.data_scope not in ("all", "org"):
@@ -115,13 +116,20 @@ def create_role(req: RoleCreate, db: Session = Depends(get_db), _: User = Depend
     if req.data_scope == "org":
         for nid in set(req.org_node_ids):
             db.add(RoleOrgScope(role_id=role.id, org_node_id=nid))
-    db.commit()
-    db.refresh(role)
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+    log_action(action="role.create", resource_type="role", resource_id=role.id,
+               resource_name=role.name or str(role.id), detail=json.dumps({"code": role.code, "data_scope": role.data_scope}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return _role_out(role)
 
 
 @router.put("/roles/{role_id}", response_model=RoleOut)
-def update_role(role_id: int, req: RoleUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("rbac.write"))):
+def update_role(role_id: int, req: RoleUpdate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("rbac.write"))):
     role = db.query(Role).filter(Role.id == role_id).first()
     if not role:
         raise HTTPException(status_code=404, detail="角色不存在")
@@ -130,6 +138,8 @@ def update_role(role_id: int, req: RoleUpdate, db: Session = Depends(get_db), _:
     if req.description is not None:
         role.description = req.description
     if req.permission_ids is not None:
+        if role.code == "admin":
+            raise HTTPException(status_code=400, detail="admin 角色权限不可修改")
         db.query(RolePermission).filter(RolePermission.role_id == role_id).delete()
         for pid in req.permission_ids:
             db.add(RolePermission(role_id=role_id, permission_id=pid))
@@ -144,20 +154,38 @@ def update_role(role_id: int, req: RoleUpdate, db: Session = Depends(get_db), _:
         if (role.data_scope or "all") == "org":
             for nid in set(req.org_node_ids):
                 db.add(RoleOrgScope(role_id=role_id, org_node_id=nid))
-    db.commit()
-    db.refresh(role)
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+    log_action(action="role.update", resource_type="role", resource_id=role.id,
+               resource_name=role.name or str(role.id), detail=json.dumps(req.model_dump(exclude_unset=True), ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return _role_out(role)
 
 
 @router.delete("/roles/{role_id}")
-def delete_role(role_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("rbac.write"))):
+def delete_role(role_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("rbac.write"))):
     role = db.query(Role).filter(Role.id == role_id).first()
     if not role:
         raise HTTPException(status_code=404, detail="角色不存在")
     if role.is_system:
         raise HTTPException(status_code=400, detail="系统角色不可删除")
+    # 检查是否有用户关联此角色
+    user_count = db.query(UserRole).filter(UserRole.role_id == role_id).count()
+    if user_count > 0:
+        raise HTTPException(status_code=400, detail=f"该角色下有 {user_count} 个用户关联，请先移除用户角色后再删除")
     db.delete(role)
-    db.commit()
+    log_action(action="role.delete", resource_type="role", resource_id=role.id,
+               resource_name=role.name or str(role.id), detail=json.dumps({"code": role.code}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"message": "删除成功"}
 
 
@@ -181,7 +209,7 @@ def get_user_roles(user_id: int, db: Session = Depends(get_db), _: User = Depend
 
 
 @router.post("/users/{user_id}/roles")
-def assign_user_role(user_id: int, req: UserRoleAssign, db: Session = Depends(get_db), _: User = Depends(require_permission("rbac.write"))):
+def assign_user_role(user_id: int, req: UserRoleAssign, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("rbac.write"))):
     # Check if already assigned
     existing = db.query(UserRole).filter(UserRole.user_id == user_id, UserRole.role_id == req.role_id).first()
     if existing:
@@ -194,17 +222,31 @@ def assign_user_role(user_id: int, req: UserRoleAssign, db: Session = Depends(ge
             scope_values=json.dumps(req.scope_values, ensure_ascii=False),
         )
         db.add(ur)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="role.assign_user", resource_type="user_role", resource_id=req.role_id,
+               resource_name=str(user_id), detail=json.dumps({"user_id": user_id, "role_id": req.role_id, "data_scope": req.data_scope}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return {"message": "分配成功"}
 
 
 @router.delete("/user-roles/{user_role_id}")
-def remove_user_role(user_role_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("rbac.write"))):
+def remove_user_role(user_role_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("rbac.write"))):
     ur = db.query(UserRole).filter(UserRole.id == user_role_id).first()
     if not ur:
         raise HTTPException(status_code=404, detail="记录不存在")
+    log_action(action="role.remove_user", resource_type="user_role", resource_id=ur.id,
+               resource_name=str(ur.user_id), detail=json.dumps({"user_id": ur.user_id, "role_id": ur.role_id}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     db.delete(ur)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"message": "移除成功"}
 
 

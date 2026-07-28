@@ -1,6 +1,6 @@
 """SCADA page + custom widget API."""
 import json, base64
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -9,6 +9,10 @@ from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.scada import ScadaPage, CustomWidget
+from app.services.audit_service import log_action
+
+# 上传文件大小限制（5MB）
+MAX_UPLOAD_SIZE = 5 * 1024 * 1024
 
 router = APIRouter(prefix="/scada", tags=["SCADA"])
 
@@ -59,37 +63,71 @@ def get_page(page_id: int, db: Session = Depends(get_db), _: User = Depends(requ
     return _parse_page(page)
 
 @router.post("/pages")
-def create_page(req: ScadaPageCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("scada.write"))):
+def create_page(req: ScadaPageCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("scada.write")), request: Request = None):
     page = ScadaPage(name=req.name, description=req.description, width=req.width, height=req.height,
                      background=req.background, config_json=req.config_json,
                      device_ids=json.dumps(req.device_ids, ensure_ascii=False))
-    db.add(page); db.commit(); db.refresh(page)
+    db.add(page)
+    try:
+        db.commit()
+        db.refresh(page)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="scada.create_page", resource_type="scada_page", resource_id=page.id,
+               resource_name=page.name or str(page.id), detail=json.dumps({"name": page.name, "width": page.width, "height": page.height}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return _parse_page(page)
 
 @router.put("/pages/{page_id}")
-def update_page(page_id: int, req: ScadaPageUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("scada.write"))):
+def update_page(page_id: int, req: ScadaPageUpdate, db: Session = Depends(get_db), user: User = Depends(require_permission("scada.write")), request: Request = None):
     page = db.query(ScadaPage).filter(ScadaPage.id == page_id).first()
     if not page: raise HTTPException(404, "画面不存在")
     for k, v in req.model_dump(exclude_unset=True).items():
         if k == "device_ids": v = json.dumps(v, ensure_ascii=False)
         setattr(page, k, v)
-    db.commit(); db.refresh(page)
+    try:
+        db.commit()
+        db.refresh(page)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="scada.update_page", resource_type="scada_page", resource_id=page.id,
+               resource_name=page.name or str(page.id), detail=json.dumps({"name": page.name, "updated_fields": list(req.model_dump(exclude_unset=True).keys())}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return _parse_page(page)
 
 @router.delete("/pages/{page_id}")
-def delete_page(page_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("scada.write"))):
+def delete_page(page_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("scada.write")), request: Request = None):
     page = db.query(ScadaPage).filter(ScadaPage.id == page_id).first()
     if not page: raise HTTPException(404, "画面不存在")
-    db.delete(page); db.commit()
+    log_action(action="scada.delete_page", resource_type="scada_page", resource_id=page.id,
+               resource_name=page.name or str(page.id), detail=json.dumps({"name": page.name}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    db.delete(page)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"message": "删除成功"}
 
 @router.post("/pages/{page_id}/duplicate")
-def duplicate_page(page_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("scada.write"))):
+def duplicate_page(page_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("scada.write")), request: Request = None):
     src = db.query(ScadaPage).filter(ScadaPage.id == page_id).first()
     if not src: raise HTTPException(404, "画面不存在")
     page = ScadaPage(name=f"{src.name} (副本)", description=src.description, width=src.width,
                      height=src.height, background=src.background, config_json=src.config_json, device_ids=src.device_ids)
-    db.add(page); db.commit(); db.refresh(page)
+    db.add(page)
+    try:
+        db.commit()
+        db.refresh(page)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="scada.duplicate_page", resource_type="scada_page", resource_id=page.id,
+               resource_name=page.name or str(page.id), detail=json.dumps({"source_id": src.id, "source_name": src.name, "new_name": page.name}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return _parse_page(page)
 
 
@@ -127,6 +165,8 @@ async def upload_widget(
 ):
     """Upload SVG or PNG file as a custom widget."""
     content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(400, f"文件大小超过限制（最大 {MAX_UPLOAD_SIZE // (1024*1024)}MB）")
     filename = file.filename.lower()
 
     if filename.endswith(".svg"):
@@ -163,7 +203,13 @@ async def upload_widget(
         source_type=source_type, source_data=source_data,
         thumbnail=thumbnail, default_width=default_width, default_height=default_height,
     )
-    db.add(widget); db.commit(); db.refresh(widget)
+    db.add(widget)
+    try:
+        db.commit()
+        db.refresh(widget)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return _parse_widget(widget)
 
 
@@ -187,7 +233,13 @@ def create_widget(req: WidgetCreate, db: Session = Depends(get_db), _: User = De
         bindable=json.dumps(req.bindable, ensure_ascii=False),
         fabric_json=req.fabric_json,
     )
-    db.add(widget); db.commit(); db.refresh(widget)
+    db.add(widget)
+    try:
+        db.commit()
+        db.refresh(widget)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return _parse_widget(widget)
 
 
@@ -207,7 +259,12 @@ def update_widget(widget_id: int, req: WidgetUpdate, db: Session = Depends(get_d
     for k, v in req.model_dump(exclude_unset=True).items():
         if k == "bindable": v = json.dumps(v, ensure_ascii=False)
         setattr(w, k, v)
-    db.commit(); db.refresh(w)
+    try:
+        db.commit()
+        db.refresh(w)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return _parse_widget(w)
 
 
@@ -215,7 +272,12 @@ def update_widget(widget_id: int, req: WidgetUpdate, db: Session = Depends(get_d
 def delete_widget(widget_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("scada.write"))):
     w = db.query(CustomWidget).filter(CustomWidget.id == widget_id).first()
     if not w: raise HTTPException(404, "图元不存在")
-    db.delete(w); db.commit()
+    db.delete(w)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"message": "删除成功"}
 
 
@@ -230,6 +292,8 @@ async def batch_upload_widgets(
     results = []
     for file in files:
         content = await file.read()
+        if len(content) > MAX_UPLOAD_SIZE:
+            continue  # 跳过超大文件
         filename = file.filename.lower()
         name = file.filename.rsplit(".", 1)[0]
 
@@ -252,5 +316,9 @@ async def batch_upload_widgets(
         db.add(widget)
         results.append(name)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"uploaded": results, "count": len(results)}

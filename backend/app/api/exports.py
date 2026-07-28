@@ -2,7 +2,7 @@
 import io
 import csv
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, Query, Response, HTTPException
+from fastapi import APIRouter, Depends, Query, Response, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from app.core.database import get_db
@@ -12,6 +12,8 @@ from app.models.device import Device, DeviceTag
 from app.models.history import TagHistory
 from app.models.alarm import AlarmRecord
 from app.models.sms import SmsRecord
+from app.services.audit_service import log_action
+import json
 
 router = APIRouter(prefix="/export", tags=["数据导出"])
 
@@ -23,9 +25,13 @@ def export_history_csv(
     start_time: str = None,
     end_time: str = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("export.download")),
+    current_user: User = Depends(require_permission("export.download")),
+    request: Request = None,
 ):
     """Export tag history as CSV."""
+    from app.services.org_service import check_device_visible
+    if not check_device_visible(db, current_user, device_id):
+        raise HTTPException(status_code=403, detail="无权导出该设备数据（超出组织数据范围）")
     q = db.query(TagHistory).filter(TagHistory.device_id == device_id)
     if tag_id:
         q = q.filter(TagHistory.tag_id == tag_id)
@@ -50,6 +56,9 @@ def export_history_csv(
 
     content = "\ufeff" + output.getvalue()  # BOM for Excel
     filename = f"history_{device_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    log_action(action="export.history_csv", resource_type="export", resource_id=str(device_id),
+               resource_name=f"导出历史数据-设备{device_id}", detail=json.dumps({"device_id": device_id, "tag_id": tag_id, "start_time": start_time, "end_time": end_time}, ensure_ascii=False, default=str),
+               user_id=current_user.id, username=current_user.username, ip_address=request.client.host if request.client else "")
     return Response(
         content=content,
         media_type="text/csv; charset=utf-8",
@@ -64,10 +73,17 @@ def export_alarms_csv(
     start_time: str = None,
     end_time: str = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("export.download")),
+    current_user: User = Depends(require_permission("export.download")),
+    request: Request = None,
 ):
     """Export alarm records as CSV."""
+    from app.services.org_service import get_visible_device_ids
+    visible = get_visible_device_ids(db, current_user)
     q = db.query(AlarmRecord)
+    if visible is not None:
+        if not visible:
+            raise HTTPException(status_code=403, detail="无权导出数据（超出组织数据范围）")
+        q = q.filter(AlarmRecord.device_id.in_(visible))
     if device_id:
         q = q.filter(AlarmRecord.device_id == device_id)
     if alarm_level:
@@ -97,6 +113,9 @@ def export_alarms_csv(
 
     content = "\ufeff" + output.getvalue()
     filename = f"alarms_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    log_action(action="export.alarms_csv", resource_type="export", resource_id="alarms",
+               resource_name="导出报警数据", detail=json.dumps({"device_id": device_id, "alarm_level": alarm_level, "start_time": start_time, "end_time": end_time}, ensure_ascii=False, default=str),
+               user_id=current_user.id, username=current_user.username, ip_address=request.client.host if request.client else "")
     return Response(
         content=content,
         media_type="text/csv; charset=utf-8",
@@ -107,11 +126,15 @@ def export_alarms_csv(
 @router.get("/devices/csv")
 def export_devices_csv(
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("export.download")),
+    current_user: User = Depends(require_permission("export.download")),
+    request: Request = None,
 ):
     """Export device list as CSV."""
-    devices = db.query(Device).order_by(Device.id).all()
-    tags = db.query(DeviceTag).order_by(DeviceTag.device_id, DeviceTag.sort_order).all()
+    from app.services.org_service import apply_device_org_filter
+    base_q = apply_device_org_filter(db.query(Device), db, current_user)
+    devices = base_q.order_by(Device.id).all()
+    visible_ids = {d.id for d in devices}
+    tags = db.query(DeviceTag).filter(DeviceTag.device_id.in_(visible_ids)).order_by(DeviceTag.device_id, DeviceTag.sort_order).all() if visible_ids else []
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -153,6 +176,9 @@ def export_devices_csv(
 
     content = "\ufeff" + output.getvalue()
     filename = f"devices_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    log_action(action="export.devices_csv", resource_type="export", resource_id="devices",
+               resource_name="导出设备数据", detail=json.dumps({"device_count": len(devices)}, ensure_ascii=False, default=str),
+               user_id=current_user.id, username=current_user.username, ip_address=request.client.host if request.client else "")
     return Response(
         content=content,
         media_type="text/csv; charset=utf-8",
@@ -164,9 +190,12 @@ def export_devices_csv(
 def export_tags_csv(
     device_id: int = Query(..., description="设备ID"),
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("export.download")),
+    current_user: User = Depends(require_permission("export.download")),
 ):
     """Export tags of a specific device as CSV (for import-compatible format)."""
+    from app.services.org_service import check_device_visible
+    if not check_device_visible(db, current_user, device_id):
+        raise HTTPException(status_code=403, detail="无权导出该设备数据（超出组织数据范围）")
     device = db.query(Device).filter(Device.id == device_id).first()
     if not device:
         raise HTTPException(404, "设备不存在")
@@ -198,7 +227,8 @@ def export_tags_csv(
 def daily_report(
     date: str = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("export.download")),
+    current_user: User = Depends(require_permission("export.download")),
+    request: Request = None,
 ):
     """Generate a daily summary report."""
     if not date:
@@ -224,6 +254,10 @@ def daily_report(
     sms_sent = db.query(sql_func.count()).select_from(SmsRecord).filter(
         SmsRecord.sent_at >= day_start, SmsRecord.sent_at <= day_end
     ).scalar()
+
+    log_action(action="export.daily_report", resource_type="export", resource_id="daily_report",
+               resource_name="导出日报", detail=json.dumps({"date": date, "total_devices": total_devices, "online_devices": online_devices, "alarm_count": alarm_count, "sms_sent": sms_sent}, ensure_ascii=False, default=str),
+               user_id=current_user.id, username=current_user.username, ip_address=request.client.host if request.client else "")
 
     return {
         "date": date,

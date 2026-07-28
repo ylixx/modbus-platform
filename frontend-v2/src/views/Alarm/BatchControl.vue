@@ -48,14 +48,22 @@ const devices = ref<any[]>([])
 const allTags = ref<Record<number, any[]>>({}) // deviceId -> tags
 
 const fetchDevices = async () => {
-  devices.value = unwrapList(await getAllDevices()).list
+  try {
+    devices.value = unwrapList(await getAllDevices()).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取设备列表失败')
+  }
 }
 
 const fetchTags = async (deviceId: number) => {
   if (allTags.value[deviceId]) return
-  const res = await getDeviceTags(deviceId)
-  const body = unwrap(res)
-  allTags.value[deviceId] = Array.isArray(body) ? body : unwrapList(res).list
+  try {
+    const res = await getDeviceTags(deviceId)
+    const body = unwrap(res)
+    allTags.value[deviceId] = Array.isArray(body) ? body : unwrapList(res).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  }
 }
 
 const getWritableTags = (deviceId: number) => {
@@ -130,6 +138,7 @@ const loadWritablePoints = async () => {
     ElMessage.info('当前没有可控制的设备')
     return
   }
+  try {
   // 并发拉取所有目标设备点位
   await Promise.all(ids.map((id) => fetchTags(id)))
 
@@ -178,6 +187,9 @@ const loadWritablePoints = async () => {
   )
   // 同步刷新实时值，保证「当前值 / 回读值」列随筛选范围更新
   fetchLiveForDevices(ids).catch(() => {})
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载可写点位失败')
+  }
 }
 
 // 级联选择变化时自动按新范围刷新列表
@@ -240,10 +252,14 @@ const onBatchDeviceChange = async () => {
     batchTagOptions.value = []
     return
   }
+  try {
   // 用第一个设备的点位作为参考（假设同类型设备点位一致）
   const firstDeviceId = batchForm.device_ids[0]
   await fetchTags(firstDeviceId)
   batchTagOptions.value = getWritableTags(firstDeviceId)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  }
 }
 
 const confirmBatchAdd = () => {
@@ -265,8 +281,13 @@ const confirmBatchAdd = () => {
 }
 
 // 删除指令
-const removeInstruction = (idx: number) => {
-  instructions.value.splice(idx, 1)
+const removeInstruction = async (idx: number) => {
+  try {
+    await ElMessageBox.confirm('确认删除该指令？', '提示', { type: 'warning' })
+    instructions.value.splice(idx, 1)
+  } catch {
+    // cancelled
+  }
 }
 
 // 清空指令
@@ -280,7 +301,11 @@ const onDeviceChange = async (idx: number, deviceId: number) => {
   instructions.value[idx].tag_id = null
   instructions.value[idx].status = 'pending'
   instructions.value[idx].resultMsg = ''
-  if (deviceId) await fetchTags(deviceId)
+  try {
+    if (deviceId) await fetchTags(deviceId)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  }
 }
 
 // ── 执行 ──
@@ -369,11 +394,15 @@ const stats = computed(() => {
 })
 
 onMounted(async () => {
-  await fetchDevices()
-  // 级联未选时默认列出全部设备的可写点位
-  await loadWritablePoints()
-  // 初始拉取实时值，让「当前值 / 回读值」列首屏即有数据
-  await fetchLiveForDevices(targetDeviceIds.value)
+  try {
+    await fetchDevices()
+    // 级联未选时默认列出全部设备的可写点位
+    await loadWritablePoints()
+    // 初始拉取实时值，让「当前值 / 回读值」列首屏即有数据
+    await fetchLiveForDevices(targetDeviceIds.value)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '初始化失败')
+  }
 })
 </script>
 

@@ -4,12 +4,13 @@
  *
  * 布局：左侧图元面板 | 中间画布 | 右侧属性面板
  */
-import { ref, reactive, onMounted, computed, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton,
   ElInput,
   ElMessage,
+  ElMessageBox,
   ElDialog,
   ElForm,
   ElFormItem,
@@ -49,6 +50,24 @@ const page = ref<any>({ name: '', config_json: '[]', width: 1920, height: 1080, 
 const saving = ref(false)
 const canvasRef = ref<InstanceType<typeof ScadaCanvas>>()
 
+// ── 未保存变更追踪 & 自动保存 ──
+const hasUnsavedChanges = ref(false)
+let autoSaveTimer: ReturnType<typeof setInterval> | null = null
+
+const markDirty = () => { hasUnsavedChanges.value = true }
+
+const autoSave = async () => {
+  if (!hasUnsavedChanges.value) return
+  await save()
+  hasUnsavedChanges.value = false
+}
+
+const onBeforeUnload = (e: BeforeUnloadEvent) => {
+  if (hasUnsavedChanges.value) {
+    e.preventDefault()
+  }
+}
+
 // ── 左侧面板 ──
 const leftTab = ref('builtin')
 const customWidgets = ref<any[]>([])
@@ -79,18 +98,22 @@ const bindForm = reactive({
 
 // ── 加载页面数据 ──
 const fetchPage = async () => {
-  const body = unwrap(await getScadaPage(Number(id)))
-  page.value = body || {}
-  await nextTick()
-  // 加载画布配置
-  const config = body?.config_json
-  if (config && config !== '[]') {
-    try {
-      const json = typeof config === 'string' ? JSON.parse(config) : config
-      canvasRef.value?.loadFromJSON(json)
-    } catch (e) {
-      console.warn('Failed to parse SCADA config:', e)
+  try {
+    const body = unwrap(await getScadaPage(Number(id)))
+    page.value = body || {}
+    await nextTick()
+    // 加载画布配置
+    const config = body?.config_json
+    if (config && config !== '[]') {
+      try {
+        const json = typeof config === 'string' ? JSON.parse(config) : config
+        canvasRef.value?.loadFromJSON(json)
+      } catch (e) {
+        console.warn('Failed to parse SCADA config:', e)
+      }
     }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取页面数据失败')
   }
 }
 
@@ -103,13 +126,21 @@ const fetchCustomWidgets = async () => {
 }
 
 const fetchDevices = async () => {
-  devices.value = unwrapList(await getAllDevices()).list
+  try {
+    devices.value = unwrapList(await getAllDevices()).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取设备列表失败')
+  }
 }
 
 const fetchTags = async (deviceId: number) => {
-  const res = await getDeviceTags(deviceId)
-  const body = unwrap(res)
-  deviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
+  try {
+    const res = await getDeviceTags(deviceId)
+    const body = unwrap(res)
+    deviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  }
 }
 
 // ── 保存 ──
@@ -126,6 +157,7 @@ const save = async () => {
       config_json: JSON.stringify(json || [])
     })
     ElMessage.success('保存成功')
+    hasUnsavedChanges.value = false
   } catch (e: any) {
     ElMessage.error(e?.message || '保存失败')
   } finally {
@@ -135,9 +167,9 @@ const save = async () => {
 
 // ── 图元拖放 ──
 
-/** 拖拽开始 */
+/** 拖拽开始 — 只传 type 标识，避免 JSON 序列化丢失函数引用 */
 const dragStart = (e: DragEvent, widget: any) => {
-  e.dataTransfer?.setData('application/json', JSON.stringify(widget))
+  e.dataTransfer?.setData('application/json', JSON.stringify({ type: widget.type, _isBuiltin: true }))
 }
 
 /** 画布放置 */
@@ -146,8 +178,19 @@ const onCanvasDrop = (e: DragEvent) => {
   const data = e.dataTransfer?.getData('application/json')
   if (!data) return
   try {
-    const widget = JSON.parse(data)
-    const fabricObj = widget.createFabric ? widget.createFabric() : widget.fabric_json ? JSON.parse(widget.fabric_json) : null
+    const widgetInfo = JSON.parse(data)
+    let fabricObj: any = null
+
+    if (widgetInfo._isBuiltin) {
+      // 内置图元：通过 type 查找定义并调用 createFabric
+      const builtin = builtinWidgets.find((w) => w.type === widgetInfo.type)
+      if (builtin) {
+        fabricObj = builtin.createFabric()
+      }
+    } else if (widgetInfo.fabric_json) {
+      fabricObj = JSON.parse(widgetInfo.fabric_json)
+    }
+
     if (fabricObj) {
       // 计算放置位置（相对于画布）
       const rect = (e.target as HTMLElement).closest('.scada-canvas-wrapper')?.getBoundingClientRect()
@@ -233,6 +276,18 @@ const confirmBind = () => {
   ElMessage.success(`已绑定到 ${bindForm.tagName} → ${bindForm.target}`)
 }
 
+// ── 清空画布（带确认） ──
+const handleClear = async () => {
+  try {
+    await ElMessageBox.confirm('确认清空画布？此操作不可撤销。', '清空画布', { type: 'warning' })
+    canvasRef.value?.clear()
+    markDirty()
+    ElMessage.success('画布已清空')
+  } catch {
+    // cancelled
+  }
+}
+
 // ── 键盘快捷键 ──
 const onKeyDown = (e: KeyboardEvent) => {
   if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -240,22 +295,30 @@ const onKeyDown = (e: KeyboardEvent) => {
       canvasRef.value?.deleteSelected()
     }
   }
-  if (e.ctrlKey && e.key === 's') {
+    if (e.ctrlKey && e.key === 's') {
     e.preventDefault()
     save()
+    hasUnsavedChanges.value = false
   }
 }
 
 onMounted(() => {
-  fetchPage()
-  fetchCustomWidgets()
-  fetchDevices()
+  try {
+    fetchPage()
+    fetchCustomWidgets()
+    fetchDevices()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '初始化失败')
+  }
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('beforeunload', onBeforeUnload)
+  autoSaveTimer = setInterval(autoSave, 60_000)
 })
 
-import { onUnmounted } from 'vue'
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  if (autoSaveTimer) clearInterval(autoSaveTimer)
 })
 </script>
 
@@ -273,11 +336,12 @@ onUnmounted(() => {
           删除
         </ElButton>
         <ElButton size="small" @click="canvasRef?.selectAll()">全选</ElButton>
-        <ElButton size="small" type="warning" @click="canvasRef?.clear()">清空</ElButton>
+        <ElButton size="small" type="warning" @click="handleClear">清空</ElButton>
         <ElDivider direction="vertical" />
         <ElButton size="small" type="primary" :loading="saving" @click="save">
           💾 保存 (Ctrl+S)
         </ElButton>
+        <span v-if="hasUnsavedChanges" class="text-12px text-orange-400 ml-4px">● 未保存</span>
       </div>
     </div>
 
@@ -343,6 +407,7 @@ onUnmounted(() => {
           :background="page.background || '#1a1a2e'"
           @object:selected="onObjectSelected"
           @object:deselected="onObjectDeselected"
+          @canvas:modified="markDirty"
         />
       </div>
 

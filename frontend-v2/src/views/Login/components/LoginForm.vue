@@ -49,7 +49,6 @@ const schema = reactive<FormSchema[]>([
   {
     field: 'username',
     label: t('login.username'),
-    // value: 'admin',
     component: 'Input',
     colProps: {
       span: 24
@@ -61,7 +60,6 @@ const schema = reactive<FormSchema[]>([
   {
     field: 'password',
     label: t('login.password'),
-    // value: 'admin',
     component: 'InputPassword',
     colProps: {
       span: 24
@@ -70,7 +68,7 @@ const schema = reactive<FormSchema[]>([
       style: {
         width: '100%'
       },
-      placeholder: 'admin or test',
+      placeholder: t('login.password'),
       // 按下enter键触发登录
       onKeydown: (_e: any) => {
         if (_e.key === 'Enter') {
@@ -196,8 +194,8 @@ const remember = ref(userStore.getRememberMe)
 const initLoginInfo = () => {
   const loginInfo = userStore.getLoginInfo
   if (loginInfo) {
-    const { username, password } = loginInfo
-    setValues({ username, password })
+    const { username } = loginInfo
+    setValues({ username })
   }
 }
 onMounted(() => {
@@ -209,7 +207,7 @@ const { getFormData, getElFormExpose, setValues } = formMethods
 
 const loading = ref(false)
 
-const iconColor = '#999'
+const iconColor = 'var(--el-text-color-secondary)'
 
 const hoverColor = 'var(--el-color-primary)'
 
@@ -243,8 +241,7 @@ const signIn = async () => {
           userStore.setPermissions(tokenRes.user.permissions || [])
           if (unref(remember)) {
             userStore.setLoginInfo({
-              username: formData.username,
-              password: formData.password
+              username: formData.username
             })
           } else {
             userStore.setLoginInfo(undefined)

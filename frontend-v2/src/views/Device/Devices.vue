@@ -35,6 +35,7 @@ import {
   importDevices
 } from '@/api/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
+import { saveBlob, deviceStatusType, deviceStatusText, concurrentRun } from '@/utils/modbus'
 
 defineOptions({ name: 'Devices' })
 
@@ -70,16 +71,8 @@ const onPathChange = (p: { org_node_id: number | null; labels: string[] } | null
   tableRef.value?.clearSelection()
 }
 
-const statusType = (s?: string) => {
-  if (s === 'online') return 'success'
-  if (s === 'error') return 'danger'
-  return 'info'
-}
-const statusText = (s?: string) => {
-  if (s === 'online') return '在线'
-  if (s === 'error') return '异常'
-  return '离线'
-}
+const statusType = deviceStatusType
+const statusText = deviceStatusText
 
 const fetchList = async () => {
   loading.value = true
@@ -110,6 +103,7 @@ const clearOrgFilter = () => {
 
 // ── 批量操作（基于关联列表框多选） ──
 const batchBusy = ref(false)
+
 const batchEnable = async (enabled: boolean) => {
   if (!effectiveIds.value.length) return
   await ElMessageBox.confirm(
@@ -119,9 +113,7 @@ const batchEnable = async (enabled: boolean) => {
   )
   batchBusy.value = true
   try {
-    for (const id of effectiveIds.value) {
-      await updateDevice(id, { enabled })
-    }
+    await concurrentRun(effectiveIds.value, (id) => updateDevice(id, { enabled }))
     ElMessage.success(`已${enabled ? '启用' : '禁用'} ${effectiveIds.value.length} 台设备`)
     clearAllSelection()
     fetchList()
@@ -138,9 +130,7 @@ const batchDelete = async () => {
   )
   batchBusy.value = true
   try {
-    for (const id of effectiveIds.value) {
-      await deleteDevice(id)
-    }
+    await concurrentRun(effectiveIds.value, (id) => deleteDevice(id))
     ElMessage.success(`已删除 ${effectiveIds.value.length} 台设备`)
     clearAllSelection()
     fetchList()
@@ -161,19 +151,6 @@ const selectAllCurrent = () => {
 }
 
 // ── 导入 / 导出 ──
-const saveBlob = (res: any, fallbackName: string) => {
-  const blob = res?.data instanceof Blob ? res.data : new Blob([res?.data ?? res])
-  const cd: string = res?.headers?.['content-disposition'] || ''
-  const m = cd.match(/filename="?([^";]+)"?/)
-  const name = m ? decodeURIComponent(m[1]) : fallbackName
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
 const exporting = ref(false)
 const doExport = async () => {
   exporting.value = true
@@ -233,7 +210,7 @@ const protocols = [
   { value: 'modbus_tcp', label: 'Modbus TCP', icon: '🔌' },
   { value: 'modbus_rtu', label: 'Modbus RTU', icon: '🔌' },
   { value: 'mqtt', label: 'MQTT', icon: '📡' },
-  { value: 'opcua', label: 'OPC-UA', icon: '🔗' }
+  { value: 'opc_ua', label: 'OPC-UA', icon: '🔗' }
 ]
 
 const protocolLabel = (p?: string) => protocols.find((pr) => pr.value === p)?.label || p || '—'
@@ -256,17 +233,17 @@ const form = reactive<any>({
   parity: 'none',
   data_bits: 8,
   stop_bits: 1,
-  // MQTT
-  broker_url: '',
-  mqtt_topic: '',
+  // MQTT (field names match backend Device model: mqtt_broker, mqtt_topic_prefix, etc.)
+  mqtt_broker: '',
+  mqtt_topic_prefix: '',
   mqtt_username: '',
   mqtt_password: '',
   mqtt_client_id: '',
-  mqtt_qos: 0,
+  mqtt_publish_qos: 0,
   mqtt_payload_template: '',
-  // OPC-UA
-  endpoint_url: '',
-  node_id: '',
+  // OPC-UA (field names match backend Device model: opc_endpoint, etc.)
+  opc_endpoint: '',
+  opc_namespace: 2,
   opc_security_mode: 'None',
   // 通用
   org_node_id: null as number | null,
@@ -274,17 +251,32 @@ const form = reactive<any>({
   has_lab_data: false,
   description: ''
 })
-const rules = {
-  name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }],
-  protocol: [{ required: true, message: '请选择协议', trigger: 'change' }]
-}
-
 // 根据协议显示不同字段
 const isModbusTcp = computed(() => form.protocol === 'modbus_tcp')
 const isModbusRtu = computed(() => form.protocol === 'modbus_rtu')
 const isMqtt = computed(() => form.protocol === 'mqtt')
-const isOpcua = computed(() => form.protocol === 'opcua')
+const isOpcua = computed(() => form.protocol === 'opc_ua')
 const isModbus = computed(() => isModbusTcp.value || isModbusRtu.value)
+
+const rules = computed(() => {
+  const base: Record<string, any[]> = {
+    name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }, { max: 100, message: '名称不能超过100个字符', trigger: 'blur' }],
+    protocol: [{ required: true, message: '请选择协议', trigger: 'change' }]
+  }
+  if (isModbusTcp.value) {
+    base.host = [{ required: true, message: '请输入主机地址', trigger: 'blur' }]
+    base.port = [{ required: true, message: '请输入端口', trigger: 'blur' }]
+    base.slave_id = [{ required: true, message: '请输入从站地址', trigger: 'blur' }]
+  } else if (isModbusRtu.value) {
+    base.serial_port = [{ required: true, message: '请输入串口', trigger: 'blur' }]
+    base.slave_id = [{ required: true, message: '请输入从站地址', trigger: 'blur' }]
+  } else if (isMqtt.value) {
+    base.mqtt_broker = [{ required: true, message: '请输入 Broker 地址', trigger: 'blur' }]
+  } else if (isOpcua.value) {
+    base.opc_endpoint = [{ required: true, message: '请输入 Endpoint URL', trigger: 'blur' }]
+  }
+  return base
+})
 
 const openCreate = () => {
   dialogTitle.value = '新增设备'
@@ -300,15 +292,15 @@ const openCreate = () => {
     parity: 'none',
     data_bits: 8,
     stop_bits: 1,
-    broker_url: '',
-    mqtt_topic: '',
+    mqtt_broker: '',
+    mqtt_topic_prefix: '',
     mqtt_username: '',
     mqtt_password: '',
     mqtt_client_id: '',
-    mqtt_qos: 0,
+    mqtt_publish_qos: 0,
     mqtt_payload_template: '',
-    endpoint_url: '',
-    node_id: '',
+    opc_endpoint: '',
+    opc_namespace: 2,
     opc_security_mode: 'None',
     org_node_id: query.org_node_id ?? null,
     poll_interval: 5,
@@ -331,15 +323,15 @@ const openEdit = (row: any) => {
     parity: row.parity || 'none',
     data_bits: row.data_bits ?? 8,
     stop_bits: row.stop_bits ?? 1,
-    broker_url: row.broker_url || '',
-    mqtt_topic: row.mqtt_topic || '',
+    mqtt_broker: row.mqtt_broker || '',
+    mqtt_topic_prefix: row.mqtt_topic_prefix || '',
     mqtt_username: row.mqtt_username || '',
     mqtt_password: row.mqtt_password || '',
     mqtt_client_id: row.mqtt_client_id || '',
-    mqtt_qos: row.mqtt_qos ?? 0,
+    mqtt_publish_qos: row.mqtt_publish_qos ?? 0,
     mqtt_payload_template: row.mqtt_payload_template || '',
-    endpoint_url: row.endpoint_url || '',
-    node_id: row.node_id || '',
+    opc_endpoint: row.opc_endpoint || '',
+    opc_namespace: row.opc_namespace ?? 2,
     opc_security_mode: row.opc_security_mode || 'None',
     org_node_id: row.org_node_id ?? null,
     poll_interval: row.poll_interval ?? 5,
@@ -372,16 +364,16 @@ const submit = async () => {
     payload.stop_bits = form.stop_bits
     payload.slave_id = form.slave_id
   } else if (isMqtt.value) {
-    payload.broker_url = form.broker_url
-    payload.mqtt_topic = form.mqtt_topic
+    payload.mqtt_broker = form.mqtt_broker
+    payload.mqtt_topic_prefix = form.mqtt_topic_prefix
     payload.mqtt_username = form.mqtt_username
     payload.mqtt_password = form.mqtt_password
     payload.mqtt_client_id = form.mqtt_client_id
-    payload.mqtt_qos = form.mqtt_qos
+    payload.mqtt_publish_qos = form.mqtt_publish_qos
     payload.mqtt_payload_template = form.mqtt_payload_template
   } else if (isOpcua.value) {
-    payload.endpoint_url = form.endpoint_url
-    payload.node_id = form.node_id
+    payload.opc_endpoint = form.opc_endpoint
+    payload.opc_namespace = form.opc_namespace
     payload.opc_security_mode = form.opc_security_mode
   }
 
@@ -469,7 +461,7 @@ onMounted(() => {
         <ElButton v-hasPermi="['device.write']" type="primary" plain @click="openImport"
           >导入</ElButton
         >
-        <ElButton :loading="exporting" plain @click="doExport">导出</ElButton>
+        <ElButton v-hasPermi="['export.download']" :loading="exporting" plain @click="doExport">导出</ElButton>
         <ElButton
           :disabled="!list.length"
           title="勾选当前表格页全部设备行（跨页保留，翻页后可累计）"
@@ -504,6 +496,9 @@ onMounted(() => {
     </div>
 
     <ElTable ref="tableRef" v-loading="loading" :data="list" row-key="id" border stripe @selection-change="onTableSelection">
+      <template #empty>
+        <div class="py-20px text-center text-gray-400">暂无设备数据</div>
+      </template>
       <ElTableColumn type="selection" width="50" :reserve-selection="true" />
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
@@ -531,8 +526,8 @@ onMounted(() => {
           <span v-else-if="row.protocol === 'modbus_rtu'"
             >{{ row.serial_port }} / {{ row.baudrate }}bps</span
           >
-          <span v-else-if="row.protocol === 'mqtt'">{{ row.broker_url || '—' }}</span>
-          <span v-else-if="row.protocol === 'opcua'">{{ row.endpoint_url || '—' }}</span>
+          <span v-else-if="row.protocol === 'mqtt'">{{ row.mqtt_broker || '—' }}</span>
+          <span v-else-if="row.protocol === 'opc_ua'">{{ row.opc_endpoint || '—' }}</span>
           <span v-else>—</span>
         </template>
       </ElTableColumn>
@@ -573,7 +568,7 @@ onMounted(() => {
     </div>
 
     <!-- 新增/编辑对话框 -->
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px" top="5vh">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px" top="5vh" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="100px">
         <!-- 基本信息 -->
         <ElFormItem label="设备名称" prop="name">
@@ -593,13 +588,13 @@ onMounted(() => {
         <!-- Modbus TCP -->
         <template v-if="isModbusTcp">
           <ElDivider content-position="left">Modbus TCP 连接</ElDivider>
-          <ElFormItem label="主机地址">
+          <ElFormItem label="主机地址" prop="host">
             <ElInput v-model="form.host" placeholder="192.168.1.100" />
           </ElFormItem>
-          <ElFormItem label="端口">
+          <ElFormItem label="端口" prop="port">
             <ElInputNumber v-model="form.port" :min="1" :max="65535" class="w-full" />
           </ElFormItem>
-          <ElFormItem label="从站地址">
+          <ElFormItem label="从站地址" prop="slave_id">
             <ElInputNumber v-model="form.slave_id" :min="0" :max="255" class="w-full" />
           </ElFormItem>
         </template>
@@ -607,7 +602,7 @@ onMounted(() => {
         <!-- Modbus RTU -->
         <template v-if="isModbusRtu">
           <ElDivider content-position="left">Modbus RTU 连接</ElDivider>
-          <ElFormItem label="串口">
+          <ElFormItem label="串口" prop="serial_port">
             <ElInput v-model="form.serial_port" placeholder="/dev/ttyUSB0 或 COM3" />
           </ElFormItem>
           <ElFormItem label="波特率">
@@ -641,7 +636,7 @@ onMounted(() => {
               <ElOption :label="2" :value="2" />
             </ElSelect>
           </ElFormItem>
-          <ElFormItem label="从站地址">
+          <ElFormItem label="从站地址" prop="slave_id">
             <ElInputNumber v-model="form.slave_id" :min="0" :max="255" class="w-full" />
           </ElFormItem>
         </template>
@@ -649,11 +644,11 @@ onMounted(() => {
         <!-- MQTT -->
         <template v-if="isMqtt">
           <ElDivider content-position="left">MQTT 连接</ElDivider>
-          <ElFormItem label="Broker 地址">
-            <ElInput v-model="form.broker_url" placeholder="mqtt://192.168.1.100:1883" />
+          <ElFormItem label="Broker 地址" prop="mqtt_broker">
+            <ElInput v-model="form.mqtt_broker" placeholder="mqtt://192.168.1.100:1883" />
           </ElFormItem>
           <ElFormItem label="订阅 Topic">
-            <ElInput v-model="form.mqtt_topic" placeholder="devices/sensor/telemetry" />
+            <ElInput v-model="form.mqtt_topic_prefix" placeholder="devices/sensor/telemetry" />
           </ElFormItem>
           <ElFormItem label="Client ID">
             <ElInput v-model="form.mqtt_client_id" placeholder="留空自动生成" />
@@ -670,7 +665,7 @@ onMounted(() => {
             />
           </ElFormItem>
           <ElFormItem label="QoS">
-            <ElSelect v-model="form.mqtt_qos" class="w-full">
+            <ElSelect v-model="form.mqtt_publish_qos" class="w-full">
               <ElOption label="0 - 最多一次" :value="0" />
               <ElOption label="1 - 至少一次" :value="1" />
               <ElOption label="2 - 恰好一次" :value="2" />
@@ -694,11 +689,11 @@ onMounted(() => {
         <!-- OPC-UA -->
         <template v-if="isOpcua">
           <ElDivider content-position="left">OPC-UA 连接</ElDivider>
-          <ElFormItem label="Endpoint URL">
-            <ElInput v-model="form.endpoint_url" placeholder="opc.tcp://192.168.1.100:4840" />
+          <ElFormItem label="Endpoint URL" prop="opc_endpoint">
+            <ElInput v-model="form.opc_endpoint" placeholder="opc.tcp://192.168.1.100:4840" />
           </ElFormItem>
           <ElFormItem label="Node ID">
-            <ElInput v-model="form.node_id" placeholder="ns=2;s=Temperature" />
+            <ElInput v-model="form.opc_namespace" placeholder="ns=2 (namespace number)" />
           </ElFormItem>
           <ElFormItem label="安全模式">
             <ElSelect v-model="form.opc_security_mode" class="w-full">
@@ -741,7 +736,7 @@ onMounted(() => {
     </ElDialog>
 
     <!-- 设备导入对话框 -->
-    <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px">
+    <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px" @close="importFile = null, importResult = null">
       <ElAlert
         title="请使用 CSV 模板格式填写设备数据后上传，重名设备会被跳过"
         type="info"
@@ -785,7 +780,7 @@ onMounted(() => {
     </ElDialog>
 
     <!-- 设备复制对话框 -->
-    <ElDialog v-model="dupDialogVisible" title="复制设备" width="480px">
+    <ElDialog v-model="dupDialogVisible" title="复制设备" width="480px" @close="dupForm.name = '', dupForm.copyTags = true">
       <ElAlert
         :title="`从「${dupForm.sourceName}」复制，设备配置和点位将一并复制`"
         type="info"

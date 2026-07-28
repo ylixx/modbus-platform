@@ -28,6 +28,7 @@ const wsStore = useWsStore()
 const id = route.params.id as string
 const device = ref<any>({})
 const liveRows = ref<any[]>([])
+const liveLoading = ref(false)
 const autoRefresh = ref(true)
 const writing = ref(false)
 let pollTimer: any = null
@@ -72,14 +73,15 @@ const fetchDevice = async () => {
 
 const fetchLive = async () => {
   const tags = device.value?.tags || []
+  liveLoading.value = true
   try {
     const body = unwrap(await getDeviceLive(id))
-    // 后端返回 { device_id, values: { tag_id: {value, quality, time} } }
     const values = (body && typeof body === 'object' && !Array.isArray(body) && body.values) || {}
     liveRows.value = mergeLive(tags, values)
   } catch (e) {
-    // 实时拉取失败：仍显示所有点位（值为空），不让表格变空
     liveRows.value = mergeLive(tags)
+  } finally {
+    liveLoading.value = false
   }
 }
 
@@ -212,7 +214,7 @@ onUnmounted(() => {
         </div>
       </template>
       <ElEmpty v-if="!liveRows.length" description="该设备暂未配置点位" />
-      <ElTable v-else :data="liveRows" border stripe max-height="520">
+      <ElTable v-else v-loading="liveLoading" :data="liveRows" border stripe max-height="520">
         <ElTableColumn prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
         <ElTableColumn prop="address" label="地址" width="90" />
         <ElTableColumn prop="data_type" label="类型" width="110" />

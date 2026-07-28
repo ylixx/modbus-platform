@@ -76,7 +76,10 @@ class AlarmRecordOut(BaseModel):
     acknowledged_at: Optional[datetime]
     cleared_at: Optional[datetime]
     acknowledged_by: Optional[str]
-    ack_comment: str
+    ack_comment: str = ""
+    # Joined fields
+    device_name: str = ""
+    tag_name: str = ""
 
     class Config:
         from_attributes = True

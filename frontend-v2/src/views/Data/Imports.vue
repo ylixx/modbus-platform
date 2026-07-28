@@ -53,7 +53,7 @@ const uploadReq = (fn: (data: any) => Promise<any>) => async (opt: any) => {
           <div class="text-16px font-700 mb-12px">设备批量导入</div>
           <div class="text-12px text-gray-400 mb-14px">支持一次性导入多台设备的连接信息</div>
           <div class="flex items-center gap-12px">
-            <ElButton @click="dlTpl('devices')">下载模板</ElButton>
+            <ElButton v-hasPermi="['export.download']" @click="dlTpl('devices')">下载模板</ElButton>
             <ElUpload
               :show-file-list="false"
               accept=".csv"
@@ -69,7 +69,7 @@ const uploadReq = (fn: (data: any) => Promise<any>) => async (opt: any) => {
           <div class="text-16px font-700 mb-12px">点位批量导入</div>
           <div class="text-12px text-gray-400 mb-14px">支持批量导入采集点位（寄存器）配置</div>
           <div class="flex items-center gap-12px">
-            <ElButton @click="dlTpl('tags')">下载模板</ElButton>
+            <ElButton v-hasPermi="['export.download']" @click="dlTpl('tags')">下载模板</ElButton>
             <ElUpload :show-file-list="false" accept=".csv" :http-request="uploadReq(importTags)">
               <ElButton v-hasPermi="['import.write']" type="primary">上传点位文件</ElButton>
             </ElUpload>

@@ -28,38 +28,68 @@ async def lifespan(app: FastAPI):
             "请通过环境变量 SECRET_KEY 设置强随机值（openssl rand -hex 32）。"
         )
 
-    Base.metadata.create_all(bind=engine)
-    _migrate_columns()
-    logger.info("Database tables ensured")
+    try:
+        Base.metadata.create_all(bind=engine)
+        _migrate_columns()
+        logger.info("Database tables ensured")
+    except Exception as e:
+        logger.error(f"Database init error: {e}")
 
-    _create_default_admin()
-    _seed_permissions()
-    _assign_admin_role()
+    try:
+        _create_default_admin()
+        _seed_permissions()
+        _assign_admin_role()
+    except Exception as e:
+        logger.error(f"Admin/permissions setup error: {e}")
 
     # Start shared write buffer and WebSocket pusher
-    from app.engine.shared_buffer import write_buffer, ws_pusher
-    write_buffer.start()
-    ws_pusher.start()
+    try:
+        from app.engine.shared_buffer import write_buffer, ws_pusher
+        write_buffer.start()
+        ws_pusher.start()
+    except Exception as e:
+        logger.error(f"WriteBuffer/WsPusher start error: {e}")
 
     # Start all protocol engines
-    from app.engine.protocol_router import protocol_router
-    protocol_router.start_all()
+    try:
+        from app.engine.protocol_router import protocol_router
+        protocol_router.start_all()
+    except Exception as e:
+        logger.error(f"Protocol engines start error: {e}")
 
     # Initialize WebSocket broadcast (Redis pub/sub for multi-worker)
-    from app.engine.ws_broadcast import init_redis_broadcast, set_main_loop
-    import asyncio
-    set_main_loop(asyncio.get_running_loop())
-    init_redis_broadcast()
+    try:
+        from app.engine.ws_broadcast import init_redis_broadcast, set_main_loop
+        import asyncio
+        set_main_loop(asyncio.get_running_loop())
+        init_redis_broadcast()
+    except Exception as e:
+        logger.error(f"Redis broadcast init error: {e}")
 
     # Start scheduled tasks
-    _start_scheduler()
+    try:
+        _start_scheduler()
+    except Exception as e:
+        logger.error(f"Scheduler start error: {e}")
 
     yield
 
-    protocol_router.stop_all()
-    write_buffer.stop()
-    ws_pusher.stop()
-    _stop_scheduler()
+    try:
+        protocol_router.stop_all()
+    except Exception as e:
+        logger.error(f"Protocol engines stop error: {e}")
+    try:
+        write_buffer.stop()
+    except Exception as e:
+        logger.error(f"WriteBuffer stop error: {e}")
+    try:
+        ws_pusher.stop()
+    except Exception as e:
+        logger.error(f"WsPusher stop error: {e}")
+    try:
+        _stop_scheduler()
+    except Exception as e:
+        logger.error(f"Scheduler stop error: {e}")
     logger.info("Application stopped")
 
 
@@ -104,7 +134,7 @@ def _create_default_admin():
             )
             db.add(admin)
             db.commit()
-            logger.warning("Default admin user created (admin / admin123) — CHANGE THE PASSWORD")
+            logger.warning("Default admin user created — please change the default password immediately")
     except Exception as e:
         logger.error(f"Create default admin error: {e}")
     finally:
@@ -155,8 +185,11 @@ def _start_scheduler():
         # Cleanup expired confirmations: every 5 minutes
         _scheduler.add_job(_task_cleanup_confirm, 'interval', minutes=5, id='cleanup_confirm')
 
+        # WebSocket heartbeat cleanup: every 30 seconds
+        _scheduler.add_job(_task_ws_heartbeat, 'interval', seconds=30, id='ws_heartbeat')
+
         _scheduler.start()
-        logger.info("Scheduler started: archive(3:00), escalation(2min), cleanup(5min)")
+        logger.info("Scheduler started: archive(3:00), escalation(2min), cleanup(5min), ws_heartbeat(30s)")
     except Exception as e:
         logger.error(f"Scheduler start error: {e}")
 
@@ -181,6 +214,18 @@ def _task_escalation():
 def _task_cleanup_confirm():
     from app.services.confirm_service import cleanup_expired
     cleanup_expired()
+
+
+def _task_ws_heartbeat():
+    """Periodic WebSocket heartbeat check — closes stale connections."""
+    import asyncio
+    from app.engine.websocket_manager import ws_manager
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(ws_manager.check_heartbeats(), loop)
+    except Exception as e:
+        pass
 
 
 # ── App setup ──
