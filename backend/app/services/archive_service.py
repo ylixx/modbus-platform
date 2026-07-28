@@ -5,14 +5,25 @@ from sqlalchemy import text
 from app.core.database import SessionLocal
 from app.services.config_service import get_retention_days, get_config
 
+# SQLite-compatible batch delete: use subquery with LIMIT inside an IN clause.
+# SQLite requires the LIMIT inside a subquery when used with IN.
+_BATCH_SIZE = 10000
+
 
 def archive_history(retention_days: int = None):
     """Delete old raw history data."""
     days = retention_days or get_retention_days("history")
+    if days < 1:
+        logger.warning(f"archive_history called with retention_days={days}, skipping (must be >= 1)")
+        return 0
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     db = SessionLocal()
     try:
-        result = db.execute(text("DELETE FROM tag_history WHERE recorded_at < :cutoff LIMIT 10000"), {"cutoff": cutoff})
+        # Use subquery with LIMIT for SQLite compatibility
+        result = db.execute(text(
+            "DELETE FROM tag_history WHERE id IN "
+            "(SELECT id FROM tag_history WHERE recorded_at < :cutoff LIMIT :limit)"
+        ), {"cutoff": cutoff, "limit": _BATCH_SIZE})
         deleted = result.rowcount
         db.commit()
         if deleted > 0:
@@ -28,10 +39,16 @@ def archive_history(retention_days: int = None):
 
 def archive_alarm_records(retention_days: int = None):
     days = retention_days or get_retention_days("alarm")
+    if days < 1:
+        logger.warning(f"archive_alarm_records called with retention_days={days}, skipping (must be >= 1)")
+        return 0
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     db = SessionLocal()
     try:
-        result = db.execute(text("DELETE FROM alarm_records WHERE triggered_at < :cutoff AND status = 'cleared' LIMIT 5000"), {"cutoff": cutoff})
+        result = db.execute(text(
+            "DELETE FROM alarm_records WHERE id IN "
+            "(SELECT id FROM alarm_records WHERE triggered_at < :cutoff AND status = 'cleared' LIMIT :limit)"
+        ), {"cutoff": cutoff, "limit": 5000})
         deleted = result.rowcount
         db.commit()
         if deleted > 0:
@@ -47,10 +64,16 @@ def archive_alarm_records(retention_days: int = None):
 
 def archive_sms_records(retention_days: int = None):
     days = retention_days or get_retention_days("sms")
+    if days < 1:
+        logger.warning(f"archive_sms_records called with retention_days={days}, skipping (must be >= 1)")
+        return 0
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     db = SessionLocal()
     try:
-        result = db.execute(text("DELETE FROM sms_records WHERE created_at < :cutoff LIMIT 5000"), {"cutoff": cutoff})
+        result = db.execute(text(
+            "DELETE FROM sms_records WHERE id IN "
+            "(SELECT id FROM sms_records WHERE created_at < :cutoff LIMIT :limit)"
+        ), {"cutoff": cutoff, "limit": 5000})
         deleted = result.rowcount
         db.commit()
         if deleted > 0:
@@ -66,10 +89,16 @@ def archive_sms_records(retention_days: int = None):
 
 def archive_audit_logs(retention_days: int = None):
     days = retention_days or get_retention_days("audit")
+    if days < 1:
+        logger.warning(f"archive_audit_logs called with retention_days={days}, skipping (must be >= 1)")
+        return 0
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     db = SessionLocal()
     try:
-        result = db.execute(text("DELETE FROM audit_logs WHERE created_at < :cutoff LIMIT 5000"), {"cutoff": cutoff})
+        result = db.execute(text(
+            "DELETE FROM audit_logs WHERE id IN "
+            "(SELECT id FROM audit_logs WHERE created_at < :cutoff LIMIT :limit)"
+        ), {"cutoff": cutoff, "limit": 5000})
         deleted = result.rowcount
         db.commit()
         if deleted > 0:

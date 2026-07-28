@@ -4,6 +4,7 @@ import { useForm } from '@/hooks/web/useForm'
 import { useValidator } from '@/hooks/web/useValidator'
 import { reactive, ref, watch } from 'vue'
 import { ElDivider, ElMessage, ElMessageBox } from 'element-plus'
+import { updateMyProfile } from '@/api/modbus'
 
 const props = defineProps({
   userInfo: {
@@ -11,6 +12,8 @@ const props = defineProps({
     default: () => ({})
   }
 })
+
+const emit = defineEmits(['updated'])
 
 const { required, phone, maxlength, email } = useValidator()
 
@@ -48,7 +51,7 @@ const rules = reactive({
 })
 
 const { formRegister, formMethods } = useForm()
-const { setValues, getElFormExpose } = formMethods
+const { setValues, getFormData, getElFormExpose } = formMethods
 
 watch(
   () => props.userInfo,
@@ -64,9 +67,7 @@ watch(
 const saveLoading = ref(false)
 const save = async () => {
   const elForm = await getElFormExpose()
-  const valid = await elForm?.validate().catch((err) => {
-    console.log(err)
-  })
+  const valid = await elForm?.validate().catch(() => {})
   if (valid) {
     ElMessageBox.confirm('是否确认修改?', '提示', {
       confirmButtonText: '确认',
@@ -76,10 +77,16 @@ const save = async () => {
       .then(async () => {
         try {
           saveLoading.value = true
-          // 这里可以调用修改用户信息接口
+          const formData = await getFormData()
+          await updateMyProfile({
+            display_name: formData.realName,
+            phone: formData.phoneNumber,
+            email: formData.email
+          })
           ElMessage.success('修改成功')
-        } catch (error) {
-          console.log(error)
+          emit('updated')
+        } catch (error: any) {
+          ElMessage.error(error?.response?.data?.detail || error?.message || '修改失败')
         } finally {
           saveLoading.value = false
         }
@@ -92,5 +99,5 @@ const save = async () => {
 <template>
   <Form :rules="rules" @register="formRegister" :schema="formSchema" />
   <ElDivider />
-  <BaseButton type="primary" @click="save">保存</BaseButton>
+  <BaseButton type="primary" :loading="saveLoading" @click="save">保存</BaseButton>
 </template>

@@ -385,7 +385,11 @@ onMounted(async () => {
     loadingTag.value = false
   }
   // 实时模式：先拉初始历史，再订阅 WS
-  await loadRealtimeSeed()
+  try {
+    await loadRealtimeSeed()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载实时历史数据失败')
+  }
   unsub = wsManager.on('live_value', onLive)
   setupPolling()
 })

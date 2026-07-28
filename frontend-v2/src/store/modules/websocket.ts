@@ -21,12 +21,13 @@ export interface WsState {
 }
 
 export const useWsStore = defineStore('websocket', {
-  state: (): WsState => ({
+  state: (): WsState & { _initialized: boolean } => ({
     connected: false,
     liveData: {},
     deviceStatuses: {},
     unreadAlarms: 0,
-    recentAlarms: []
+    recentAlarms: [],
+    _initialized: false
   }),
 
   getters: {
@@ -46,8 +47,10 @@ export const useWsStore = defineStore('websocket', {
   },
 
   actions: {
-    /** 初始化 WebSocket 连接和事件监听 */
+    /** 初始化 WebSocket 连接和事件监听（幂等，多次调用不会重复注册监听器） */
     init() {
+      if (this._initialized) return
+      this._initialized = true
       // 连接/断开事件
       wsManager.on('__connected', () => {
         this.connected = true
@@ -107,6 +110,7 @@ export const useWsStore = defineStore('websocket', {
     /** 断开连接（退出登录时调用） */
     destroy() {
       wsManager.disconnect()
+      this._initialized = false
       this.$reset()
     },
 

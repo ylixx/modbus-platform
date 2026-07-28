@@ -11,9 +11,11 @@ import {
   ElPagination,
   ElMessage,
   ElNotification,
-  ElBadge
+  ElBadge,
+  ElMessageBox
 } from 'element-plus'
 import { getAlarmRecords, ackAlarm, clearAlarm, unwrapList } from '@/api/modbus'
+import { formatTime } from '@/utils/modbus'
 import { useWsStore } from '@/store/modules/websocket'
 import { wsManager } from '@/utils/websocket'
 
@@ -42,6 +44,9 @@ const statusType = (s?: string) => {
 const statusText = (s?: string) =>
   ({ active: '活动', acknowledged: '已确认', cleared: '已清除' })[s || ''] || s || '—'
 
+const levelLabel = (l?: string) =>
+  ({ info: '提示', warning: '警告', critical: '严重', emergency: '紧急' })[l || ''] || l || '—'
+
 const fetchList = async () => {
   loading.value = true
   try {
@@ -53,19 +58,35 @@ const fetchList = async () => {
     const { list: l, total: t } = unwrapList(res)
     list.value = l
     total.value = t
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取报警记录失败')
   } finally {
     loading.value = false
   }
 }
 const doAck = async (row: any) => {
-  await ackAlarm(row.id)
-  ElMessage.success('已确认')
-  fetchList()
+  try {
+    await ElMessageBox.confirm('确认该报警？', '报警确认', { type: 'warning' })
+    await ackAlarm(row.id)
+    ElMessage.success('已确认')
+    fetchList()
+  } catch (e: any) {
+    if (e !== 'cancel' && e?.message !== 'cancel') {
+      ElMessage.error(e?.message || '操作失败')
+    }
+  }
 }
 const doClear = async (row: any) => {
-  await clearAlarm(row.id)
-  ElMessage.success('已清除')
-  fetchList()
+  try {
+    await ElMessageBox.confirm('清除该报警？', '报警清除', { type: 'warning' })
+    await clearAlarm(row.id)
+    ElMessage.success('已清除')
+    fetchList()
+  } catch (e: any) {
+    if (e !== 'cancel' && e?.message !== 'cancel') {
+      ElMessage.error(e?.message || '操作失败')
+    }
+  }
 }
 
 // WebSocket 实时报警通知
@@ -138,21 +159,26 @@ onUnmounted(() => {
     </template>
 
     <ElTable v-loading="loading" :data="list" border stripe>
+      <template #empty>
+        <div class="py-20px text-center text-gray-400">暂无报警记录</div>
+      </template>
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="device_name" label="设备" min-width="140" show-overflow-tooltip />
       <ElTableColumn prop="tag_name" label="点位" min-width="120" show-overflow-tooltip />
       <ElTableColumn label="级别" width="90">
         <template #default="{ row }"
-          ><ElTag :type="levelType(row.level)">{{ row.level || '—' }}</ElTag></template
+          ><ElTag :type="levelType(row.alarm_level)">{{ levelLabel(row.alarm_level) }}</ElTag></template
         >
       </ElTableColumn>
-      <ElTableColumn prop="message" label="报警内容" min-width="200" show-overflow-tooltip />
+      <ElTableColumn prop="alarm_message" label="报警内容" min-width="200" show-overflow-tooltip />
       <ElTableColumn label="状态" width="100">
         <template #default="{ row }"
           ><ElTag :type="statusType(row.status)">{{ statusText(row.status) }}</ElTag></template
         >
       </ElTableColumn>
-      <ElTableColumn prop="triggered_at" label="触发时间" width="170" />
+      <ElTableColumn label="触发时间" width="170">
+        <template #default="{ row }">{{ formatTime(row.triggered_at) }}</template>
+      </ElTableColumn>
       <ElTableColumn label="操作" width="160" fixed="right">
         <template #default="{ row }">
           <ElButton
@@ -180,7 +206,7 @@ onUnmounted(() => {
         v-model:current-page="query.page"
         v-model:page-size="query.page_size"
         :total="total"
-        :page-sizes="[10, 20, 50]"
+        :page-sizes="[10, 20, 50, 100]"
         layout="total, sizes, prev, pager, next"
         @current-change="fetchList"
         @size-change="((query.page = 1), fetchList())"

@@ -1,6 +1,6 @@
 """Script management API — CRUD + test execution."""
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -12,6 +12,7 @@ from app.models.script import Script
 from app.models.device import DeviceTag
 from app.schemas.common import PageResponse
 from app.engine.script_engine import script_engine
+from app.services.audit_service import log_action
 
 router = APIRouter(prefix="/scripts", tags=["脚本算法"])
 
@@ -62,16 +63,20 @@ class AssignRequest(BaseModel):
     script_id: Optional[int] = None  # None to unassign
 
 
-@router.get("")
+@router.get("", response_model=PageResponse)
 def list_scripts(
     enabled_only: bool = True,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("script.read")),
 ):
     q = db.query(Script)
     if enabled_only:
         q = q.filter(Script.enabled == True)
-    return q.order_by(Script.is_template.desc(), Script.name).all()
+    total = q.count()
+    items = q.order_by(Script.is_template.desc(), Script.name).offset((page - 1) * page_size).limit(page_size).all()
+    return PageResponse(total=total, page=page, page_size=page_size, data=[ScriptOut.model_validate(i) for i in items])
 
 
 @router.get("/{script_id}", response_model=ScriptOut)
@@ -83,30 +88,44 @@ def get_script(script_id: int, db: Session = Depends(get_db), _: User = Depends(
 
 
 @router.post("", response_model=ScriptOut)
-def create_script(req: ScriptCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("script.write"))):
+def create_script(req: ScriptCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("script.write"))):
     script = Script(**req.model_dump())
     db.add(script)
-    db.commit()
-    db.refresh(script)
+    try:
+        db.commit()
+        db.refresh(script)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+    log_action(action="script.create", resource_type="script", resource_id=script.id,
+               resource_name=script.name or str(script.id), detail=json.dumps({"language": script.language}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return script
 
 
 @router.put("/{script_id}", response_model=ScriptOut)
-def update_script(script_id: int, req: ScriptUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("script.write"))):
+def update_script(script_id: int, req: ScriptUpdate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("script.write"))):
     script = db.query(Script).filter(Script.id == script_id).first()
     if not script:
         raise HTTPException(status_code=404, detail="脚本不存在")
     for k, v in req.model_dump(exclude_unset=True).items():
         setattr(script, k, v)
-    db.commit()
-    db.refresh(script)
+    try:
+        db.commit()
+        db.refresh(script)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
     # Invalidate cache
     script_engine.invalidate_cache(script_id)
+    log_action(action="script.update", resource_type="script", resource_id=script.id,
+               resource_name=script.name or str(script.id), detail=json.dumps(req.model_dump(exclude_unset=True), ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return script
 
 
 @router.delete("/{script_id}")
-def delete_script(script_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("script.write"))):
+def delete_script(script_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("script.write"))):
     script = db.query(Script).filter(Script.id == script_id).first()
     if not script:
         raise HTTPException(status_code=404, detail="脚本不存在")
@@ -116,8 +135,15 @@ def delete_script(script_id: int, db: Session = Depends(get_db), _: User = Depen
     tag_count = db.query(DeviceTag).filter(DeviceTag.script_id == script_id).count()
     if tag_count > 0:
         raise HTTPException(status_code=400, detail=f"该脚本被 {tag_count} 个点位使用，请先解除绑定")
+    log_action(action="script.delete", resource_type="script", resource_id=script.id,
+               resource_name=script.name or str(script.id), detail=json.dumps({"language": script.language}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     db.delete(script)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
     return {"message": "删除成功"}
 
 
@@ -134,15 +160,22 @@ def test_script(req: TestRequest, _: User = Depends(require_permission("script.w
 
 
 @router.post("/assign")
-def assign_script(req: AssignRequest, db: Session = Depends(get_db), _: User = Depends(require_permission("script.write"))):
+def assign_script(req: AssignRequest, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("script.write"))):
     """Assign or unassign a script to/from a tag."""
     tag = db.query(DeviceTag).filter(DeviceTag.id == req.tag_id).first()
     if not tag:
         raise HTTPException(status_code=404, detail="点位不存在")
     tag.script_id = req.script_id
-    db.commit()
-    action = f"绑定脚本#{req.script_id}" if req.script_id else "解除脚本绑定"
-    return {"message": f"点位 {tag.name} {action}成功"}
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"绑定失败: {e}")
+    action_msg = f"绑定脚本#{req.script_id}" if req.script_id else "解除脚本绑定"
+    log_action(action="script.assign", resource_type="device_tag", resource_id=req.tag_id,
+               resource_name=tag.name or str(tag.id), detail=json.dumps({"tag_id": req.tag_id, "script_id": req.script_id, "action": action_msg}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    return {"message": f"点位 {tag.name} {action_msg}成功"}
 
 
 # ── Script templates (pre-defined) ──

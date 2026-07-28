@@ -1,12 +1,13 @@
 """Device management API."""
 import json
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.device import Device, DeviceGroup, DeviceTag
+from app.services.audit_service import log_action
 from app.schemas.device import (
     DeviceCreate, DeviceUpdate, DeviceOut, DeviceDetailOut,
     GroupCreate, GroupUpdate, GroupOut,
@@ -68,8 +69,12 @@ def create_group(req: GroupCreate, db: Session = Depends(get_db), _: User = Depe
         raise HTTPException(status_code=400, detail="分组名已存在")
     group = DeviceGroup(**req.model_dump())
     db.add(group)
-    db.commit()
-    db.refresh(group)
+    try:
+        db.commit()
+        db.refresh(group)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
     return group
 
 
@@ -80,8 +85,12 @@ def update_group(group_id: int, req: GroupUpdate, db: Session = Depends(get_db),
         raise HTTPException(status_code=404, detail="分组不存在")
     for k, v in req.model_dump(exclude_unset=True).items():
         setattr(group, k, v)
-    db.commit()
-    db.refresh(group)
+    try:
+        db.commit()
+        db.refresh(group)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
     return group
 
 
@@ -91,7 +100,11 @@ def delete_group(group_id: int, db: Session = Depends(get_db), _: User = Depends
     if not group:
         raise HTTPException(status_code=404, detail="分组不存在")
     db.delete(group)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
     return {"message": "删除成功"}
 
 
@@ -121,7 +134,7 @@ def list_devices(
     production_line: str = None,
     installation: str = None,
     ids: str = Query(None, description="按设备 ID 列表精确筛选，逗号分隔（关联列表框多选）"),
-    search: str = "",
+    search: str = Query("", max_length=100),
     writable: bool = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("device.read")),
@@ -172,7 +185,7 @@ def list_devices(
 def list_all_devices(db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.read"))):
     q = apply_device_org_filter(db.query(Device), db, current_user)
     pmap = _org_path_map(db)
-    return [_device_out(i, pmap) for i in q.order_by(Device.id).all()]
+    return [_device_out(i, pmap) for i in q.order_by(Device.id).limit(500).all()]
 
 
 @router.get("/{device_id}", response_model=DeviceDetailOut)
@@ -188,11 +201,21 @@ def get_device(device_id: int, db: Session = Depends(get_db), current_user: User
 
 
 @router.post("", response_model=DeviceOut)
-def create_device(req: DeviceCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("device.write"))):
+def create_device(req: DeviceCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("device.write"))):
+    # 重复设备名校验（提前到 400 而非 500）
+    if db.query(Device).filter(Device.name == req.name).first():
+        raise HTTPException(status_code=400, detail=f"设备名 '{req.name}' 已存在")
     device = Device(**req.model_dump())
     db.add(device)
-    db.commit()
-    db.refresh(device)
+    try:
+        db.commit()
+        db.refresh(device)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+    log_action(action="device.create", resource_type="device", resource_id=device.id,
+               resource_name=device.name, detail=json.dumps({"protocol": device.protocol, "host": device.host}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     # Auto-start engine for new device
     try:
         from app.engine.protocol_router import protocol_router
@@ -204,7 +227,7 @@ def create_device(req: DeviceCreate, db: Session = Depends(get_db), _: User = De
 
 
 @router.put("/{device_id}", response_model=DeviceOut)
-def update_device(device_id: int, req: DeviceUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("device.write"))):
+def update_device(device_id: int, req: DeviceUpdate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("device.write"))):
     device = db.query(Device).filter(Device.id == device_id).first()
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
@@ -216,8 +239,15 @@ def update_device(device_id: int, req: DeviceUpdate, db: Session = Depends(get_d
     if data.get('enabled') is False:
         device.status = 'offline'
         device.last_error = '已手动禁用'
-    db.commit()
-    db.refresh(device)
+    log_action(action="device.update", resource_type="device", resource_id=device.id,
+               resource_name=device.name, detail=json.dumps(data, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+        db.refresh(device)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
     # Reload engine with updated config
     try:
         from app.engine.protocol_router import protocol_router
@@ -237,14 +267,24 @@ def update_device(device_id: int, req: DeviceUpdate, db: Session = Depends(get_d
 
 
 @router.delete("/{device_id}")
-def delete_device(device_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("device.write"))):
+def delete_device(device_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("device.write"))):
     device = db.query(Device).filter(Device.id == device_id).first()
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
     device_id_val = device.id
     device_protocol = device.protocol
+    # 级联删除关联的报警规则
+    from app.models.alarm import AlarmRule
+    db.query(AlarmRule).filter(AlarmRule.device_id == device_id).delete()
     db.delete(device)
-    db.commit()
+    log_action(action="device.delete", resource_type="device", resource_id=device_id_val,
+               resource_name=device.name, detail=json.dumps({"protocol": device_protocol}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
     # Stop engine for deleted device
     try:
         from app.engine.protocol_router import protocol_router
@@ -257,10 +297,11 @@ def delete_device(device_id: int, db: Session = Depends(get_db), _: User = Depen
 @router.post("/{device_id}/duplicate")
 def duplicate_device(
     device_id: int,
-    new_name: str = Query(..., description="新设备名称"),
+    new_name: str = Query(..., max_length=100, description="新设备名称"),
     copy_tags: bool = Query(True, description="是否复制点位"),
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("device.write")),
+    user: User = Depends(require_permission("device.write")),
 ):
     """Duplicate a device and optionally all its tags."""
     src = db.query(Device).filter(Device.id == device_id).first()
@@ -270,35 +311,52 @@ def duplicate_device(
     if db.query(Device).filter(Device.name == new_name).first():
         raise HTTPException(400, f"设备名 '{new_name}' 已存在")
 
-    # Copy device fields
+    # Copy device fields (field names must match Device model exactly)
     new_device = Device(
         name=new_name,
         protocol=src.protocol,
+        # Modbus TCP
         host=src.host,
         port=src.port,
         slave_id=src.slave_id,
-        serial_port=src.serial_port,
-        baudrate=src.baudrate,
-        parity=src.parity,
-        data_bits=src.data_bits,
-        stop_bits=src.stop_bits,
-        broker_url=src.broker_url,
-        mqtt_topic=src.mqtt_topic,
+        timeout=src.timeout,
+        retries=src.retries,
+        # MQTT
+        mqtt_broker=src.mqtt_broker,
+        mqtt_port=src.mqtt_port,
         mqtt_username=src.mqtt_username,
         mqtt_password=src.mqtt_password,
         mqtt_client_id=src.mqtt_client_id,
-        mqtt_qos=src.mqtt_qos,
-        endpoint_url=src.endpoint_url,
-        node_id=src.node_id,
+        mqtt_topic_prefix=src.mqtt_topic_prefix,
+        mqtt_use_tls=src.mqtt_use_tls,
+        mqtt_ca_cert=src.mqtt_ca_cert,
+        mqtt_publish_enabled=src.mqtt_publish_enabled,
+        mqtt_publish_topic=src.mqtt_publish_topic,
+        mqtt_publish_qos=src.mqtt_publish_qos,
+        mqtt_publish_interval=src.mqtt_publish_interval,
+        mqtt_payload_format=src.mqtt_payload_format,
+        mqtt_payload_template=src.mqtt_payload_template,
+        mqtt_is_gateway=src.mqtt_is_gateway,
+        # OPC-UA
+        opc_endpoint=src.opc_endpoint,
         opc_security_mode=src.opc_security_mode,
-        poll_interval=src.poll_interval,
+        opc_username=src.opc_username,
+        opc_password=src.opc_password,
+        opc_certificate=src.opc_certificate,
+        opc_private_key=src.opc_private_key,
+        opc_namespace=src.opc_namespace,
+        # Location
         factory=src.factory,
         workshop=src.workshop,
         production_line=src.production_line,
         installation=src.installation,
+        longitude=src.longitude,
+        latitude=src.latitude,
         org_node_id=src.org_node_id,
-        description=f"复制自: {src.name}" if not src.description else src.description,
-        enabled=False,  # 新设备默认禁用，确认后再启用
+        # Common
+        poll_interval=src.poll_interval,
+        description=src.description if src.description else f"复制自: {src.name}",
+        enabled=src.enabled,  # 保持与源设备相同的启用状态
     )
     db.add(new_device)
     db.flush()  # Get new_device.id
@@ -310,13 +368,29 @@ def duplicate_device(
             new_tag = DeviceTag(
                 device_id=new_device.id,
                 name=st.name,
+                # Modbus
                 function_code=st.function_code,
                 address=st.address,
                 data_type=st.data_type,
                 byte_order=st.byte_order,
+                bit_index=st.bit_index,
+                register_count=st.register_count,
+                # MQTT
+                mqtt_topic=st.mqtt_topic,
+                mqtt_json_path=st.mqtt_json_path,
+                mqtt_value_type=st.mqtt_value_type,
+                mqtt_publish_topic=st.mqtt_publish_topic,
+                mqtt_retain=st.mqtt_retain,
+                # OPC-UA
+                opc_node_id=st.opc_node_id,
+                opc_node_type=st.opc_node_type,
+                # Value processing
                 scale_factor=st.scale_factor,
                 offset=st.offset,
                 decimal_places=st.decimal_places,
+                min_value=st.min_value,
+                max_value=st.max_value,
+                script_id=st.script_id,
                 unit=st.unit,
                 writable=st.writable,
                 description=st.description,
@@ -326,8 +400,24 @@ def duplicate_device(
             db.add(new_tag)
             tag_count += 1
 
-    db.commit()
-    db.refresh(new_device)
+    log_action(action="device.duplicate", resource_type="device", resource_id=new_device.id,
+               resource_name=new_name, detail=json.dumps({"source_id": device_id, "source_name": src.name, "copy_tags": copy_tags, "tag_count": tag_count}, ensure_ascii=False),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request and request.client else "")
+    try:
+        db.commit()
+        db.refresh(new_device)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"设备复制失败: {e}")
+
+    # Auto-start engine for duplicated device if enabled
+    if new_device.enabled:
+        try:
+            from app.engine.protocol_router import protocol_router
+            protocol_router.reload_device(new_device.id, new_device.protocol)
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"reload_device(duplicate {new_device.id}) failed: {e}")
 
     return {
         "message": f"设备复制成功，已复制 {tag_count} 个点位",
@@ -343,10 +433,13 @@ def duplicate_device(
 
 # ============ Tags ============
 
-@router.get("/{device_id}/tags", response_model=List[TagOut])
-def list_tags(device_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("tag.read"))):
+@router.get("/{device_id}/tags", response_model=PageResponse)
+def list_tags(device_id: int, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=500), db: Session = Depends(get_db), current_user: User = Depends(require_permission("tag.read"))):
     _ensure_device_visible(db, current_user, device_id)
-    return db.query(DeviceTag).filter(DeviceTag.device_id == device_id).order_by(DeviceTag.sort_order, DeviceTag.id).all()
+    q = db.query(DeviceTag).filter(DeviceTag.device_id == device_id)
+    total = q.count()
+    items = q.order_by(DeviceTag.sort_order, DeviceTag.id).offset((page - 1) * page_size).limit(page_size).all()
+    return PageResponse(total=total, page=page, page_size=page_size, data=[TagOut.model_validate(i) for i in items])
 
 
 VALID_FUNCTION_CODES = {"coil", "discrete_input", "input_register", "holding_register"}
@@ -378,8 +471,12 @@ def create_tag(req: TagCreate, db: Session = Depends(get_db), _: User = Depends(
     _validate_tag_required(device, req.function_code, req.mqtt_topic, req.opc_node_id, req.name)
     tag = DeviceTag(**req.model_dump())
     db.add(tag)
-    db.commit()
-    db.refresh(tag)
+    try:
+        db.commit()
+        db.refresh(tag)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
     return tag
 
 
@@ -393,8 +490,12 @@ def update_tag(tag_id: int, req: TagUpdate, db: Session = Depends(get_db), _: Us
     device = db.query(Device).filter(Device.id == tag.device_id).first()
     if device:
         _validate_tag_required(device, tag.function_code, tag.mqtt_topic, tag.opc_node_id, tag.name)
-    db.commit()
-    db.refresh(tag)
+    try:
+        db.commit()
+        db.refresh(tag)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
     return tag
 
 
@@ -404,12 +505,18 @@ def delete_tag(tag_id: int, db: Session = Depends(get_db), _: User = Depends(req
     if not tag:
         raise HTTPException(status_code=404, detail="Tag不存在")
     db.delete(tag)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
     return {"message": "删除成功"}
 
 
 @router.post("/tags/batch", response_model=List[TagOut])
 def batch_create_tags(tags: List[TagCreate], db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
+    if len(tags) > 100:
+        raise HTTPException(status_code=400, detail="批量创建点位最多支持 100 条")
     result = []
     device_cache: dict = {}
     for req in tags:
@@ -422,9 +529,13 @@ def batch_create_tags(tags: List[TagCreate], db: Session = Depends(get_db), _: U
         tag = DeviceTag(**req.model_dump())
         db.add(tag)
         result.append(tag)
-    db.commit()
-    for t in result:
-        db.refresh(t)
+    try:
+        db.commit()
+        for t in result:
+            db.refresh(t)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"批量创建失败: {e}")
     return result
 
 
@@ -441,6 +552,12 @@ def write_tag_value(device_id: int, req: WriteRequest, db: Session = Depends(get
         raise HTTPException(status_code=400, detail="该Tag不可写")
 
     device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    if not device.enabled:
+        raise HTTPException(status_code=400, detail="设备已禁用，无法写入")
+    if device.status not in ("online", None):
+        raise HTTPException(status_code=400, detail=f"设备当前状态为 {device.status}，无法写入")
     from app.engine.protocol_router import protocol_router
     success = protocol_router.write_value(device_id, tag, req.value, device.protocol)
     if not success:
@@ -477,13 +594,18 @@ class BatchWriteItem(BaseModel):
     value: float | bool | int | str
 
 class BatchWriteRequest(BaseModel):
-    items: List[BatchWriteItem]
+    items: List[BatchWriteItem]  # max 50 items
     stop_on_error: bool = False  # 某条失败是否停止后续执行
+
+    def model_post_init(self, __context):
+        if len(self.items) > 50:
+            raise ValueError("批量写入最多支持 50 条")
 
 
 @router.post("/batch-write")
 def batch_write_tag_values(
     req: BatchWriteRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("device.control")),
 ):
@@ -556,6 +678,10 @@ def batch_write_tag_values(
                 })
             break
 
+    log_action(action="device.batch_write", resource_type="device", resource_id=0,
+               resource_name=f"batch({len(req.items)})",
+               detail=json.dumps({"total": len(req.items), "success": success_count, "failed": fail_count}, ensure_ascii=False),
+               user_id=current_user.id, username=current_user.username, ip_address=request.client.host if request.client else "")
     return {
         "total": len(req.items),
         "success": success_count,

@@ -1,11 +1,13 @@
 """User management API (admin only)."""
-from fastapi import APIRouter, Depends, HTTPException, Query
+import json
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from app.core.database import get_db
 from app.core.deps import require_admin
 from app.models.user import User
-from app.schemas.user import UserCreate, UserOut, UserUpdate
+from app.services.audit_service import log_action
+from app.schemas.user import UserCreate, UserOut, UserUpdate, ResetPasswordRequest
 from app.schemas.common import ResponseModel, PageResponse
 
 router = APIRouter(prefix="/users", tags=["用户管理"])
@@ -29,7 +31,7 @@ def list_users(
 
 
 @router.post("", response_model=UserOut)
-def create_user(req: UserCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+def create_user(req: UserCreate, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     if db.query(User).filter(User.username == req.username).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
     user = User(
@@ -41,40 +43,72 @@ def create_user(req: UserCreate, db: Session = Depends(get_db), _: User = Depend
         role=req.role,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+    log_action(action="user.create", resource_type="user", resource_id=user.id,
+               resource_name=user.username, detail=json.dumps({"display_name": user.display_name, "role": user.role}, ensure_ascii=False),
+               user_id=admin.id, username=admin.username, ip_address=request.client.host if request.client else "")
     return user
 
 
 @router.put("/{user_id}", response_model=UserOut)
-def update_user(user_id: int, req: UserUpdate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+def update_user(user_id: int, req: UserUpdate, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # Only allow updating fields defined in UserUpdate (exclude sensitive fields like hashed_password)
+    changed = {}
     for k, v in req.model_dump(exclude_unset=True).items():
-        setattr(user, k, v)
-    db.commit()
-    db.refresh(user)
+        if k in ("display_name", "phone", "email", "role", "is_active"):
+            changed[k] = v
+            setattr(user, k, v)
+    log_action(action="user.update", resource_type="user", resource_id=user.id,
+               resource_name=user.username, detail=json.dumps(changed, ensure_ascii=False, default=str),
+               user_id=admin.id, username=admin.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
     return user
 
 
 @router.delete("/{user_id}")
-def delete_user(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="不能删除自己的账号")
     db.delete(user)
-    db.commit()
+    log_action(action="user.delete", resource_type="user", resource_id=user.id,
+               resource_name=user.username, detail="",
+               user_id=admin.id, username=admin.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
     return {"message": "删除成功"}
 
 
 @router.post("/{user_id}/reset-password")
-def reset_password(user_id: int, new_password: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
-    if len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="密码长度至少 6 位")
+def reset_password(user_id: int, req: ResetPasswordRequest, request: Request, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
-    user.hashed_password = pwd_context.hash(new_password)
-    db.commit()
+    user.hashed_password = pwd_context.hash(req.new_password)
+    log_action(action="user.reset_password", resource_type="user", resource_id=user.id,
+               resource_name=user.username, detail="密码已重置",
+               user_id=admin.id, username=admin.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"重置失败: {e}")
     return {"message": "密码已重置"}

@@ -18,8 +18,11 @@ import {
   ElCheckbox,
   ElTreeSelect,
   ElSwitch,
+  ElSelect,
+  ElOption,
   ElMessage,
-  ElMessageBox
+  ElMessageBox,
+  ElPagination
 } from 'element-plus'
 import {
   getRoles,
@@ -31,6 +34,7 @@ import {
   createUser,
   updateUser,
   deleteUser,
+  resetUserPassword,
   getOrgTree,
   unwrapList
 } from '@/api/modbus'
@@ -44,7 +48,26 @@ const users = ref<any[]>([])
 const orgTree = ref<any[]>([])
 const loading = ref(false)
 
+// ── 用户分页 ──
+const userPage = ref(1)
+const userPageSize = ref(20)
+const userTotal = ref(0)
+const userSearch = ref('')
+
 const permCode = (p: any) => (typeof p === 'string' ? p : p.code || p.name)
+// ── 权限按 module 分组 ──
+const permissionsByModule = computed(() => {
+  const groups: Record<string, any[]> = {}
+  for (const p of permissions.value) {
+    const code = permCode(p)
+    // 解析 module: 取第一个点号前的部分，如 alarm.read → alarm
+    const module = code.includes('.') ? code.split('.')[0] : 'other'
+    if (!groups[module]) groups[module] = []
+    groups[module].push(p)
+  }
+  return groups
+})
+
 const permMap = computed<Record<string, number>>(() => {
   const m: Record<string, number> = {}
   for (const p of permissions.value) m[permCode(p)] = p.id
@@ -61,14 +84,43 @@ const fetchRoles = async () => {
   }
 }
 const fetchPermissions = async () => {
-  permissions.value = unwrapList(await getPermissions()).list
+  try {
+    permissions.value = unwrapList(await getPermissions()).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取权限列表失败')
+  }
 }
 const fetchUsers = async () => {
-  users.value = unwrapList(await getUsers({ page: 1, page_size: 100 })).list
+  try {
+    const params: any = { page: userPage.value, page_size: userPageSize.value }
+    if (userSearch.value) params.keyword = userSearch.value
+    const res = unwrapList(await getUsers(params))
+    users.value = res.list
+    userTotal.value = res.total
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取用户列表失败')
+  }
+}
+const onUserPageChange = (p: number) => {
+  userPage.value = p
+  fetchUsers()
+}
+const onUserSizeChange = (s: number) => {
+  userPageSize.value = s
+  userPage.value = 1
+  fetchUsers()
+}
+const onUserSearch = () => {
+  userPage.value = 1
+  fetchUsers()
 }
 const fetchOrgTree = async () => {
-  const res = await getOrgTree()
-  orgTree.value = res?.data || []
+  try {
+    const res = await getOrgTree()
+    orgTree.value = res?.data || []
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取组织架构失败')
+  }
 }
 
 const dialogVisible = ref(false)
@@ -109,29 +161,39 @@ const openEdit = (row: any) => {
   dialogVisible.value = true
 }
 const submitRole = async () => {
-  await formRef.value?.validate()
-  const permission_ids = form.permissionCodes.map((c: string) => permMap.value[c]).filter(Boolean)
-  const payload: any = {
-    name: form.name, description: form.description,
-    permission_ids, data_scope: form.data_scope,
-    org_node_ids: form.data_scope === 'org' ? form.org_node_ids : []
+  try {
+    await formRef.value?.validate()
+    const permission_ids = form.permissionCodes.map((c: string) => permMap.value[c]).filter(Boolean)
+    const payload: any = {
+      name: form.name, description: form.description,
+      permission_ids, data_scope: form.data_scope,
+      org_node_ids: form.data_scope === 'org' ? form.org_node_ids : []
+    }
+    if (!form.id) payload.code = form.code
+    if (form.id) {
+      await updateRole(form.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await createRole(payload)
+      ElMessage.success('创建成功')
+    }
+    dialogVisible.value = false
+    fetchRoles()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
   }
-  if (!form.id) payload.code = form.code
-  if (form.id) {
-    await updateRole(form.id, payload)
-    ElMessage.success('更新成功')
-  } else {
-    await createRole(payload)
-    ElMessage.success('创建成功')
-  }
-  dialogVisible.value = false
-  fetchRoles()
 }
 const removeRole = async (row: any) => {
-  await ElMessageBox.confirm(`确认删除角色「${row.name}」？`, '提示', { type: 'warning' })
-  await deleteRole(row.id)
-  ElMessage.success('删除成功')
-  fetchRoles()
+  try {
+    await ElMessageBox.confirm(`确认删除角色「${row.name}」？`, '提示', { type: 'warning' })
+    await deleteRole(row.id)
+    ElMessage.success('删除成功')
+    fetchRoles()
+  } catch (e: any) {
+    if (e !== 'cancel' && e?.message !== 'cancel') {
+      ElMessage.error(e?.message || '删除失败')
+    }
+  }
 }
 
 // ── 用户管理 ──
@@ -150,11 +212,19 @@ const userForm = reactive<any>({
 })
 const userRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-  role: [{ required: true, message: '请选择角色', trigger: 'change' }]
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 8, message: '密码长度不能少于8位', trigger: 'blur' },
+    { pattern: /^(?=.*[a-zA-Z])(?=.*\d)/, message: '密码需包含字母和数字', trigger: 'blur' }
+  ],
+  role: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  phone: [{ pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }],
+  email: [{ type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }]
 }
 const userEditRules = {
-  role: [{ required: true, message: '请选择角色', trigger: 'change' }]
+  role: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  phone: [{ pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }],
+  email: [{ type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }]
 }
 
 const roleOptions = computed(() => roles.value.map((r) => ({ label: r.name, value: r.code || r.name })))
@@ -178,55 +248,66 @@ const openUserEdit = (row: any) => {
   userDialogVisible.value = true
 }
 const submitUser = async () => {
-  const rules = userForm.id ? userEditRules : userRules
-  await userFormRef.value?.validate(rules)
-  if (userForm.id) {
-    const payload: any = {
-      display_name: userForm.display_name,
-      phone: userForm.phone,
-      email: userForm.email,
-      role: userForm.role,
-      is_active: userForm.is_active
+  try {
+    const rules = userForm.id ? userEditRules : userRules
+    await userFormRef.value?.validate(rules)
+    if (userForm.id) {
+      const payload: any = {
+        display_name: userForm.display_name,
+        phone: userForm.phone,
+        email: userForm.email,
+        role: userForm.role,
+        is_active: userForm.is_active
+      }
+      await updateUser(userForm.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await createUser({
+        username: userForm.username,
+        password: userForm.password,
+        display_name: userForm.display_name,
+        phone: userForm.phone,
+        email: userForm.email,
+        role: userForm.role
+      })
+      ElMessage.success('创建成功')
     }
-    await updateUser(userForm.id, payload)
-    ElMessage.success('更新成功')
-  } else {
-    await createUser({
-      username: userForm.username,
-      password: userForm.password,
-      display_name: userForm.display_name,
-      phone: userForm.phone,
-      email: userForm.email,
-      role: userForm.role
-    })
-    ElMessage.success('创建成功')
+    userDialogVisible.value = false
+    fetchUsers()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
   }
-  userDialogVisible.value = false
-  fetchUsers()
 }
 const removeUser = async (row: any) => {
-  await ElMessageBox.confirm(`确认删除用户「${row.username}」？`, '提示', { type: 'warning' })
-  await deleteUser(row.id)
-  ElMessage.success('删除成功')
-  fetchUsers()
+  try {
+    await ElMessageBox.confirm(`确认删除用户「${row.username}」？`, '提示', { type: 'warning' })
+    await deleteUser(row.id)
+    ElMessage.success('删除成功')
+    fetchUsers()
+  } catch (e: any) {
+    if (e !== 'cancel' && e?.message !== 'cancel') {
+      ElMessage.error(e?.message || '删除失败')
+    }
+  }
 }
 const resetPassword = async (row: any) => {
   const { value } = await ElMessageBox.prompt('请输入新密码', `重置密码 - ${row.username}`, {
     inputType: 'password',
     inputPlaceholder: '请输入新密码',
-    inputValidator: (v) => !!v?.trim() || '密码不能为空',
+    inputValidator: (v) => {
+      if (!v?.trim()) return '密码不能为空'
+      if (v.length < 8) return '密码长度不能少于8位'
+      if (!/^(?=.*[a-zA-Z])(?=.*\d)/.test(v)) return '密码需包含字母和数字'
+      return true
+    },
     confirmButtonText: '确认重置',
     cancelButtonText: '取消'
   })
   try {
-    const res = await fetch(`/api/v1/users/${row.id}/reset-password?new_password=${encodeURIComponent(value)}`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }
-    })
-    if (!res.ok) throw new Error('重置失败')
+    await resetUserPassword(row.id, { new_password: value })
     ElMessage.success('密码已重置')
   } catch (e: any) {
-    ElMessage.error(e?.message || '重置失败')
+    ElMessage.error(e?.response?.data?.detail || e?.message || '重置失败')
   }
 }
 
@@ -272,10 +353,18 @@ onMounted(() => {
 
       <!-- 用户管理 -->
       <ElTabPane label="用户管理" name="users">
-        <div class="flex justify-end mb-12px">
+        <div class="flex justify-between items-center mb-12px">
+          <ElInput
+            v-model="userSearch"
+            placeholder="搜索用户名/显示名"
+            clearable
+            style="width: 240px"
+            @keyup.enter="onUserSearch"
+            @clear="onUserSearch"
+          />
           <ElButton v-hasPermi="['rbac.write']" type="success" @click="openUserCreate">新增用户</ElButton>
         </div>
-        <ElTable :data="users" border stripe>
+        <ElTable v-loading="loading" :data="users" border stripe>
           <ElTableColumn prop="id" label="ID" width="60" />
           <ElTableColumn prop="username" label="用户名" width="120" />
           <ElTableColumn prop="display_name" label="显示名" width="120" />
@@ -301,18 +390,33 @@ onMounted(() => {
             </template>
           </ElTableColumn>
         </ElTable>
+        <div class="flex justify-end mt-12px">
+          <ElPagination
+            v-model:current-page="userPage"
+            v-model:page-size="userPageSize"
+            :total="userTotal"
+            layout="total, sizes, prev, pager, next, jumper"
+            :page-sizes="[10, 20, 50]"
+            @current-change="onUserPageChange"
+            @size-change="onUserSizeChange"
+          />
+        </div>
       </ElTabPane>
 
       <!-- 权限清单 -->
       <ElTabPane label="权限清单" name="perms">
-        <div class="flex flex-wrap gap-8px py-8px">
-          <ElTag v-for="p in permissions" :key="permCode(p)" class="mb-6px">{{ permCode(p) }}</ElTag>
+        <div v-for="(perms, module) in permissionsByModule" :key="module" class="mb-16px">
+          <div class="text-14px font-600 mb-8px text-gray-500">{{ module }}</div>
+          <div class="flex flex-wrap gap-8px">
+            <ElTag v-for="p in perms" :key="permCode(p)" class="mb-6px">{{ permCode(p) }}</ElTag>
+          </div>
         </div>
+        <div v-if="!Object.keys(permissionsByModule).length" class="text-13px text-gray-400">暂无权限数据</div>
       </ElTabPane>
     </ElTabs>
 
     <!-- 角色编辑对话框 -->
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="roleRules" label-width="90px">
         <ElFormItem label="角色代码" prop="code">
           <ElInput v-model="form.code" :disabled="!!form.id" placeholder="如：workshop_admin" />
@@ -353,7 +457,7 @@ onMounted(() => {
     </ElDialog>
 
     <!-- 用户编辑对话框 -->
-    <ElDialog v-model="userDialogVisible" :title="userDialogTitle" width="500px">
+    <ElDialog v-model="userDialogVisible" :title="userDialogTitle" width="500px" @close="userFormRef?.resetFields()">
       <ElForm ref="userFormRef" :model="userForm" :rules="userForm.id ? userEditRules : userRules" label-width="80px">
         <ElFormItem label="用户名" prop="username">
           <ElInput v-model="userForm.username" :disabled="!!userForm.id" placeholder="登录用户名" />
@@ -364,10 +468,10 @@ onMounted(() => {
         <ElFormItem label="显示名">
           <ElInput v-model="userForm.display_name" placeholder="真实姓名" />
         </ElFormItem>
-        <ElFormItem label="手机号">
+        <ElFormItem label="手机号" prop="phone">
           <ElInput v-model="userForm.phone" placeholder="可选" />
         </ElFormItem>
-        <ElFormItem label="邮箱">
+        <ElFormItem label="邮箱" prop="email">
           <ElInput v-model="userForm.email" placeholder="可选" />
         </ElFormItem>
         <ElFormItem label="角色" prop="role">

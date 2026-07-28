@@ -45,21 +45,33 @@ const openCreate = () => {
 }
 const submit = async () => {
   await formRef.value?.validate()
-  await createScadaPage({ name: form.name, description: form.description, config_json: '[]' })
-  ElMessage.success('创建成功')
-  dialogVisible.value = false
-  fetchList()
+  try {
+    await createScadaPage({ name: form.name, description: form.description, config_json: '[]' })
+    ElMessage.success('创建成功')
+    dialogVisible.value = false
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '创建失败')
+  }
 }
 const remove = async (row: any) => {
   await ElMessageBox.confirm(`确认删除画面「${row.name}」？`, '提示', { type: 'warning' })
-  await deleteScadaPage(row.id)
-  ElMessage.success('删除成功')
-  fetchList()
+  try {
+    await deleteScadaPage(row.id)
+    ElMessage.success('删除成功')
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  }
 }
 const duplicate = async (row: any) => {
-  await duplicateScadaPage(row.id)
-  ElMessage.success('已复制')
-  fetchList()
+  try {
+    await duplicateScadaPage(row.id)
+    ElMessage.success('已复制')
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '复制失败')
+  }
 }
 
 onMounted(fetchList)
@@ -102,7 +114,7 @@ onMounted(fetchList)
       </ElTableColumn>
     </ElTable>
 
-    <ElDialog v-model="dialogVisible" title="新建 SCADA 画面" width="460px">
+    <ElDialog v-model="dialogVisible" title="新建 SCADA 画面" width="460px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="80px">
         <ElFormItem label="名称" prop="name">
           <ElInput v-model="form.name" />

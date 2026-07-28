@@ -141,23 +141,27 @@ const filteredTree = () => {
 }
 
 const submit = async () => {
-  await formRef.value?.validate()
-  const payload: any = {
-    name: form.name,
-    node_type: form.node_type,
-    parent_id: form.parent_id ?? null,
-    sort_order: form.sort_order ?? 0,
-    description: form.description || ''
+  try {
+    await formRef.value?.validate()
+    const payload: any = {
+      name: form.name,
+      node_type: form.node_type,
+      parent_id: form.parent_id ?? null,
+      sort_order: form.sort_order ?? 0,
+      description: form.description || ''
+    }
+    if (isEdit.value) {
+      await updateOrg(form.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await createOrg(payload)
+      ElMessage.success('创建成功')
+    }
+    dialogVisible.value = false
+    fetchTree()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
   }
-  if (isEdit.value) {
-    await updateOrg(form.id, payload)
-    ElMessage.success('更新成功')
-  } else {
-    await createOrg(payload)
-    ElMessage.success('创建成功')
-  }
-  dialogVisible.value = false
-  fetchTree()
 }
 
 const remove = async (data: any) => {

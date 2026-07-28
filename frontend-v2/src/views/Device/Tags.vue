@@ -16,7 +16,8 @@ import {
   ElSwitch,
   ElMessage,
   ElMessageBox,
-  ElEmpty
+  ElEmpty,
+  ElPagination
 } from 'element-plus'
 import {
   getAllDevices,
@@ -38,6 +39,11 @@ const currentDevice = ref<number | undefined>(undefined)
 const loading = ref(false)
 const list = ref<any[]>([])
 
+// ── 分页 ──
+const page = ref(1)
+const pageSize = ref(100)
+const total = ref(0)
+
 // 当前选中设备的协议（决定点位表单显示哪些必填字段）
 const currentProtocol = computed(() => {
   const d = devices.value.find((x) => x.id === currentDevice.value)
@@ -46,8 +52,17 @@ const currentProtocol = computed(() => {
 const isModbus = computed(() => ['modbus_tcp', 'modbus_rtu'].includes(currentProtocol.value))
 const isMqtt = computed(() => currentProtocol.value === 'mqtt')
 const isOpc = computed(() => currentProtocol.value === 'opc_ua')
-// 回读寄存器下拉：本设备其它点位（排除自身）。回读寄存器通常是只读采集点位
-const readbackOptions = computed(() => list.value.filter((t) => t.id !== form.id))
+// 回读寄存器下拉：从后端获取该设备全量点位（排除自身），避免分页导致选项不全
+const allDeviceTags = ref<any[]>([])
+const readbackOptions = computed(() => allDeviceTags.value.filter((t) => t.id !== form.id))
+const fetchAllDeviceTags = async () => {
+  if (!currentDevice.value) { allDeviceTags.value = []; return }
+  try {
+    const res = await getDeviceTags(currentDevice.value, { page: 1, page_size: 500 })
+    const body = unwrap(res)
+    allDeviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
+  } catch { allDeviceTags.value = [] }
+}
 
 // 当前设备的展示信息（用于工具栏与表格「归属设备」列）
 const currentDeviceName = computed(() => {
@@ -65,22 +80,45 @@ const currentProtocolText = computed(() => {
 })
 
 const fetchDevices = async () => {
-  devices.value = unwrapList(await getAllDevices()).list
-  if (devices.value.length && currentDevice.value == null) {
-    currentDevice.value = devices.value[0].id
-    fetchTags()
+  try {
+    devices.value = unwrapList(await getAllDevices()).list
+    if (devices.value.length && currentDevice.value == null) {
+      currentDevice.value = devices.value[0].id
+      page.value = 1
+      fetchTags()
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取设备列表失败')
   }
 }
 const fetchTags = async () => {
   if (currentDevice.value == null) return
   loading.value = true
   try {
-    const res = await getDeviceTags(currentDevice.value)
+    const res = await getDeviceTags(currentDevice.value, { page: page.value, page_size: pageSize.value })
     const body = unwrap(res)
-    list.value = Array.isArray(body) ? body : unwrapList(res).list
+    if (Array.isArray(body)) {
+      list.value = body
+      total.value = body.length
+    } else {
+      const parsed = unwrapList(res)
+      list.value = parsed.list
+      total.value = parsed.total
+    }
+    // 同时加载全量点位（用于回读寄存器下拉）
+    fetchAllDeviceTags()
   } finally {
     loading.value = false
   }
+}
+const onPageChange = (p: number) => {
+  page.value = p
+  fetchTags()
+}
+const onSizeChange = (s: number) => {
+  pageSize.value = s
+  page.value = 1
+  fetchTags()
 }
 
 const dialogVisible = ref(false)
@@ -164,10 +202,16 @@ const submit = async () => {
   }
 }
 const remove = async (row: any) => {
-  await ElMessageBox.confirm(`确认删除点位「${row.name}」？`, '提示', { type: 'warning' })
-  await deleteTag(row.id)
-  ElMessage.success('删除成功')
-  fetchTags()
+  try {
+    await ElMessageBox.confirm(`确认删除点位「${row.name}」？`, '提示', { type: 'warning' })
+    await deleteTag(row.id)
+    ElMessage.success('删除成功')
+    fetchTags()
+  } catch (e: any) {
+    if (e !== 'cancel' && e?.message !== 'cancel') {
+      ElMessage.error(e?.message || '删除失败')
+    }
+  }
 }
 
 // ── 导出/导入 ──
@@ -235,6 +279,7 @@ const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(nul
 const onCascadeSearch = () => {
   if (selectedIds.value.length) {
     currentDevice.value = selectedIds.value[0]
+    page.value = 1
     fetchTags()
   } else {
     ElMessage.info('请在级联中选择设备')
@@ -244,6 +289,7 @@ const onCascadeSearch = () => {
 watch(selectedIds, (ids) => {
   if (ids.length && ids[0] !== currentDevice.value) {
     currentDevice.value = ids[0]
+    page.value = 1
     fetchTags()
   }
 })
@@ -336,8 +382,19 @@ onMounted(fetchDevices)
         </template>
       </ElTableColumn>
     </ElTable>
+    <div v-if="currentDevice != null" class="flex justify-end mt-12px">
+      <ElPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :total="total"
+        layout="total, sizes, prev, pager, next, jumper"
+        :page-sizes="[10, 20, 50, 100]"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
+      />
+    </div>
 
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="500px">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="500px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
         <ElFormItem label="点位名称" prop="name">
           <ElInput v-model="form.name" />

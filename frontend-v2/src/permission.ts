@@ -14,6 +14,8 @@ const { start, done } = useNProgress()
 const { loadStart, loadDone } = usePageLoading()
 
 let wsInitialized = false
+let lastMeCheck = 0
+const ME_CHECK_INTERVAL = 60_000 // 60s 内不重复调 getMeApi
 
 router.beforeEach(async (to, from, next) => {
   start()
@@ -33,14 +35,35 @@ router.beforeEach(async (to, from, next) => {
       return
     }
 
-    try {
-      const res = await getMeApi()
-      if (res?.data) {
-        userStore.setUserInfo(res.data)
-        userStore.setPermissions(res.data.permissions || [])
+    // 节流：60s 内只调一次 getMeApi
+    const now = Date.now()
+    if (now - lastMeCheck > ME_CHECK_INTERVAL) {
+      lastMeCheck = now
+      try {
+        const res = await getMeApi()
+        if (res?.data) {
+          const newPerms = res.data.permissions || []
+          const oldPerms = userStore.getPermissions || []
+          // 权限变更时重置路由缓存，强制重新生成
+          const permsChanged =
+            newPerms.length !== oldPerms.length ||
+            newPerms.some((p: string, i: number) => p !== oldPerms[i])
+          if (permsChanged && permissionStore.getIsAddRouters) {
+            permissionStore.setIsAddRouters(false)
+          }
+          userStore.setUserInfo(res.data)
+          userStore.setPermissions(newPerms)
+        }
+      } catch (e: any) {
+        // 401 / 403 → token 失效，跳登录
+        const status = e?.response?.status
+        if (status === 401 || status === 403) {
+          userStore.reset()
+          next(`/login?redirect=${to.path}`)
+          return
+        }
+        // 其他错误（网络波动等）静默继续，不影响导航
       }
-    } catch (_) {
-      // token might be expired, let the interceptor handle it
     }
 
     if (permissionStore.getIsAddRouters) {

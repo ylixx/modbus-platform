@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
-import { ElTable, ElTableColumn, ElPagination, ElInput, ElButton, ElTag } from 'element-plus'
+import { ElTable, ElTableColumn, ElPagination, ElInput, ElButton, ElTag, ElMessage } from 'element-plus'
 import { getAuditLogs, unwrapList } from '@/api/modbus'
+import { formatTime } from '@/utils/modbus'
 
 defineOptions({ name: 'Audit' })
 
@@ -22,6 +23,8 @@ const fetchList = async () => {
     const { list: l, total: t } = unwrapList(res)
     list.value = l
     total.value = t
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取审计日志失败')
   } finally {
     loading.value = false
   }
@@ -54,7 +57,9 @@ onMounted(fetchList)
       <ElTableColumn prop="resource" label="对象" min-width="140" show-overflow-tooltip />
       <ElTableColumn prop="detail" label="详情" min-width="240" show-overflow-tooltip />
       <ElTableColumn prop="ip" label="IP" width="140" />
-      <ElTableColumn prop="created_at" label="时间" width="170" />
+      <ElTableColumn label="时间" width="170">
+        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+      </ElTableColumn>
     </ElTable>
     <div class="flex justify-end mt-16px">
       <ElPagination

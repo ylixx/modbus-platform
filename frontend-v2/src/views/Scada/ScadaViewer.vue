@@ -33,6 +33,7 @@ interface BindingInfo {
   deviceId: number
   tagName: string
   prop: string
+  fabricId: string // fabric 对象的唯一标识
 }
 const bindings: BindingInfo[] = []
 
@@ -42,17 +43,25 @@ const parseBindings = (configJson: string) => {
     const objects = typeof configJson === 'string' ? JSON.parse(configJson) : configJson
     if (!Array.isArray(objects)) return
 
+    const tryPush = (child: any) => {
+      if (child._bindTarget && child._bindDeviceId) {
+        bindings.push({
+          bindTarget: child._bindTarget,
+          deviceId: child._bindDeviceId,
+          tagName: child._bindTagName || '',
+          prop: child._bindProp || 'text',
+          fabricId: child.name || child.id || ''
+        })
+      }
+    }
+
     for (const obj of objects) {
+      // 顶层非 group 对象也可能有绑定
+      tryPush(obj)
+      // group 内的子对象
       if (obj.type === 'group' && obj.objects) {
         for (const child of obj.objects) {
-          if (child._bindTarget && child._bindDeviceId) {
-            bindings.push({
-              bindTarget: child._bindTarget,
-              deviceId: child._bindDeviceId,
-              tagName: child._bindTagName || '',
-              prop: child._bindProp || 'text'
-            })
-          }
+          tryPush(child)
         }
       }
     }
@@ -90,41 +99,59 @@ const onLiveValue = (msg: any) => {
       if (binding.bindTarget === 'state') {
         // 状态绑定：根据值映射颜色
         updateValue = d.value > 0 ? '#00ff00' : '#ff0000'
-        canvasRef.value?.updateBoundValue('', 'state', updateValue, 'fill')
+        canvasRef.value?.updateBoundValue(binding.fabricId, 'state', updateValue, 'fill')
       } else if (binding.bindTarget === 'fill') {
         // 填充色绑定
-        canvasRef.value?.updateBoundValue('', 'fill', updateValue, 'fill')
+        canvasRef.value?.updateBoundValue(binding.fabricId, 'fill', updateValue, 'fill')
       } else {
         // 值绑定（value, level, temperature 等）
         const displayValue = typeof d.value === 'number' ? d.value.toFixed(1) : String(d.value)
-        canvasRef.value?.updateBoundValue('', binding.bindTarget, displayValue, 'text')
+        canvasRef.value?.updateBoundValue(binding.fabricId, binding.bindTarget, displayValue, 'text')
 
         // 特殊绑定：level 控制高度/宽度
         if (binding.bindTarget === 'level') {
-          canvasRef.value?.updateBoundValue('', 'level', d.value, 'height')
+          canvasRef.value?.updateBoundValue(binding.fabricId, 'level', d.value, 'height')
         }
       }
     }
   }
 }
 
-const toggleFullscreen = () => {
-  isFullscreen.value = !isFullscreen.value
-  // TODO: 实现真正的全屏 API
+const viewerContainer = ref<HTMLElement>()
+const toggleFullscreen = async () => {
+  const el = viewerContainer.value
+  if (!el) return
+  try {
+    if (!document.fullscreenElement) {
+      await el.requestFullscreen()
+      isFullscreen.value = true
+    } else {
+      await document.exitFullscreen()
+      isFullscreen.value = false
+    }
+  } catch (e) {
+    console.warn('Fullscreen API error:', e)
+    isFullscreen.value = !isFullscreen.value
+  }
+}
+const onFullscreenChange = () => {
+  isFullscreen.value = !!document.fullscreenElement
 }
 
 onMounted(() => {
   fetchPage()
   unsubFns.push(wsManager.on('live_value', onLiveValue))
+  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   unsubFns.forEach((fn) => fn())
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 </script>
 
 <template>
-  <div :class="['viewer-container', { fullscreen: isFullscreen }]">
+  <div ref="viewerContainer" :class="['viewer-container', { fullscreen: isFullscreen }]">
     <div class="viewer-toolbar">
       <div class="flex items-center">
         <span class="text-16px font-600 mr-12px">{{ page.name || 'SCADA 运行' }}</span>

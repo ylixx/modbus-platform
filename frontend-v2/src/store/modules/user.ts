@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { store } from '../index'
-import { UserLoginType, UserInfo } from '@/api/login/types'
+import { RememberedLoginType, UserInfo } from '@/api/login/types'
 import { ElMessageBox } from 'element-plus'
 import { useI18n } from '@/hooks/web/useI18n'
 import { useTagsViewStore } from './tagsView'
@@ -13,7 +13,7 @@ interface UserState {
   roleRouters?: string[] | AppCustomRouteRecordRaw[]
   permissions: string[]
   rememberMe: boolean
-  loginInfo?: UserLoginType
+  loginInfo?: RememberedLoginType
 }
 
 export const useUserStore = defineStore('user', {
@@ -48,7 +48,7 @@ export const useUserStore = defineStore('user', {
     getRememberMe(): boolean {
       return this.rememberMe
     },
-    getLoginInfo(): UserLoginType | undefined {
+    getLoginInfo(): RememberedLoginType | undefined {
       return this.loginInfo
     }
   },
@@ -97,7 +97,7 @@ export const useUserStore = defineStore('user', {
     setRememberMe(rememberMe: boolean) {
       this.rememberMe = rememberMe
     },
-    setLoginInfo(loginInfo: UserLoginType | undefined) {
+    setLoginInfo(loginInfo: RememberedLoginType | undefined) {
       this.loginInfo = loginInfo
     }
   },

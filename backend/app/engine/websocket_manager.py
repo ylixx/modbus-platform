@@ -22,16 +22,27 @@ from jose import jwt, JWTError
 class ConnectionManager:
     """Manages all WebSocket connections."""
 
+    HEARTBEAT_TIMEOUT = 60  # seconds — close connections that haven't responded
+
     def __init__(self):
         self._connections: dict[int, list[WebSocket]] = {}  # user_id -> [ws]
         self._all: list[WebSocket] = []
+        self._ws_last_active: dict[int, float] = {}  # ws id -> last activity timestamp
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
+        self._register(websocket, user_id)
+
+    async def register(self, websocket: WebSocket, user_id: int):
+        """Register an already-accepted websocket (e.g., after message-based auth)."""
+        self._register(websocket, user_id)
+
+    def _register(self, websocket: WebSocket, user_id: int):
         async with self._lock:
             self._connections.setdefault(user_id, []).append(websocket)
             self._all.append(websocket)
+            self._ws_last_active[id(websocket)] = time.time()
         logger.info(f"WS connected: user_id={user_id}, total={len(self._all)}")
 
     async def disconnect(self, websocket: WebSocket, user_id: int):
@@ -41,6 +52,7 @@ class ConnectionManager:
                 conns.remove(websocket)
             if websocket in self._all:
                 self._all.remove(websocket)
+            self._ws_last_active.pop(id(websocket), None)
             if not conns:
                 self._connections.pop(user_id, None)
         logger.info(f"WS disconnected: user_id={user_id}, total={len(self._all)}")
@@ -48,30 +60,74 @@ class ConnectionManager:
     async def broadcast(self, message: dict):
         """Send to all connected clients."""
         payload = json.dumps(message, default=str)
+        async with self._lock:
+            all_ws = list(self._all)
         dead = []
-        for ws in self._all:
+        for ws in all_ws:
             try:
                 await ws.send_text(payload)
+                self._ws_last_active[id(ws)] = time.time()
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            try:
-                self._all.remove(ws)
-            except ValueError:
-                pass
+            await self._remove_ws_full(ws)
 
     async def send_to_user(self, user_id: int, message: dict):
         """Send to a specific user."""
         payload = json.dumps(message, default=str)
-        conns = self._connections.get(user_id, [])
+        async with self._lock:
+            conns = list(self._connections.get(user_id, []))
         dead = []
         for ws in conns:
             try:
                 await ws.send_text(payload)
+                self._ws_last_active[id(ws)] = time.time()
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            conns.remove(ws)
+            await self._remove_ws_full(ws)
+
+    async def _remove_ws(self, ws: WebSocket):
+        """Remove a websocket from all tracking structures."""
+        try:
+            self._all.remove(ws)
+        except ValueError:
+            pass
+        self._ws_last_active.pop(id(ws), None)
+
+    async def _remove_ws_full(self, ws: WebSocket):
+        """Remove a websocket from all tracking structures (including user connection map)."""
+        async with self._lock:
+            try:
+                self._all.remove(ws)
+            except ValueError:
+                pass
+            self._ws_last_active.pop(id(ws), None)
+            # Also remove from user connection map
+            for uid, conns in self._connections.items():
+                if ws in conns:
+                    conns.remove(ws)
+                    break
+
+    async def check_heartbeats(self):
+        """Close connections that haven't had activity within the timeout window.
+        
+        Should be called periodically (e.g. every 30s) from the app lifespan.
+        """
+        now = time.time()
+        dead = []
+        for ws in self._all:
+            last = self._ws_last_active.get(id(ws), 0)
+            if now - last > self.HEARTBEAT_TIMEOUT:
+                dead.append(ws)
+        for ws in dead:
+            try:
+                await ws.close(code=1000, reason="heartbeat timeout")
+            except Exception:
+                pass
+            await self._remove_ws(ws)
+        if dead:
+            logger.warning(f"WS heartbeat cleanup: closed {len(dead)} stale connections")
 
     @property
     def connection_count(self) -> int:

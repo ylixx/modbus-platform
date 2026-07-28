@@ -8,21 +8,49 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.models.alarm import AlarmRule, AlarmRecord, AlarmStatus, AlarmType, AlarmLevel
 from app.models.sms import SmsPushRule, SmsRecord, SmsContact
-from app.models.device import DeviceTag
+from app.models.device import DeviceTag, Device
 from app.services.sms_service import sms_service
 
 
 class AlarmService:
     """Evaluates alarm rules and triggers notifications."""
 
+    # Cleanup threshold: remove entries older than this many seconds
+    _CLEANUP_AGE_SECONDS = 3600  # 1 hour
+    _CLEANUP_INTERVAL = 300       # run cleanup every 5 minutes
+    _last_cleanup = 0.0
+
     def __init__(self):
-        self._last_values: dict[str, float] = {}  # key: f"{tag_id}" -> last value
-        self._trigger_timers: dict[int, datetime] = {}  # rule_id -> first trigger time
-        self._sms_cooldowns: dict[int, datetime] = {}  # rule_id -> last sms sent time
+        self._last_values: dict[str, tuple[float, float]] = {}  # key -> (value, timestamp)
+        self._trigger_timers: dict[int, tuple[datetime, datetime]] = {}  # rule_id -> (start_time, now)
+        self._sms_cooldowns: dict[int, tuple[datetime, datetime]] = {}  # rule_id -> (sent_time, now)
         self._lock = threading.Lock()
+
+    def _maybe_cleanup(self):
+        """Periodically purge stale entries from in-memory dicts to prevent leaks."""
+        import time as _time
+        now = _time.time()
+        if now - self._last_cleanup < self._CLEANUP_INTERVAL:
+            return
+        self._last_cleanup = now
+
+        cutoff = now - self._CLEANUP_AGE_SECONDS
+        with self._lock:
+            # Clean _last_values: stored as (value, timestamp)
+            stale_keys = [k for k, v in self._last_values.items() if v[1] < cutoff]
+            for k in stale_keys:
+                del self._last_values[k]
+
+            # Clean _trigger_timers / _sms_cooldowns: stored as datetime tuples
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(seconds=self._CLEANUP_AGE_SECONDS)
+            for store in (self._trigger_timers, self._sms_cooldowns):
+                stale = [k for k, v in store.items() if v[1] < cutoff_dt]
+                for k in stale:
+                    del store[k]
 
     def evaluate(self, device_id: int, tag_id: int, tag_name: str, value: float):
         """Evaluate all alarm rules for a given tag value."""
+        self._maybe_cleanup()
         db = SessionLocal()
         try:
             rules = db.query(AlarmRule).filter(
@@ -135,11 +163,18 @@ class AlarmService:
         elif rule.alarm_type == AlarmType.RATE_OF_CHANGE:
             if rule.rate_limit is not None:
                 key = f"{tag_id}"
+                import time as _time
+                now_ts = _time.time()
                 with self._lock:
                     last_val = self._last_values.get(key)
-                    self._last_values[key] = value
+                    self._last_values[key] = (value, now_ts)
                 if last_val is not None:
-                    rate = abs(value - last_val)
+                    # 计算真实变化速率（差值/时间间隔）
+                    time_diff = now_ts - last_val[1]
+                    if time_diff > 0:
+                        rate = abs(value - last_val[0]) / time_diff
+                    else:
+                        rate = 0.0
                     if rate > rule.rate_limit:
                         triggered = True
                         threshold = rule.rate_limit
@@ -152,18 +187,23 @@ class AlarmService:
                     threshold = rule.status_value
                     message = f"[状态报警] {tag_name} = {value} (目标值: {threshold})"
 
-        # Handle delay
+        # Handle delay: only start counting when triggered becomes True
         if triggered and rule.delay_seconds > 0:
             key = rule.id
             with self._lock:
                 if key not in self._trigger_timers:
-                    self._trigger_timers[key] = datetime.now(timezone.utc)
-                    return  # Start timer, don't trigger yet
-                elapsed = (datetime.now(timezone.utc) - self._trigger_timers[key]).total_seconds()
+                    # First trigger — start the delay timer
+                    self._trigger_timers[key] = (datetime.now(timezone.utc), datetime.now(timezone.utc))
+                    return  # Don't trigger yet, wait for delay
+                elapsed = (datetime.now(timezone.utc) - self._trigger_timers[key][0]).total_seconds()
                 if elapsed < rule.delay_seconds:
-                    return  # Still waiting
+                    # Still within delay window
+                    self._trigger_timers[key] = (self._trigger_timers[key][0], datetime.now(timezone.utc))
+                    return
+                # Delay elapsed — remove timer and allow trigger
                 del self._trigger_timers[key]
         elif not triggered:
+            # Value returned to normal — clear any pending delay timer
             with self._lock:
                 self._trigger_timers.pop(rule.id, None)
 
@@ -245,17 +285,16 @@ class AlarmService:
         if not rule.sms_enabled:
             return
 
-        # Check cooldown
+        # Check cooldown (per rule)
         with self._lock:
             last_sms = self._sms_cooldowns.get(rule.id)
             if last_sms:
-                # Get cooldown from push rules
                 push_rules = db.query(SmsPushRule).filter(SmsPushRule.enabled == True).all()
                 cooldown = 30  # default minutes
                 for pr in push_rules:
                     if pr.cooldown_minutes < cooldown:
                         cooldown = pr.cooldown_minutes
-                if (datetime.now(timezone.utc) - last_sms).total_seconds() < cooldown * 60:
+                if (datetime.now(timezone.utc) - last_sms[0]).total_seconds() < cooldown * 60:
                     return
 
         # Find matching push rules
@@ -263,8 +302,13 @@ class AlarmService:
         now_time = datetime.now(timezone.utc).strftime("%H:%M")
 
         for pr in push_rules:
-            # Check time window
-            if not (pr.time_start <= now_time <= pr.time_end):
+            # Check time window (supports cross-midnight, e.g. 22:00~06:00)
+            if pr.time_start <= pr.time_end:
+                in_window = pr.time_start <= now_time <= pr.time_end
+            else:
+                # Cross-midnight: valid if now >= start OR now <= end
+                in_window = now_time >= pr.time_start or now_time <= pr.time_end
+            if not in_window:
                 continue
 
             # Check alarm level filter
@@ -311,7 +355,7 @@ class AlarmService:
                 db.add(sms_record)
 
         with self._lock:
-            self._sms_cooldowns[rule.id] = datetime.now(timezone.utc)
+            self._sms_cooldowns[rule.id] = (datetime.now(timezone.utc), datetime.now(timezone.utc))
 
     def _handle_notification(self, record: AlarmRecord):
         """Send alarm via DingTalk/WeChat/Email."""

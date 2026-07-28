@@ -17,6 +17,7 @@ import {
   ElRadioButton
 } from 'element-plus'
 import { getAllDevices, getDeviceTags, getHistory, getAggregate, unwrap, unwrapList } from '@/api/modbus'
+import { formatTime } from '@/utils/modbus'
 
 defineOptions({ name: 'History' })
 
@@ -37,25 +38,34 @@ const query = reactive<any>({
 
 const intervalOptions = [
   { label: '原始数据', value: 'raw' },
-  { label: '1分钟均值', value: '60' },
-  { label: '5分钟均值', value: '300' },
-  { label: '15分钟均值', value: '900' },
-  { label: '1小时均值', value: '3600' },
-  { label: '1天均值', value: '86400' }
+  { label: '1分钟均值', value: '1m' },
+  { label: '5分钟均值', value: '5m' },
+  { label: '15分钟均值', value: '15m' },
+  { label: '1小时均值', value: '1h' },
+  { label: '1天均值', value: '1d' }
 ]
 
 const isAggregated = computed(() => query.interval !== 'raw')
+let searchTimer: any = null
 
 const fetchDevices = async () => {
-  devices.value = unwrapList(await getAllDevices()).list
+  try {
+    devices.value = unwrapList(await getAllDevices()).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取设备列表失败')
+  }
 }
 const onDeviceChange = async () => {
   query.tag_id = null
   tags.value = []
   if (query.device_id == null) return
-  const res = await getDeviceTags(query.device_id)
-  const body = unwrap(res)
-  tags.value = Array.isArray(body) ? body : unwrapList(res).list
+  try {
+    const res = await getDeviceTags(query.device_id)
+    const body = unwrap(res)
+    tags.value = Array.isArray(body) ? body : unwrapList(res).list
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
+  }
 }
 const fetchList = async () => {
   if (query.device_id == null) {
@@ -80,9 +90,11 @@ const fetchList = async () => {
     }
 
     if (isAggregated.value) {
-      // 聚合查询
-      params.granularity = Number(query.interval)
-      const res = await getAggregate(params)
+      // 聚合查询 — 用 history API 的 interval 参数（1m/5m/15m/1h/1d）
+      params.interval = query.interval
+      delete params.page
+      delete params.page_size
+      const res = await getHistory(params)
       const body = (res as any)?.data || res
       list.value = body?.data || []
       total.value = list.value.length
@@ -94,6 +106,8 @@ const fetchList = async () => {
       list.value = l
       total.value = t
     }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '查询数据失败')
   } finally {
     loading.value = false
   }
@@ -142,7 +156,7 @@ onMounted(fetchDevices)
 
     <!-- 粒度切换 -->
     <div class="mb-12px">
-      <ElRadioGroup v-model="query.interval" @change="((query.page = 1), fetchList())">
+      <ElRadioGroup v-model="query.interval" @change="((query.page = 1), clearTimeout(searchTimer), (searchTimer = setTimeout(() => fetchList(), 300)))">
         <ElRadioButton
           v-for="opt in intervalOptions"
           :key="opt.value"
@@ -169,7 +183,7 @@ onMounted(fetchDevices)
           </template>
         </ElTableColumn>
         <ElTableColumn label="采集时间" width="190">
-          <template #default="{ row }">{{ row.time || row.created_at || row.recorded_at }}</template>
+          <template #default="{ row }">{{ formatTime(row.time || row.created_at || row.recorded_at) }}</template>
         </ElTableColumn>
       </ElTable>
       <div class="flex justify-end mt-16px">
@@ -189,7 +203,7 @@ onMounted(fetchDevices)
     <template v-else>
       <ElTable v-loading="loading" :data="list" border stripe>
         <ElTableColumn label="时间" width="190">
-          <template #default="{ row }">{{ row.time?.replace('T', ' ').slice(0, 19) }}</template>
+          <template #default="{ row }">{{ formatTime(row.time) }}</template>
         </ElTableColumn>
         <ElTableColumn prop="avg" label="均值" min-width="100">
           <template #default="{ row }">

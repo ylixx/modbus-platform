@@ -14,12 +14,13 @@ Import: restore from exported JSON.
 """
 import json
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
+from app.services.audit_service import log_action
 from app.models.device import Device, DeviceGroup, DeviceTag
 from app.models.alarm import AlarmRule
 from app.models.sms import SmsContact, SmsPushRule
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/config", tags=["配置导出"])
 
 
 @router.get("/export")
-def export_config(db: Session = Depends(get_db), _: User = Depends(require_permission("config.read"))):
+def export_config(request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("config.read"))):
     """Export all platform configuration as JSON."""
     data = {
         "version": "1.0.0",
@@ -65,7 +66,7 @@ def export_config(db: Session = Depends(get_db), _: User = Depends(require_permi
             "production_line": d.production_line, "installation": d.installation,
             "longitude": d.longitude, "latitude": d.latitude,
             "mqtt_broker": d.mqtt_broker, "mqtt_port": d.mqtt_port,
-            "mqtt_username": d.mqtt_username, "mqtt_client_id": d.mqtt_client_id,
+            "mqtt_client_id": d.mqtt_client_id,
             "mqtt_topic_prefix": d.mqtt_topic_prefix, "mqtt_use_tls": d.mqtt_use_tls,
             "mqtt_payload_format": d.mqtt_payload_format, "mqtt_is_gateway": d.mqtt_is_gateway,
             "mqtt_publish_enabled": d.mqtt_publish_enabled, "mqtt_publish_topic": d.mqtt_publish_topic,
@@ -76,7 +77,8 @@ def export_config(db: Session = Depends(get_db), _: User = Depends(require_permi
             "enabled": False,  # imported devices start disabled
         })
 
-    # Tags
+    # Tags — pre-build script_id->name lookup
+    script_id_to_name = {s.id: s.name for s in db.query(Script).all()}
     for t in db.query(DeviceTag).order_by(DeviceTag.device_id, DeviceTag.id).all():
         device = db.query(Device).filter(Device.id == t.device_id).first()
         data["tags"].append({
@@ -91,7 +93,7 @@ def export_config(db: Session = Depends(get_db), _: User = Depends(require_permi
             "opc_node_id": t.opc_node_id, "opc_node_type": t.opc_node_type,
             "scale_factor": t.scale_factor, "offset": t.offset,
             "decimal_places": t.decimal_places, "writable": t.writable,
-            "script_name": t.script_id,  # will resolve by name on import
+            "script_name": script_id_to_name.get(t.script_id) if t.script_id else None,
             "sort_order": t.sort_order, "enabled": t.enabled,
         })
 
@@ -160,6 +162,9 @@ def export_config(db: Session = Depends(get_db), _: User = Depends(require_permi
 
     content = json.dumps(data, ensure_ascii=False, indent=2)
     filename = f"modbus_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    log_action(action="config.export", resource_type="config", resource_id=0,
+               resource_name=filename, detail="导出平台配置",
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return Response(
         content=content,
         media_type="application/json",
@@ -171,15 +176,18 @@ def export_config(db: Session = Depends(get_db), _: User = Depends(require_permi
 async def import_config(
     file: UploadFile = File(...),
     overwrite: bool = False,
+    request: Request = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("config.write")),
+    user: User = Depends(require_permission("config.write")),
 ):
     """Import configuration from JSON file."""
     content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件大小超过10MB限制")
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
-        return {"error": "Invalid JSON file"}
+        raise HTTPException(status_code=400, detail="无效的 JSON 文件")
 
     stats = {"groups": 0, "devices": 0, "tags": 0, "rules": 0, "scripts": 0, "errors": []}
 
@@ -208,7 +216,7 @@ async def import_config(
                 db.add(existing)
             for key in ["description", "protocol", "host", "port", "slave_id", "timeout", "retries",
                         "poll_interval", "factory", "workshop", "production_line", "installation",
-                        "mqtt_broker", "mqtt_port", "mqtt_username", "mqtt_client_id",
+                        "mqtt_broker", "mqtt_port", "mqtt_client_id",
                         "mqtt_topic_prefix", "mqtt_use_tls", "mqtt_payload_format", "mqtt_is_gateway",
                         "mqtt_publish_enabled", "mqtt_publish_topic", "mqtt_publish_qos", "mqtt_publish_interval",
                         "opc_endpoint", "opc_security_mode", "opc_namespace"]:
@@ -280,10 +288,16 @@ async def import_config(
             stats["scripts"] += 1
 
         db.commit()
+        log_action(action="config.import", resource_type="config", resource_id=0,
+                   resource_name=file.filename or "unknown",
+                   detail=json.dumps({"overwrite": overwrite, "stats": stats}, ensure_ascii=False),
+                   user_id=user.id, username=user.username, ip_address=request.client.host if request and request.client else "")
         return {
             "message": "导入完成",
             "stats": stats,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        return {"error": f"Import failed: {str(e)}"}
+        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")

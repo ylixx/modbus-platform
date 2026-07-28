@@ -58,17 +58,20 @@ const form = reactive<any>({
   id: null,
   name: '',
   language: 'python',
-  content: '',
+  code: '',
   description: '',
   enabled: true
 })
-const rules = { name: [{ required: true, message: '请输入脚本名称', trigger: 'blur' }] }
+const rules = {
+  name: [{ required: true, message: '请输入脚本名称', trigger: 'blur' }],
+  code: [{ required: true, message: '请输入脚本内容', trigger: 'blur' }]
+}
 
 const openCreate = () => {
   dialogTitle.value = '新增脚本'
   Object.assign(form, {
     id: null, name: '', language: 'python',
-    content: '# result = value * 2\n', description: '', enabled: true
+    code: '# result = value * 2\n', description: '', enabled: true
   })
   dialogVisible.value = true
 }
@@ -76,7 +79,7 @@ const openEdit = (row: any) => {
   dialogTitle.value = '编辑脚本'
   Object.assign(form, {
     id: row.id, name: row.name, language: row.language || 'python',
-    content: row.content || '', description: row.description || '',
+    code: row.code || '', description: row.description || '',
     enabled: row.enabled !== false
   })
   dialogVisible.value = true
@@ -85,7 +88,7 @@ const openFromTemplate = (tpl: any) => {
   dialogTitle.value = '从模板创建'
   Object.assign(form, {
     id: null, name: tpl.name || '', language: tpl.language || 'python',
-    content: tpl.content || '', description: tpl.description || '', enabled: true
+    code: tpl.code || '', description: tpl.description || '', enabled: true
   })
   dialogVisible.value = true
 }
@@ -93,28 +96,36 @@ const submit = async () => {
   await formRef.value?.validate()
   const payload = { ...form }
   delete payload.id
-  if (form.id) {
-    await updateScript(form.id, payload)
-    ElMessage.success('更新成功')
-  } else {
-    await createScript(payload)
-    ElMessage.success('创建成功')
+  try {
+    if (form.id) {
+      await updateScript(form.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await createScript(payload)
+      ElMessage.success('创建成功')
+    }
+    dialogVisible.value = false
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
   }
-  dialogVisible.value = false
-  fetchList()
 }
 const remove = async (row: any) => {
   await ElMessageBox.confirm(`确认删除脚本「${row.name}」？`, '提示', { type: 'warning' })
-  await deleteScript(row.id)
-  ElMessage.success('删除成功')
-  fetchList()
+  try {
+    await deleteScript(row.id)
+    ElMessage.success('删除成功')
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  }
 }
 
 const testing = ref(false)
 const doTest = async () => {
   testing.value = true
   try {
-    const res = await testScript({ language: form.language, content: form.content, value: 1 })
+    const res = await testScript({ language: form.language, code: form.code, raw_value: 1 })
     const body = (res as any)?.data
     ElMessage.success('测试执行完成：' + JSON.stringify(body?.result ?? body))
   } catch (e: any) {
@@ -152,6 +163,9 @@ onMounted(() => {
       </div>
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
+      <template #empty>
+        <div class="py-20px text-center text-gray-400">暂无脚本</div>
+      </template>
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="name" label="脚本名称" min-width="160" show-overflow-tooltip />
       <ElTableColumn prop="language" label="语言" width="110" />
@@ -171,7 +185,7 @@ onMounted(() => {
       </ElTableColumn>
     </ElTable>
 
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="800px" top="5vh">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="800px" top="5vh" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="80px">
         <ElFormItem label="名称" prop="name">
           <ElInput v-model="form.name" />
@@ -185,10 +199,10 @@ onMounted(() => {
         <ElFormItem label="描述">
           <ElInput v-model="form.description" type="textarea" :rows="2" />
         </ElFormItem>
-        <ElFormItem label="脚本内容">
+        <ElFormItem label="脚本内容" prop="code">
           <div class="w-full border border-solid border-gray-200 rounded">
             <CodeEditor
-              v-model="form.content"
+              v-model="form.code"
               :language="form.language === 'python' ? 'python' : 'javascript'"
               theme="vs-dark"
               :height="400"

@@ -1,21 +1,50 @@
 """Alarm management API."""
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+import json
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status as http_status
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func as sql_func
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.alarm import AlarmRule, AlarmRecord, AlarmAck, AlarmStatus, AlarmLevel
+from app.models.device import Device, DeviceTag
+from app.models.system_config import SystemConfig
+from app.services.audit_service import log_action
 from app.schemas.alarm import (
     AlarmRuleCreate, AlarmRuleUpdate, AlarmRuleOut,
     AlarmRecordOut, AlarmAckRequest, AlarmStats,
 )
 from app.schemas.common import ResponseModel, PageResponse
-from typing import List
+from typing import List, Dict
 from datetime import datetime, timezone
 from app.services.org_service import get_visible_device_ids, check_device_visible
 
 router = APIRouter(prefix="/alarms", tags=["报警管理"])
+
+
+def _alarm_record_out(record: AlarmRecord, device_name_map: dict = None, tag_name_map: dict = None) -> AlarmRecordOut:
+    """Convert AlarmRecord to AlarmRecordOut with device_name/tag_name populated."""
+    out = AlarmRecordOut.model_validate(record)
+    if device_name_map is not None:
+        out.device_name = device_name_map.get(record.device_id, "")
+    if tag_name_map is not None:
+        out.tag_name = tag_name_map.get(record.tag_id, "")
+    return out
+
+
+def _load_name_maps(db: Session, records: list) -> tuple[dict, dict]:
+    """Batch-load device and tag names for a list of AlarmRecord."""
+    device_ids = {r.device_id for r in records if r.device_id}
+    tag_ids = {r.tag_id for r in records if r.tag_id}
+    device_map = {}
+    tag_map = {}
+    if device_ids:
+        for d in db.query(Device.id, Device.name).filter(Device.id.in_(device_ids)).all():
+            device_map[d.id] = d.name
+    if tag_ids:
+        for t in db.query(DeviceTag.id, DeviceTag.name).filter(DeviceTag.id.in_(tag_ids)).all():
+            tag_map[t.id] = t.name
+    return device_map, tag_map
 
 
 def _apply_alarm_org_filter(q, db: Session, user: User, device_col=None):
@@ -60,37 +89,59 @@ def list_alarm_rules(
 def list_all_rules(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.read"))):
     q = db.query(AlarmRule)
     q = _apply_alarm_org_filter(q, db, current_user, AlarmRule.device_id)
-    return q.order_by(AlarmRule.id).all()
+    return q.order_by(AlarmRule.id).limit(500).all()
 
 
 @router.post("/rules", response_model=AlarmRuleOut)
-def create_rule(req: AlarmRuleCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("alarm.write"))):
+def create_rule(req: AlarmRuleCreate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("alarm.write"))):
     rule = AlarmRule(**req.model_dump())
     db.add(rule)
-    db.commit()
-    db.refresh(rule)
+    try:
+        db.commit()
+        db.refresh(rule)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+    log_action(action="alarm.rule.create", resource_type="alarm_rule", resource_id=rule.id,
+               resource_name=rule.name, detail=json.dumps({"device_id": rule.device_id, "alarm_type": rule.alarm_type, "alarm_level": rule.alarm_level}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return rule
 
 
 @router.put("/rules/{rule_id}", response_model=AlarmRuleOut)
-def update_rule(rule_id: int, req: AlarmRuleUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("alarm.write"))):
+def update_rule(rule_id: int, req: AlarmRuleUpdate, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("alarm.write"))):
     rule = db.query(AlarmRule).filter(AlarmRule.id == rule_id).first()
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
-    for k, v in req.model_dump(exclude_unset=True).items():
+    changed = req.model_dump(exclude_unset=True)
+    for k, v in changed.items():
         setattr(rule, k, v)
-    db.commit()
-    db.refresh(rule)
+    log_action(action="alarm.rule.update", resource_type="alarm_rule", resource_id=rule.id,
+               resource_name=rule.name, detail=json.dumps(changed, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+        db.refresh(rule)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
     return rule
 
 
 @router.delete("/rules/{rule_id}")
-def delete_rule(rule_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("alarm.write"))):
+def delete_rule(rule_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("alarm.write"))):
     rule = db.query(AlarmRule).filter(AlarmRule.id == rule_id).first()
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
     db.delete(rule)
-    db.commit()
+    log_action(action="alarm.rule.delete", resource_type="alarm_rule", resource_id=rule.id,
+               resource_name=rule.name, detail="",
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
     return {"message": "删除成功"}
 
 
@@ -122,21 +173,29 @@ def list_alarm_records(
         q = q.filter(AlarmRecord.triggered_at <= end_time)
     total = q.count()
     items = q.order_by(AlarmRecord.triggered_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return PageResponse(total=total, page=page, page_size=page_size, data=[AlarmRecordOut.model_validate(i) for i in items])
+    device_map, tag_map = _load_name_maps(db, items)
+    return PageResponse(total=total, page=page, page_size=page_size, data=[_alarm_record_out(i, device_map, tag_map) for i in items])
 
 
 @router.get("/records/active", response_model=List[AlarmRecordOut])
-def list_active_alarms(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.read"))):
+def list_active_alarms(
+    limit: int = Query(200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("alarm.read")),
+):
     """Get all currently active (unacknowledged) alarms."""
     q = db.query(AlarmRecord).filter(AlarmRecord.status == AlarmStatus.ACTIVE)
     q = _apply_alarm_org_filter(q, db, current_user)
-    return q.order_by(AlarmRecord.triggered_at.desc()).limit(200).all()
+    items = q.order_by(AlarmRecord.triggered_at.desc()).limit(limit).all()
+    device_map, tag_map = _load_name_maps(db, items)
+    return [_alarm_record_out(i, device_map, tag_map) for i in items]
 
 
 @router.post("/records/{record_id}/acknowledge", response_model=AlarmRecordOut)
 def acknowledge_alarm(
     record_id: int,
     req: AlarmAckRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("alarm.ack")),
 ):
@@ -160,26 +219,98 @@ def acknowledge_alarm(
         comment=req.comment,
     )
     db.add(ack)
-    db.commit()
-    db.refresh(record)
+    log_action(action="alarm.acknowledge", resource_type="alarm_record", resource_id=record.id,
+               resource_name=f"device_id={record.device_id}", detail=json.dumps({"ack_comment": req.comment or ""}, ensure_ascii=False),
+               user_id=current_user.id, username=current_user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+        db.refresh(record)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"确认失败: {e}")
     return record
 
 
 @router.post("/records/{record_id}/clear", response_model=AlarmRecordOut)
-def clear_alarm(record_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.clear"))):
+def clear_alarm(record_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.clear"))):
     record = db.query(AlarmRecord).filter(AlarmRecord.id == record_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="报警记录不存在")
     if not check_device_visible(db, current_user, record.device_id):
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权操作该报警（超出组织数据范围）")
+    if record.status == AlarmStatus.CLEARED:
+        raise HTTPException(status_code=400, detail="该报警已被清除")
     record.status = AlarmStatus.CLEARED
     record.cleared_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(record)
+    log_action(action="alarm.clear", resource_type="alarm_record", resource_id=record.id,
+               resource_name=f"device_id={record.device_id}", detail="",
+               user_id=current_user.id, username=current_user.username, ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+        db.refresh(record)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"消除失败: {e}")
     return record
 
 
 # ============ Alarm Stats ============
+
+# ============ Escalation Config ============
+
+ESCALATION_CONFIG_KEY = "alarm_escalation_config"
+DEFAULT_ESCALATION = {"info": 30, "warning": 15, "critical": 10, "emergency": 0}
+
+@router.get("/escalation-config")
+def get_escalation_config(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.read"))):
+    """获取报警升级配置。"""
+    row = db.query(SystemConfig).filter(SystemConfig.key == ESCALATION_CONFIG_KEY).first()
+    if row and row.value:
+        try:
+            return json.loads(row.value)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return DEFAULT_ESCALATION
+
+
+@router.put("/escalation-config")
+def update_escalation_config(
+    config: Dict[str, int],
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("alarm.write")),
+):
+    """更新报警升级配置。"""
+    # 验证键名
+    valid_keys = {"info", "warning", "critical", "emergency"}
+    cleaned = {}
+    for k, v in config.items():
+        if k not in valid_keys:
+            raise HTTPException(status_code=400, detail=f"无效的报警等级: {k}")
+        if not isinstance(v, int) or v < 0:
+            raise HTTPException(status_code=400, detail=f"{k} 的超时必须为非负整数(分钟)")
+        cleaned[k] = v
+    # 确保包含所有等级
+    for k in valid_keys:
+        if k not in cleaned:
+            cleaned[k] = DEFAULT_ESCALATION.get(k, 0)
+    value_json = json.dumps(cleaned)
+    row = db.query(SystemConfig).filter(SystemConfig.key == ESCALATION_CONFIG_KEY).first()
+    if row:
+        row.value = value_json
+    else:
+        db.add(SystemConfig(key=ESCALATION_CONFIG_KEY, value=value_json, description="报警升级超时配置(分钟)"))
+    log_action(action="alarm.escalation_config.update", resource_type="system_config",
+               resource_name=ESCALATION_CONFIG_KEY, detail=value_json,
+               user_id=current_user.id, username=current_user.username,
+               ip_address=request.client.host if request.client else "")
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+    return cleaned
+
 
 @router.get("/stats", response_model=AlarmStats)
 def get_alarm_stats(db: Session = Depends(get_db), current_user: User = Depends(require_permission("alarm.read"))):
@@ -217,6 +348,7 @@ def get_alarm_stats(db: Session = Depends(get_db), current_user: User = Depends(
     if device_filter is not None:
         q_recent = q_recent.filter(device_filter)
     recent = q_recent.order_by(AlarmRecord.triggered_at.desc()).limit(10).all()
+    recent_device_map, recent_tag_map = _load_name_maps(db, recent)
 
     return AlarmStats(
         total_active=active,
@@ -224,5 +356,5 @@ def get_alarm_stats(db: Session = Depends(get_db), current_user: User = Depends(
         total_cleared=cleared,
         by_level={l: c for l, c in level_counts},
         by_device={str(d): c for d, c in device_counts},
-        recent=[AlarmRecordOut.model_validate(r) for r in recent],
+        recent=[_alarm_record_out(r, recent_device_map, recent_tag_map) for r in recent],
     )

@@ -28,6 +28,7 @@ import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 import { useWsStore } from '@/store/modules/websocket'
 import { wsManager } from '@/utils/websocket'
 import type { WsLiveValue } from '@/utils/websocket'
+import { saveBlob } from '@/utils/modbus'
 
 defineOptions({ name: 'Realtime' })
 
@@ -132,7 +133,17 @@ const refreshLiveForRow = async (row: DeviceRow) => {
 }
 
 const refreshLiveForAll = async () => {
-  await Promise.all(deviceRows.value.map((row) => refreshLiveForRow(row)))
+  // 并发限制：最多同时 8 个请求，避免大量设备时压垮浏览器/后端
+  const rows = deviceRows.value
+  const concurrency = 8
+  let idx = 0
+  const next = async (): Promise<void> => {
+    const i = idx++
+    if (i >= rows.length) return
+    await refreshLiveForRow(rows[i])
+    await next()
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, () => next()))
   updatedAt.value = new Date().toLocaleTimeString()
 }
 
@@ -179,19 +190,6 @@ const goDetail = (row: DeviceRow) => {
 }
 
 // ── 导入 / 导出（与设备列表页一致） ──
-const saveBlob = (res: any, fallbackName: string) => {
-  const blob = res?.data instanceof Blob ? res.data : new Blob([res?.data ?? res])
-  const cd: string = res?.headers?.['content-disposition'] || ''
-  const m = cd.match(/filename="?([^";]+)"?/)
-  const name = m?.[1] || fallbackName
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
 const exporting = ref(false)
 const doExport = async () => {
   exporting.value = true

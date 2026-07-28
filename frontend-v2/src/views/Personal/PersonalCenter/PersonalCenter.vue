@@ -8,19 +8,27 @@ import { Dialog } from '@/components/Dialog'
 import EditInfo from './components/EditInfo.vue'
 import EditPassword from './components/EditPassword.vue'
 
+import { getMe, updateMyProfile } from '@/api/modbus'
+
 const userInfo = ref()
 const fetchDetailUserApi = async () => {
-  // 这里可以调用接口获取用户信息
-  const data = {
-    id: 1,
-    username: 'admin',
-    realName: 'admin',
-    phoneNumber: '18888888888',
-    email: '502431556@qq.com',
-    avatarUrl: '',
-    roleList: ['超级管理员']
+  try {
+    const res = await getMe()
+    const user = res?.data || res
+    userInfo.value = {
+      id: user.id,
+      username: user.username || '',
+      realName: user.display_name || user.username || '',
+      phoneNumber: user.phone || '',
+      email: user.email || '',
+      avatarUrl: user.avatar_url || '',
+      roleList: user.roles || [user.role || '用户']
+    }
+  } catch {
+    userInfo.value = {
+      id: 0, username: '', realName: '', phoneNumber: '', email: '', avatarUrl: '', roleList: []
+    }
   }
-  userInfo.value = data
 }
 fetchDetailUserApi()
 
@@ -34,13 +42,14 @@ const saveAvatar = async () => {
   try {
     avatarLoading.value = true
     const base64 = unref(uploadAvatarRef)?.getBase64()
-    console.log(base64)
-    // 这里可以调用修改头像接口
+    if (base64) {
+      await updateMyProfile({ avatar_url: base64 })
+    }
     fetchDetailUserApi()
-    ElMessage.success('修改成功')
+    ElMessage.success('头像修改成功')
     dialogVisible.value = false
-  } catch (error) {
-    console.log(error)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '头像修改失败')
   } finally {
     avatarLoading.value = false
   }
@@ -99,7 +108,7 @@ const saveAvatar = async () => {
     <ContentWrap title="基本资料" class="flex-[3] ml-20px">
       <ElTabs v-model="activeName">
         <ElTabPane label="基本信息" name="first">
-          <EditInfo :user-info="userInfo" />
+          <EditInfo :user-info="userInfo" @updated="fetchDetailUserApi" />
         </ElTabPane>
         <ElTabPane label="修改密码" name="second">
           <EditPassword />

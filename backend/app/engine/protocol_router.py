@@ -1,5 +1,7 @@
 """Protocol router — dispatches operations to the correct engine."""
+import threading
 from typing import Optional
+from loguru import logger
 from app.models.device import Device, DeviceTag, ProtocolType
 
 
@@ -10,6 +12,7 @@ class ProtocolRouter:
         self._modbus = None
         self._mqtt = None
         self._opcua = None
+        self._lock = threading.Lock()
 
     def init(self):
         from app.engine.modbus_engine_v2 import modbus_engine_v2
@@ -21,9 +24,13 @@ class ProtocolRouter:
 
     def start_all(self):
         self.init()
-        self._modbus.start()
-        self._mqtt.start()
-        self._opcua.start()
+        # 每个引擎单独启动，一个引擎失败不影响其他
+        for name, engine in [("Modbus", self._modbus), ("MQTT", self._mqtt), ("OPC-UA", self._opcua)]:
+            try:
+                engine.start()
+                logger.info(f"Engine {name} started successfully")
+            except Exception as e:
+                logger.error(f"Engine {name} start failed: {e}, other engines will continue")
 
     def stop_all(self):
         if self._modbus:
@@ -40,12 +47,16 @@ class ProtocolRouter:
         if not protocol:
             return
 
-        if protocol == ProtocolType.MQTT:
-            self._mqtt.reload_device(device_id)
-        elif protocol == ProtocolType.OPC_UA:
-            self._opcua.reload_device(device_id)
-        else:
-            self._modbus.reload_device(device_id)
+        try:
+            with self._lock:
+                if protocol == ProtocolType.MQTT:
+                    self._mqtt.reload_device(device_id)
+                elif protocol == ProtocolType.OPC_UA:
+                    self._opcua.reload_device(device_id)
+                else:
+                    self._modbus.reload_device(device_id)
+        except Exception as e:
+            logger.error(f"reload_device({device_id}, {protocol}) error: {e}")
 
     def stop_device(self, device_id: int, protocol: str = None):
         """Stop polling/connecting for a single device (used on delete)."""
@@ -54,14 +65,16 @@ class ProtocolRouter:
         if not protocol:
             return
 
-        if protocol == ProtocolType.MQTT:
-            self._mqtt._stop_device(device_id)
-        elif protocol == ProtocolType.OPC_UA:
-            self._opcua._stop_device(device_id)
-        else:
-            task = self._modbus._tasks.pop(device_id, None)
-            if task and not task.done():
-                task.cancel()
+        try:
+            with self._lock:
+                if protocol == ProtocolType.MQTT:
+                    self._mqtt._stop_device(device_id)
+                elif protocol == ProtocolType.OPC_UA:
+                    self._opcua._stop_device(device_id)
+                else:
+                    self._modbus.stop_device(device_id)
+        except Exception as e:
+            logger.error(f"stop_device({device_id}, {protocol}) error: {e}")
 
     def write_value(self, device_id: int, tag: DeviceTag, value, protocol: str = None) -> bool:
         if not protocol:

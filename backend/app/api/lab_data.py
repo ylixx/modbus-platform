@@ -1,7 +1,7 @@
 """Lab data CRUD + comparison API."""
 import json
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from app.models.user import User
 from app.models.device import Device, DeviceTag
 from app.models.lab_data import LabData, TagAggregate
 from app.models.history import TagHistory
+from app.services.audit_service import log_action
 
 router = APIRouter(prefix="/lab-data", tags=["化验数据"])
 
@@ -163,7 +164,8 @@ def list_lab_data(
 def create_lab_data(
     req: LabDataCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.write")),
+    user: User = Depends(require_permission("history.write")),
+    request: Request = None,
 ):
     device = db.query(Device).filter(Device.id == req.device_id).first()
     if not device:
@@ -182,8 +184,15 @@ def create_lab_data(
         remark=req.remark,
     )
     db.add(lab)
-    db.commit()
-    db.refresh(lab)
+    try:
+        db.commit()
+        db.refresh(lab)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="lab_data.create", resource_type="lab_data", resource_id=lab.id,
+               resource_name=lab.lab_name or str(lab.id), detail=json.dumps({"device_id": req.device_id, "lab_name": req.lab_name, "lab_value": req.lab_value}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return {"message": "录入成功", "id": lab.id}
 
 
@@ -192,7 +201,8 @@ def update_lab_data(
     lab_id: int,
     req: LabDataUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.write")),
+    user: User = Depends(require_permission("history.write")),
+    request: Request = None,
 ):
     lab = db.query(LabData).filter(LabData.id == lab_id).first()
     if not lab:
@@ -201,7 +211,14 @@ def update_lab_data(
         if k == "sample_time" and v:
             v = datetime.fromisoformat(v.replace("Z", "+00:00"))
         setattr(lab, k, v)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+    log_action(action="lab_data.update", resource_type="lab_data", resource_id=lab.id,
+               resource_name=lab.lab_name or str(lab.id), detail=json.dumps({"updated_fields": list(req.model_dump(exclude_unset=True).keys())}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     return {"message": "更新成功"}
 
 
@@ -209,13 +226,21 @@ def update_lab_data(
 def delete_lab_data(
     lab_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.write")),
+    user: User = Depends(require_permission("history.write")),
+    request: Request = None,
 ):
     lab = db.query(LabData).filter(LabData.id == lab_id).first()
     if not lab:
         raise HTTPException(404, "化验记录不存在")
+    log_action(action="lab_data.delete", resource_type="lab_data", resource_id=lab.id,
+               resource_name=lab.lab_name or str(lab.id), detail=json.dumps({"lab_name": lab.lab_name, "device_id": lab.device_id}, ensure_ascii=False, default=str),
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     db.delete(lab)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
     return {"message": "删除成功"}
 
 
@@ -245,6 +270,13 @@ def compare_lab_data(
         q = q.filter(LabData.sample_time <= end_time)
 
     lab_records = q.order_by(LabData.sample_time.desc()).limit(200).all()
+
+    # 批量预查点位名称（避免 N+1 查询）
+    lab_tag_ids = list({l.tag_id for l in lab_records if l.tag_id})
+    tag_name_map = {}
+    if lab_tag_ids:
+        for t in db.query(DeviceTag.id, DeviceTag.name).filter(DeviceTag.id.in_(lab_tag_ids)).all():
+            tag_name_map[t.id] = t.name
 
     results = []
     for lab in lab_records:
@@ -287,11 +319,8 @@ def compare_lab_data(
                 else:
                     status = "normal" if collected_avg == 0 else "abnormal"
 
-        # 获取点位名称
-        tag_name = ""
-        if lab.tag_id:
-            tag = db.query(DeviceTag).filter(DeviceTag.id == lab.tag_id).first()
-            tag_name = tag.name if tag else ""
+        # 使用预查的 tag_name_map 而非逐条查询
+        tag_name = tag_name_map.get(lab.tag_id, "") if lab.tag_id else ""
 
         results.append({
             "id": lab.id,

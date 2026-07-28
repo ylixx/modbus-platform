@@ -25,9 +25,9 @@ export const createDevice = (data: any) => request.post({ url: '/devices', data 
 export const updateDevice = (id: number, data: any) => request.put({ url: `/devices/${id}`, data })
 export const deleteDevice = (id: number) => request.delete({ url: `/devices/${id}` })
 export const duplicateDevice = (id: number, newName: string, copyTags = true) =>
-  request.post({ url: `/devices/${id}/duplicate?new_name=***&copy_tags=${copyTags}` })
+  request.post({ url: `/devices/${id}/duplicate`, params: { new_name: newName, copy_tags: copyTags } })
 export const getDeviceLive = (id: number | string) => request.get({ url: `/devices/${id}/live` })
-export const getDeviceTags = (id: number | string) => request.get({ url: `/devices/${id}/tags` })
+export const getDeviceTags = (id: number | string, params?: any) => request.get({ url: `/devices/${id}/tags`, params })
 export const writeDevice = (id: number, data: any) =>
   request.post({ url: `/devices/${id}/write`, data })
 export const batchWriteDevices = (data: { items: any[]; stop_on_error?: boolean }) =>
@@ -74,6 +74,9 @@ export const createAlarmRule = (data: any) => request.post({ url: '/alarms/rules
 export const updateAlarmRule = (id: number, data: any) =>
   request.put({ url: `/alarms/rules/${id}`, data })
 export const deleteAlarmRule = (id: number) => request.delete({ url: `/alarms/rules/${id}` })
+export const getEscalationConfig = () => request.get({ url: '/alarms/escalation-config' })
+export const updateEscalationConfig = (data: any) =>
+  request.put({ url: '/alarms/escalation-config', data })
 
 // ============ Control ============ (reuse writeDevice)
 
@@ -178,6 +181,11 @@ export const updateUser = (id: number, data: any) => request.put({ url: `/users/
 export const deleteUser = (id: number) => request.delete({ url: `/users/${id}` })
 export const resetUserPassword = (id: number, data?: any) =>
   request.post({ url: `/users/${id}/reset-password`, data })
+
+// ============ Auth Profile ============
+export const updateMyProfile = (data: any) => request.put({ url: '/auth/me', data })
+export const changeMyPassword = (data: any) => request.post({ url: '/auth/change-password', data })
+export const uploadMyAvatar = (data: any) => request.put({ url: '/auth/me', data })
 
 // ============ Hierarchy ============
 export const getHierarchyTree = (params?: any) => request.get({ url: '/hierarchy/tree', params })

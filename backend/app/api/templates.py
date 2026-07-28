@@ -1,5 +1,5 @@
 """Device & alarm rule templates API."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
@@ -23,7 +23,7 @@ def get_device_template(template_id: str, _: User = Depends(require_permission("
     """Get a specific device template."""
     tpl = get_template(template_id)
     if not tpl:
-        return {"error": "Template not found"}
+        raise HTTPException(status_code=404, detail="模板不存在")
     return tpl
 
 
@@ -40,7 +40,7 @@ def create_device_from_template(
     """Create a device from a template with pre-configured tags."""
     tpl = get_template(template_id)
     if not tpl:
-        return {"error": "Template not found"}
+        raise HTTPException(status_code=404, detail="模板不存在")
 
     # Create device
     device = Device(
@@ -89,7 +89,11 @@ def create_device_from_template(
         db.add(tag)
         tag_count += 1
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
 
     # Start engine
     try:

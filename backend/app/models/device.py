@@ -9,6 +9,7 @@ import enum
 
 class ProtocolType(str, enum.Enum):
     MODBUS_TCP = "modbus_tcp"
+    MODBUS_RTU = "modbus_rtu"
     MQTT = "mqtt"
     OPC_UA = "opc_ua"
 
@@ -85,7 +86,7 @@ class Device(Base):
     __tablename__ = "devices"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(128), nullable=False, index=True)
+    name = Column(String(128), nullable=False, unique=True, index=True)
     description = Column(Text, default="")
     group_id = Column(Integer, ForeignKey("device_groups.id"), nullable=True)
     # 组织架构归属（厂-区-班组-位置 灵活树，可挂任意节点）
@@ -132,6 +133,13 @@ class Device(Base):
     opc_certificate = Column(Text, default="")
     opc_private_key = Column(Text, default="")
     opc_namespace = Column(Integer, default=2)
+
+    # ── Modbus RTU fields ──
+    serial_port = Column(String(256), default="")       # e.g. /dev/ttyUSB0 or COM3
+    baudrate = Column(Integer, default=9600)
+    parity = Column(String(10), default="none")         # none | even | odd
+    data_bits = Column(Integer, default=8)
+    stop_bits = Column(Integer, default=1)
 
     # ── Common fields ──
     status = Column(String(20), default=DeviceStatus.OFFLINE)

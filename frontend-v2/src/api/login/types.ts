@@ -3,6 +3,11 @@ export interface UserLoginType {
   password: string
 }
 
+// 记住登录信息（仅用户名，不存储密码）
+export interface RememberedLoginType {
+  username: string
+}
+
 // 登录表单数据仅需用户名密码
 export type UserType = UserLoginType
 

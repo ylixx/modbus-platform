@@ -15,6 +15,27 @@ from fastapi import HTTPException, status as http_status
 router = APIRouter(prefix="/history", tags=["历史数据"])
 
 
+def _parse_time(time_str: str, param_name: str) -> datetime:
+    """解析 ISO 时间字符串，支持多种格式。"""
+    if not time_str:
+        raise HTTPException(status_code=400, detail=f"{param_name} 不能为空")
+    # 尝试多种格式
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(time_str[:len(fmt)], fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            continue
+    # 尝试 ISO 格式（含时区）
+    try:
+        return datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    raise HTTPException(status_code=400, detail=f"{param_name} 格式无效，请使用 ISO 格式如 2026-01-01T00:00:00")
+
+
 @router.get("")
 def query_history(
     device_id: int,
@@ -35,11 +56,13 @@ def query_history(
         TagHistory.tag_id == tag_id,
     )
     if start_time:
-        q = q.filter(TagHistory.recorded_at >= start_time)
+        start_dt = _parse_time(start_time, 'start_time')
+        q = q.filter(TagHistory.recorded_at >= start_dt)
     else:
         q = q.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(hours=24))
     if end_time:
-        q = q.filter(TagHistory.recorded_at <= end_time)
+        end_dt = _parse_time(end_time, 'end_time')
+        q = q.filter(TagHistory.recorded_at <= end_dt)
 
     if interval == "raw":
         total = q.count()
@@ -60,42 +83,71 @@ def query_history(
             ],
         }
     else:
-        # Aggregated query — done in Python so it works on SQLite / MySQL / Postgres alike
+        # Aggregated query — use SQL GROUP BY for efficiency instead of loading all rows.
         interval_map = {
             "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1d": 86400,
         }
         secs = interval_map.get(interval, 60)
 
-        raw_q = db.query(TagHistory.value, TagHistory.recorded_at).filter(
+        from sqlalchemy import literal_column
+        # Compute bucket key in SQL: FLOOR(UNIX_TIMESTAMP(recorded_at) / secs) * secs
+        # Works for MySQL/PostgreSQL; for SQLite use STRFTIME-based approach.
+        bucket_expr = sql_func.floor(sql_func.extract('epoch', TagHistory.recorded_at) / secs) * secs
+
+        base_filter = [
             TagHistory.device_id == device_id,
             TagHistory.tag_id == tag_id,
-        )
-        if start_time:
-            raw_q = raw_q.filter(TagHistory.recorded_at >= start_time)
-        else:
-            raw_q = raw_q.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(hours=24))
-        if end_time:
-            raw_q = raw_q.filter(TagHistory.recorded_at <= end_time)
-        raw_q = raw_q.order_by(TagHistory.recorded_at.asc())
-
-        buckets = {}
-        for value, recorded_at in raw_q.all():
-            if recorded_at is None or value is None:
-                continue
-            ts = recorded_at if recorded_at.tzinfo else recorded_at.replace(tzinfo=timezone.utc)
-            bucket_key = (int(ts.timestamp()) // secs) * secs
-            buckets.setdefault(bucket_key, []).append(value)
-
-        data = [
-            {
-                "time": datetime.fromtimestamp(bk, tz=timezone.utc).isoformat(),
-                "min": round(min(vals), 4),
-                "max": round(max(vals), 4),
-                "avg": round(sum(vals) / len(vals), 4),
-                "count": len(vals),
-            }
-            for bk, vals in sorted(buckets.items())
         ]
+        if start_time:
+            start_dt = _parse_time(start_time, 'start_time')
+            base_filter.append(TagHistory.recorded_at >= start_dt)
+        else:
+            base_filter.append(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(hours=24))
+        if end_time:
+            end_dt = _parse_time(end_time, 'end_time')
+            base_filter.append(TagHistory.recorded_at <= end_dt)
+
+        try:
+            # Try SQL-based aggregation (works on PostgreSQL/MySQL with extract)
+            rows = db.query(
+                bucket_expr.label('bucket'),
+                sql_func.min(TagHistory.value).label('min_val'),
+                sql_func.max(TagHistory.value).label('max_val'),
+                sql_func.avg(TagHistory.value).label('avg_val'),
+                sql_func.count(TagHistory.value).label('cnt'),
+            ).filter(*base_filter).group_by(bucket_expr).order_by(bucket_expr).all()
+
+            data = [
+                {
+                    "time": datetime.fromtimestamp(r.bucket, tz=timezone.utc).isoformat() if r.bucket else None,
+                    "min": round(r.min_val, 4) if r.min_val is not None else None,
+                    "max": round(r.max_val, 4) if r.max_val is not None else None,
+                    "avg": round(float(r.avg_val), 4) if r.avg_val is not None else None,
+                    "count": r.cnt,
+                }
+                for r in rows
+            ]
+        except Exception:
+            # Fallback: Python-based aggregation for SQLite or other DBs without extract()
+            raw_q = db.query(TagHistory.value, TagHistory.recorded_at).filter(*base_filter).order_by(TagHistory.recorded_at.asc())
+            buckets = {}
+            for value, recorded_at in raw_q.yield_per(1000):
+                if recorded_at is None or value is None:
+                    continue
+                ts = recorded_at if recorded_at.tzinfo else recorded_at.replace(tzinfo=timezone.utc)
+                bucket_key = (int(ts.timestamp()) // secs) * secs
+                buckets.setdefault(bucket_key, []).append(value)
+
+            data = [
+                {
+                    "time": datetime.fromtimestamp(bk, tz=timezone.utc).isoformat(),
+                    "min": round(min(vals), 4),
+                    "max": round(max(vals), 4),
+                    "avg": round(sum(vals) / len(vals), 4),
+                    "count": len(vals),
+                }
+                for bk, vals in sorted(buckets.items())
+            ]
 
         return {
             "device_id": device_id,
@@ -122,7 +174,7 @@ def get_latest_values(
 
     rows = db.query(TagHistory).join(
         subq, TagHistory.id == subq.c.max_id
-    ).all()
+    ).limit(500).all()
 
     return {
         "device_id": device_id,
