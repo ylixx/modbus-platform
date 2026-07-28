@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElTable,
@@ -11,14 +12,12 @@ import {
   ElButton,
   ElDialog,
   ElAlert,
-  ElMessage,
-  ElMessageBox
+  ElMessage
 } from 'element-plus'
 import {
   getDevices,
   getDevice,
   getDeviceLive,
-  writeDevice,
   unwrap,
   unwrapList,
   exportDevicesCsv,
@@ -33,6 +32,7 @@ import type { WsLiveValue } from '@/utils/websocket'
 defineOptions({ name: 'Realtime' })
 
 const wsStore = useWsStore()
+const router = useRouter()
 
 interface DeviceRow {
   id: number
@@ -59,12 +59,6 @@ let unsubFns: (() => void)[] = []
 const cascadeRef = ref()
 const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
 const selectedIds = ref<number[]>([])
-
-// 查看实时点位对话框
-const detailVisible = ref(false)
-const detailDevice = ref<any>(null)
-const detailRows = ref<any[]>([])
-const detailLoading = ref(false)
 
 const wsConnected = computed(() => wsStore.connected)
 
@@ -179,64 +173,9 @@ const expandRows = (row: DeviceRow) =>
     }
   })
 
-// 查看实时点位对话框
-const openDetail = async (row: DeviceRow) => {
-  detailDevice.value = row.device
-  detailVisible.value = true
-  detailLoading.value = true
-  try {
-    const [devRes, liveRes] = await Promise.all([
-      getDevice(row.device.id),
-      getDeviceLive(row.device.id)
-    ])
-    const body = unwrap(devRes)
-    const tags = body?.tags || (Array.isArray(body) ? body : []) || []
-    const values = unwrap(liveRes)?.values || {}
-    detailRows.value = tags.map((t: any) => {
-      const lv = values[t.id]
-      return {
-        tag_id: t.id,
-        name: t.name,
-        address: t.address,
-        data_type: t.data_type,
-        unit: t.unit,
-        writable: !!t.writable,
-        value: lv?.value ?? null,
-        quality: lv?.quality ?? (lv ? 'good' : 'unknown')
-      }
-    })
-  } finally {
-    detailLoading.value = false
-  }
-}
-
-// 写值（仅 writable 点位）
-const writeValue = async (row: any) => {
-  try {
-    const { value } = await ElMessageBox.prompt(`写入点位「${row.name}」`, '远程写值', {
-      inputPattern: /^-?\d+(\.\d+)?$/,
-      inputErrorMessage: '请输入数字',
-      confirmButtonText: '写入',
-      cancelButtonText: '取消'
-    })
-    const num = Number(value)
-    await writeDevice(detailDevice.value.id, { tag_id: row.tag_id, value: num })
-    ElMessage.success(`已下发写值：${row.name} = ${num}`)
-    // 刷新对话框实时值
-    const liveRes = await getDeviceLive(detailDevice.value.id)
-    const values = unwrap(liveRes)?.values || {}
-    detailRows.value = detailRows.value.map((r: any) => {
-      const lv = values[r.tag_id]
-      return { ...r, value: lv?.value ?? r.value, quality: lv?.quality ?? r.quality }
-    })
-    if (detailVisible.value) updatedAt.value = new Date().toLocaleTimeString()
-  } catch (e: any) {
-    if (e !== 'cancel' && e !== 'close') {
-      ElMessage.error(
-        e?.response?.data?.message || e?.response?.data?.detail || e?.message || '写入失败'
-      )
-    }
-  }
+// 跳转到设备详情页（统一查看/写值入口，避免与详情页重复维护点位表与写值逻辑）
+const goDetail = (row: DeviceRow) => {
+  router.push(`/device/detail/${row.device.id}`)
 }
 
 // ── 导入 / 导出（与设备列表页一致） ──
@@ -320,14 +259,6 @@ const onLiveValue = (msg: any) => {
     const ids = Object.keys(row.live)
     row.onlineCount = ids.filter((k) => row.live![k]?.quality === 'good').length
     row.totalCount = ids.length
-  }
-  if (detailVisible.value && detailDevice.value?.id === d.device_id) {
-    const idx = detailRows.value.findIndex((r) => r.tag_id === d.tag_id)
-    if (idx !== -1) {
-      const upd = [...detailRows.value]
-      upd[idx] = { ...upd[idx], value: d.value, quality: d.quality }
-      detailRows.value = upd
-    }
   }
   updatedAt.value = new Date().toLocaleTimeString()
 }
@@ -445,57 +376,12 @@ watch(wsConnected, (connected) => {
       <ElTableColumn prop="updatedAt" label="最近更新" min-width="160" />
       <ElTableColumn label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <ElButton type="primary" link @click="openDetail(row)">查看实时点位</ElButton>
+          <ElButton type="primary" link @click="goDetail(row)">查看实时点位</ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
 
     <ElEmpty v-if="!deviceRows.length" description="当前筛选条件下没有设备" />
-
-    <!-- 实时点位详情 -->
-    <ElDialog
-      v-model="detailVisible"
-      :title="`实时点位 — ${detailDevice?.name || ''}`"
-      width="640px"
-    >
-      <ElTable v-loading="detailLoading" :data="detailRows" border stripe max-height="420">
-        <ElTableColumn prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
-        <ElTableColumn prop="address" label="地址" width="80" />
-        <ElTableColumn prop="data_type" label="类型" width="100" />
-        <ElTableColumn label="当前值" min-width="120">
-          <template #default="{ row }">
-            <span
-              class="text-15px font-700"
-              :class="{
-                'text-green-500': row.quality === 'good',
-                'text-red-500': row.quality === 'bad',
-                'text-gray-400': row.value == null
-              }"
-            >
-              {{ row.value ?? '—' }}
-            </span>
-            <span class="text-12px text-gray-400 ml-4px">{{ row.unit || '' }}</span>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="状态" width="90">
-          <template #default="{ row }">
-            <ElTag
-              :type="row.quality === 'good' ? 'success' : row.quality === 'bad' ? 'danger' : 'info'"
-            >
-              {{ row.quality === 'good' ? '正常' : row.quality === 'bad' ? '异常' : '—' }}
-            </ElTag>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn label="操作" width="90" fixed="right">
-          <template #default="{ row }">
-            <ElButton v-if="row.writable" type="primary" link @click="writeValue(row)"
-              >写值</ElButton
-            >
-            <span v-else class="text-12px text-gray-300">只读</span>
-          </template>
-        </ElTableColumn>
-      </ElTable>
-    </ElDialog>
 
     <!-- 批量导入设备（与设备列表页一致） -->
     <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px">

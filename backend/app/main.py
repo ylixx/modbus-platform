@@ -69,6 +69,7 @@ def _migrate_columns():
     migrations = [
         ("devices", "org_node_id", "ALTER TABLE devices ADD COLUMN org_node_id INTEGER"),
         ("roles", "data_scope", "ALTER TABLE roles ADD COLUMN data_scope VARCHAR(20) DEFAULT 'all'"),
+        ("device_tags", "readback_tag_id", "ALTER TABLE device_tags ADD COLUMN readback_tag_id INTEGER REFERENCES device_tags(id)"),
     ]
     with engine.connect() as conn:
         for table, column, ddl in migrations:

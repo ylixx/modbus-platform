@@ -186,6 +186,14 @@ class DeviceTag(Base):
     script_id = Column(Integer, ForeignKey("scripts.id"), nullable=True)
 
     writable = Column(Boolean, default=False)
+    # 回读寄存器：本可写点位写入后，应从哪个 tag（同一设备的另一个采集点位）读回实际值。
+    # 回读寄存器本身已是设备的一个已配置采集点位（writable=False）。
+    readback_tag_id = Column(
+        Integer,
+        ForeignKey("device_tags.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     sort_order = Column(Integer, default=0)
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
