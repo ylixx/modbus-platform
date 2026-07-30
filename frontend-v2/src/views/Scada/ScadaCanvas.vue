@@ -190,16 +190,20 @@ onUnmounted(() => {
 // ── 网格 ──
 
 const drawGrid = () => {
-  if (!canvas || props.gridSize <= 0) return
-  // 通过 CSS background 实现网格线（不污染画布对象）
   const wrapper = canvasEl.value?.closest('.scada-canvas-wrapper') as HTMLElement
-  if (wrapper) {
-    wrapper.style.backgroundImage = `
-      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)
-    `
-    wrapper.style.backgroundSize = `${props.gridSize}px ${props.gridSize}px`
+  if (!wrapper) return
+  if (props.gridSize <= 0) {
+    // 清除网格
+    wrapper.style.backgroundImage = ''
+    wrapper.style.backgroundSize = ''
+    return
   }
+  // 通过 CSS background 实现网格线（不污染画布对象）
+  wrapper.style.backgroundImage = `
+    linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)
+  `
+  wrapper.style.backgroundSize = `${props.gridSize}px ${props.gridSize}px`
 }
 
 watch(() => props.gridSize, drawGrid)
@@ -331,74 +335,128 @@ const getActiveObjects = () => {
   return [active]
 }
 
-/** 获取所有参与对齐的对象（选中对象或全部对象） */
-const getAlignTargets = () => {
-  const active = canvas?.getActiveObject()
-  if (!active) return canvas?.getObjects() || []
-  if (active.type === 'activeSelection') {
-    return (active as fabric.ActiveSelection).getObjects()
-  }
-  return [active]
-}
+/** 获取画布宽度/高度（不含缩放） */
+const getCanvasSize = () => ({ w: props.width, h: props.height })
 
+/**
+ * 对齐逻辑：
+ * - 多选（ActiveSelection）：选中对象之间互相对齐
+ * - 单选：相对于画布边界对齐
+ */
 const alignLeft = () => {
-  const targets = getAlignTargets()
-  if (targets.length < 2) return
-  const minLeft = Math.min(...targets.map(o => o.left || 0))
-  targets.forEach(o => { o.set({ left: minLeft }); o.setCoords() })
-  canvas?.requestRenderAll()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  if (active.type === 'activeSelection') {
+    const targets = (active as fabric.ActiveSelection).getObjects()
+    if (targets.length < 2) return
+    const minLeft = Math.min(...targets.map(o => o.left || 0))
+    targets.forEach(o => { o.set({ left: minLeft }); o.setCoords() })
+  } else {
+    // 单选 → 对齐到画布左边
+    active.set({ left: 0 }); active.setCoords()
+  }
+  canvas.requestRenderAll()
   snapshot()
 }
 
 const alignRight = () => {
-  const targets = getAlignTargets()
-  if (targets.length < 2) return
-  const maxRight = Math.max(...targets.map(o => (o.left || 0) + (o.getScaledWidth())))
-  targets.forEach(o => { o.set({ left: maxRight - o.getScaledWidth() }); o.setCoords() })
-  canvas?.requestRenderAll()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  if (active.type === 'activeSelection') {
+    const targets = (active as fabric.ActiveSelection).getObjects()
+    if (targets.length < 2) return
+    const maxRight = Math.max(...targets.map(o => (o.left || 0) + o.getScaledWidth()))
+    targets.forEach(o => { o.set({ left: maxRight - o.getScaledWidth() }); o.setCoords() })
+  } else {
+    const { w } = getCanvasSize()
+    active.set({ left: w - active.getScaledWidth() }); active.setCoords()
+  }
+  canvas.requestRenderAll()
   snapshot()
 }
 
 const alignTop = () => {
-  const targets = getAlignTargets()
-  if (targets.length < 2) return
-  const minTop = Math.min(...targets.map(o => o.top || 0))
-  targets.forEach(o => { o.set({ top: minTop }); o.setCoords() })
-  canvas?.requestRenderAll()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  if (active.type === 'activeSelection') {
+    const targets = (active as fabric.ActiveSelection).getObjects()
+    if (targets.length < 2) return
+    const minTop = Math.min(...targets.map(o => o.top || 0))
+    targets.forEach(o => { o.set({ top: minTop }); o.setCoords() })
+  } else {
+    active.set({ top: 0 }); active.setCoords()
+  }
+  canvas.requestRenderAll()
   snapshot()
 }
 
 const alignBottom = () => {
-  const targets = getAlignTargets()
-  if (targets.length < 2) return
-  const maxBottom = Math.max(...targets.map(o => (o.top || 0) + o.getScaledHeight()))
-  targets.forEach(o => { o.set({ top: maxBottom - o.getScaledHeight() }); o.setCoords() })
-  canvas?.requestRenderAll()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  if (active.type === 'activeSelection') {
+    const targets = (active as fabric.ActiveSelection).getObjects()
+    if (targets.length < 2) return
+    const maxBottom = Math.max(...targets.map(o => (o.top || 0) + o.getScaledHeight()))
+    targets.forEach(o => { o.set({ top: maxBottom - o.getScaledHeight() }); o.setCoords() })
+  } else {
+    const { h } = getCanvasSize()
+    active.set({ top: h - active.getScaledHeight() }); active.setCoords()
+  }
+  canvas.requestRenderAll()
   snapshot()
 }
 
 const alignCenterH = () => {
-  const targets = getAlignTargets()
-  if (targets.length < 2) return
-  const centers = targets.map(o => (o.left || 0) + o.getScaledWidth() / 2)
-  const avgCenter = centers.reduce((a, b) => a + b, 0) / centers.length
-  targets.forEach(o => { o.set({ left: avgCenter - o.getScaledWidth() / 2 }); o.setCoords() })
-  canvas?.requestRenderAll()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  if (active.type === 'activeSelection') {
+    const targets = (active as fabric.ActiveSelection).getObjects()
+    if (targets.length < 2) return
+    const centers = targets.map(o => (o.left || 0) + o.getScaledWidth() / 2)
+    const avgCenter = centers.reduce((a, b) => a + b, 0) / centers.length
+    targets.forEach(o => { o.set({ left: avgCenter - o.getScaledWidth() / 2 }); o.setCoords() })
+  } else {
+    const { w } = getCanvasSize()
+    active.set({ left: (w - active.getScaledWidth()) / 2 }); active.setCoords()
+  }
+  canvas.requestRenderAll()
   snapshot()
 }
 
 const alignCenterV = () => {
-  const targets = getAlignTargets()
-  if (targets.length < 2) return
-  const centers = targets.map(o => (o.top || 0) + o.getScaledHeight() / 2)
-  const avgCenter = centers.reduce((a, b) => a + b, 0) / centers.length
-  targets.forEach(o => { o.set({ top: avgCenter - o.getScaledHeight() / 2 }); o.setCoords() })
-  canvas?.requestRenderAll()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  if (active.type === 'activeSelection') {
+    const targets = (active as fabric.ActiveSelection).getObjects()
+    if (targets.length < 2) return
+    const centers = targets.map(o => (o.top || 0) + o.getScaledHeight() / 2)
+    const avgCenter = centers.reduce((a, b) => a + b, 0) / centers.length
+    targets.forEach(o => { o.set({ top: avgCenter - o.getScaledHeight() / 2 }); o.setCoords() })
+  } else {
+    const { h } = getCanvasSize()
+    active.set({ top: (h - active.getScaledHeight()) / 2 }); active.setCoords()
+  }
+  canvas.requestRenderAll()
   snapshot()
 }
 
 const distributeH = () => {
-  const targets = getAlignTargets()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  let targets: any[]
+  if (active.type === 'activeSelection') {
+    targets = (active as fabric.ActiveSelection).getObjects()
+  } else {
+    // 单选时无分布意义
+    return
+  }
   if (targets.length < 3) return
   const sorted = [...targets].sort((a, b) => (a.left || 0) - (b.left || 0))
   const firstLeft = sorted[0].left || 0
@@ -411,12 +469,20 @@ const distributeH = () => {
     o.setCoords()
     x += o.getScaledWidth() + gap
   })
-  canvas?.requestRenderAll()
+  canvas.requestRenderAll()
   snapshot()
 }
 
 const distributeV = () => {
-  const targets = getAlignTargets()
+  if (!canvas) return
+  const active = canvas.getActiveObject()
+  if (!active) return
+  let targets: any[]
+  if (active.type === 'activeSelection') {
+    targets = (active as fabric.ActiveSelection).getObjects()
+  } else {
+    return
+  }
   if (targets.length < 3) return
   const sorted = [...targets].sort((a, b) => (a.top || 0) - (b.top || 0))
   const firstTop = sorted[0].top || 0
@@ -429,7 +495,7 @@ const distributeV = () => {
     o.setCoords()
     y += o.getScaledHeight() + gap
   })
-  canvas?.requestRenderAll()
+  canvas.requestRenderAll()
   snapshot()
 }
 
@@ -466,25 +532,25 @@ const zoomReset = () => setZoom(1)
 const bringForward = () => {
   if (!canvas) return
   const active = canvas.getActiveObject()
-  if (active) { canvas.bringForward(active); canvas.renderAll(); snapshot() }
+  if (active) { canvas.bringObjectForward(active); canvas.renderAll(); snapshot() }
 }
 
 const sendBackward = () => {
   if (!canvas) return
   const active = canvas.getActiveObject()
-  if (active) { canvas.sendBackwards(active); canvas.renderAll(); snapshot() }
+  if (active) { canvas.sendObjectBackwards(active); canvas.renderAll(); snapshot() }
 }
 
 const bringToFront = () => {
   if (!canvas) return
   const active = canvas.getActiveObject()
-  if (active) { canvas.bringToFront(active); canvas.renderAll(); snapshot() }
+  if (active) { canvas.bringObjectToFront(active); canvas.renderAll(); snapshot() }
 }
 
 const sendToBack = () => {
   if (!canvas) return
   const active = canvas.getActiveObject()
-  if (active) { canvas.sendToBack(active); canvas.renderAll(); snapshot() }
+  if (active) { canvas.sendObjectToBack(active); canvas.renderAll(); snapshot() }
 }
 
 // ── 锁定/解锁 ──
