@@ -157,8 +157,8 @@ def get_org_cascade_tree(
     """
     levels = [
         {"key": "factory",         "label": "厂区", "field": "factory",         "icon": "🏭"},
+        {"key": "workshop",        "label": "区/站", "field": "workshop",        "icon": "📍"},
         {"key": "production_line", "label": "班",   "field": "production_line", "icon": "👷"},
-        {"key": "workshop",        "label": "站",   "field": "workshop",        "icon": "📍"},
         {"key": "installation",    "label": "位置", "field": "installation",    "icon": "📌"},
         {"key": "device",          "label": "设备名称", "field": "_device",     "icon": "📡"},
     ]
@@ -169,15 +169,15 @@ def get_org_cascade_tree(
         ).order_by(Device.id).all()
         tree = _build_tree(devices, levels)
     else:
-        # 仅层级结构：用 DISTINCT 取 厂区/班/站/位置 的组合，按用户组织权限过滤
-        q = db.query(Device.factory, Device.production_line, Device.workshop, Device.installation)
+        # 仅层级结构：用 DISTINCT 取 厂区/区/班/位置 的组合，按用户组织权限过滤
+        q = db.query(Device.factory, Device.workshop, Device.production_line, Device.installation)
         q = apply_device_org_filter(q, db, user)
         rows = q.distinct().all()
         row_dicts = [
             {
                 "factory": r[0] or "",
-                "production_line": r[1] or "",
-                "workshop": r[2] or "",
+                "workshop": r[1] or "",
+                "production_line": r[2] or "",
                 "installation": r[3] or "",
             }
             for r in rows
