@@ -32,6 +32,16 @@ class MqttEngine:
                 Device.enabled == True,
             ).all()
 
+            # 启动时将所有启用设备状态重置为 offline，避免残留旧的 online 状态
+            for device in devices:
+                if device.status in ("online", "no-data"):
+                    device.status = "offline"
+                    device.last_error = None
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
             gateway_devices = []
             standard_devices = []
             for d in devices:
