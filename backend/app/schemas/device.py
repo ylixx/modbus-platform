@@ -142,6 +142,22 @@ class TagOut(BaseModel):
         from_attributes = True
 
 
+class TagListOut(BaseModel):
+    """全局点位列表输出（含设备名称，用于实时数据页扁平展示）。"""
+    id: int
+    device_id: int
+    device_name: str = ""
+    name: str
+    unit: str = ""
+    function_code: str = ""
+    address: int = 0
+    data_type: str = ""
+    writable: bool = False
+    enabled: bool = True
+    class Config:
+        from_attributes = True
+
+
 # ── Device ──
 
 class DeviceCreate(BaseModel):
