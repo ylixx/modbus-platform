@@ -13,7 +13,8 @@ import {
   ElDialog,
   ElAlert,
   ElMessage,
-  ElPagination
+  ElPagination,
+  ElInput
 } from 'element-plus'
 import {
   getDeviceLive,
@@ -84,6 +85,7 @@ const fetchTags = async () => {
       page_size: pageSize.value
     }
     if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
+    if (selectedIds.value.length) params.device_ids = selectedIds.value.join(',')
     if (searchKeyword.value.trim()) params.search = searchKeyword.value.trim()
     const res = await getAllTags(params)
     const { list, total: t } = unwrapList(res)
@@ -159,8 +161,11 @@ const onSizeChange = (s: number) => {
   currentPage.value = 1
   fetchTags()
 }
-// searchKeyword 变化时重新查询（防抖由父组件或后续优化）
-// const onSearch = () => { ... }
+// 关键词搜索
+const onKeywordSearch = () => {
+  currentPage.value = 1
+  fetchTags()
+}
 
 // 级联筛选变化
 const onCascadeSearch = () => {
@@ -303,6 +308,19 @@ watch(wsConnected, (connected) => {
     <!-- 组织架构级联筛选 + 搜索 -->
     <div class="mb-16px">
       <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="onCascadeSearch" />
+    </div>
+
+    <!-- 关键词搜索栏 -->
+    <div class="mb-12px flex items-center gap-8px">
+      <ElInput
+        v-model="searchKeyword"
+        placeholder="输入设备名或点位名搜索"
+        clearable
+        style="max-width: 320px"
+        @keyup.enter="onKeywordSearch"
+        @clear="onKeywordSearch"
+      />
+      <ElButton type="primary" @click="onKeywordSearch">搜索</ElButton>
     </div>
 
     <!-- 扁平点位列表 -->

@@ -456,6 +456,7 @@ def list_all_tags(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     org_node_id: int = Query(None),
+    device_ids: str = Query(""),
     search: str = Query(""),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("tag.read")),
@@ -467,6 +468,14 @@ def list_all_tags(
         from app.services.org_service import get_descendant_ids
         ids = get_descendant_ids(db, org_node_id)
         q = q.filter(Device.org_node_id.in_(ids))
+    # 指定设备 ID 列表过滤（逗号分隔）
+    if device_ids and device_ids.strip():
+        try:
+            did_list = [int(x) for x in device_ids.split(",") if x.strip()]
+            if did_list:
+                q = q.filter(DeviceTag.device_id.in_(did_list))
+        except ValueError:
+            pass
     # 关键词搜索（设备名 or 点位名）
     if search and search.strip():
         kw = f"%{search.strip()}%"
