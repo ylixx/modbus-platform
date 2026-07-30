@@ -18,7 +18,6 @@ import {
   ElSelect,
   ElOption,
   ElInput,
-  ElInputNumber,
   ElDialog,
   ElForm,
   ElFormItem,
@@ -26,7 +25,6 @@ import {
   ElMessageBox,
   ElAlert,
   ElSwitch,
-  ElDivider,
   ElEmpty,
   ElProgress,
   ElCard
@@ -44,14 +42,18 @@ import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 defineOptions({ name: 'BatchControl' })
 
 // ── 设备/点位数据 ──
+const devicesLoading = ref(false)
 const devices = ref<any[]>([])
 const allTags = ref<Record<number, any[]>>({}) // deviceId -> tags
 
 const fetchDevices = async () => {
+  devicesLoading.value = true
   try {
     devices.value = unwrapList(await getAllDevices()).list
   } catch (e: any) {
     ElMessage.error(e?.message || '获取设备列表失败')
+  } finally {
+    devicesLoading.value = false
   }
 }
 
@@ -234,14 +236,14 @@ const addInstruction = () => {
 const batchDialogVisible = ref(false)
 const batchForm = reactive({
   device_ids: [] as number[],
-  tag_id: null as number | null,
+  tag_id: undefined as number | undefined,
   value: ''
 })
 const batchTagOptions = ref<any[]>([])
 
 const openBatchAdd = () => {
   batchForm.device_ids = []
-  batchForm.tag_id = null
+  batchForm.tag_id = undefined
   batchForm.value = ''
   batchTagOptions.value = []
   batchDialogVisible.value = true
@@ -278,6 +280,13 @@ const confirmBatchAdd = () => {
   }
   batchDialogVisible.value = false
   ElMessage.success(`已添加 ${batchForm.device_ids.length} 条指令`)
+}
+
+const resetBatchForm = () => {
+  batchForm.device_ids = []
+  batchForm.tag_id = undefined
+  batchForm.value = ''
+  batchTagOptions.value = []
 }
 
 // 删除指令
@@ -322,7 +331,7 @@ const executeAll = async () => {
   await ElMessageBox.confirm(
     `确认执行 ${validInstructions.length} 条控制指令？`,
     '批量控制确认',
-    { type: 'warning', confirmText: '确认执行' }
+    { type: 'warning', confirmButtonText: '确认执行' }
   )
 
   executing.value = true
@@ -470,7 +479,8 @@ onMounted(async () => {
     </div>
 
     <!-- 指令列表 -->
-    <ElTable :data="instructions" border stripe>
+    <ElTable v-loading="devicesLoading" :data="instructions" border stripe>
+      <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
       <ElTableColumn label="#" width="50" type="index" />
       <ElTableColumn label="设备" min-width="180">
         <template #default="{ row, $index }">
@@ -558,7 +568,7 @@ onMounted(async () => {
     </ElTable>
 
     <!-- 批量添加对话框 -->
-    <ElDialog v-model="batchDialogVisible" title="批量添加指令（同点多设备）" width="560px">
+    <ElDialog v-model="batchDialogVisible" title="批量添加指令（同点多设备）" width="560px" @close="resetBatchForm">
       <ElForm label-width="90px">
         <ElFormItem label="目标设备">
           <ElSelect

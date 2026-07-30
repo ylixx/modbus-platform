@@ -145,6 +145,7 @@ onUnmounted(() => {
             <ElTag type="success" size="large">在线 {{ summary.devices?.online ?? 0 }}</ElTag>
             <ElTag type="info" size="large">离线 {{ summary.devices?.offline ?? 0 }}</ElTag>
             <ElTag type="danger" size="large">异常 {{ summary.devices?.error ?? 0 }}</ElTag>
+            <ElTag type="warning" size="large">在线无数据 {{ summary.devices?.no_data ?? 0 }}</ElTag>
             <ElTag size="large">总计 {{ summary.devices?.total ?? 0 }}</ElTag>
           </div>
         </ContentWrap>

@@ -18,14 +18,13 @@ import {
   ElUpload
 } from 'element-plus'
 import { getScadaWidgets, deleteScadaWidget, uploadScadaWidget, unwrapList } from '@/api/modbus'
-import { builtinWidgets, widgetCategories, getWidgetsByCategory } from './widgets/builtin'
+import { widgetCategories, getWidgetsByCategory } from './widgets/builtin'
 
 defineOptions({ name: 'ScadaWidgets' })
 
 const router = useRouter()
 const loading = ref(false)
 const list = ref<any[]>([])
-const showBuiltin = ref(true)
 
 const fetchList = async () => {
   loading.value = true
@@ -53,6 +52,11 @@ const beforeUpload = (file: File) => {
     uploadForm.value.name = file.name.replace(/\.(svg|png|jpg|jpeg)$/i, '')
   }
   return false // 阻止自动上传
+}
+
+const resetUploadForm = () => {
+  uploadFile.value = null
+  uploadForm.value = { name: '', category: 'custom', description: '' }
 }
 
 const doUpload = async () => {
@@ -124,7 +128,7 @@ onMounted(fetchList)
     <!-- 自定义图元 -->
     <div class="text-16px font-700 mb-12px">自定义图元</div>
     <ElEmpty v-if="!loading && !list.length" description="暂无自定义图元" />
-    <ElRow :gutter="16">
+    <ElRow v-loading="loading" :gutter="16">
       <ElCol v-for="w in list" :key="w.id" :xs="12" :sm="8" :md="6" class="mb-16px">
         <ElCard shadow="hover" class="h-full">
           <div class="flex flex-col items-center text-center">
@@ -151,7 +155,7 @@ onMounted(fetchList)
     </ElRow>
 
     <!-- 上传对话框 -->
-    <ElDialog v-model="uploadDialogVisible" title="上传自定义图元" width="480px">
+    <ElDialog v-model="uploadDialogVisible" title="上传自定义图元" width="480px" @close="resetUploadForm">
       <ElForm label-width="80px">
         <ElFormItem label="名称">
           <ElInput v-model="uploadForm.name" placeholder="图元名称" />

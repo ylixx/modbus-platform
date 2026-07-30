@@ -142,7 +142,7 @@ def delete_rule(rule_id: int, request: Request, db: Session = Depends(get_db), u
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ============ Alarm Records ============

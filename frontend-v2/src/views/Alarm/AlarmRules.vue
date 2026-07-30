@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
@@ -17,7 +17,6 @@ import {
   ElMessage,
   ElMessageBox,
   ElDivider,
-  ElTooltip,
   ElPagination,
   ElTabs,
   ElTabPane
@@ -341,7 +340,7 @@ onMounted(() => {
       </ElTableColumn>
       <ElTableColumn label="级别" width="80">
         <template #default="{ row }">
-          <ElTag :type="alarmLevelType(row.alarm_level)" size="small">
+          <ElTag :type="(alarmLevelType(row.alarm_level) as any)" size="small">
             {{ alarmLevelLabel(row.alarm_level) }}
           </ElTag>
         </template>

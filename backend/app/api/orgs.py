@@ -1,18 +1,21 @@
 """Organization structure API — 组织架构（厂-区-班-站-位置 灵活树）."""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.device import Device
 from app.models.org import OrgNode
+from app.schemas.common import ResponseModel
 from app.services.org_service import expand_org_subtree, get_user_org_scope
 from app.services.audit_service import log_action
-import json
+import json, logging
 
 router = APIRouter(prefix="/orgs", tags=["组织架构"])
+
+logger = logging.getLogger(__name__)
 
 NODE_TYPES = {"factory", "area", "team", "station", "location", "other"}
 
@@ -29,11 +32,11 @@ NODE_ICONS = {
 # ── Schemas ──
 
 class OrgNodeCreate(BaseModel):
-    name: str
-    node_type: str = "other"
+    name: str = Field(max_length=100)
+    node_type: str = Field("other", max_length=50)
     parent_id: Optional[int] = None
     sort_order: int = 0
-    description: str = ""
+    description: str = Field("", max_length=500)
 
 
 class OrgNodeUpdate(BaseModel):
@@ -243,7 +246,8 @@ def create_org_node(
         db.refresh(node)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="org.create", resource_type="org_node", resource_id=node.id,
                resource_name=node.name or str(node.id), detail=json.dumps({"node_type": node.node_type, "parent_id": node.parent_id}, ensure_ascii=False),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -283,7 +287,8 @@ def update_org_node(
         db.refresh(node)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     return OrgNodeOut.model_validate(node)
 
 
@@ -318,8 +323,9 @@ def delete_org_node(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"message": "删除成功", "removed_nodes": len(subtree), "detached_devices": device_count}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="删除成功", data={"removed_nodes": len(subtree), "detached_devices": device_count})
 
 
 @router.post("/{node_id}/move-devices")
@@ -343,8 +349,9 @@ def move_devices_to_node(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="org.move_devices", resource_type="org_node", resource_id=node.id,
                resource_name=node.name or str(node.id), detail=json.dumps({"device_ids": device_ids, "updated": updated}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
-    return {"message": "移动成功", "updated": updated}
+    return ResponseModel(message="移动成功", data={"updated": updated})

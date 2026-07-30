@@ -87,4 +87,4 @@ def change_password(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"密码修改失败: {e}")
-    return {"message": "密码修改成功"}
+    return ResponseModel(message="密码修改成功")

@@ -53,7 +53,7 @@ onMounted(fetchList)
 <template>
   <ContentWrap title="设备模板" message="选择预置模板，快速创建设备与点位">
     <ElEmpty v-if="!loading && !list.length" description="暂无模板" />
-    <ElRow :gutter="16">
+    <ElRow v-loading="loading" :gutter="16">
       <ElCol v-for="tpl in list" :key="tpl.id" :xs="24" :sm="12" :md="8" class="mb-16px">
         <ElCard shadow="hover" class="h-full">
           <div class="flex items-center justify-between mb-8px">
@@ -81,10 +81,10 @@ onMounted(fetchList)
       </ElCol>
     </ElRow>
 
-    <ElDialog v-model="dialogVisible" title="根据模板创建设备" width="480px">
+    <ElDialog v-model="dialogVisible" title="根据模板创建设备" width="480px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
         <ElFormItem label="设备名称" prop="name">
-          <ElInput v-model="form.name" />
+          <ElInput v-model="form.name" placeholder="请输入模板名称" />
         </ElFormItem>
         <ElFormItem label="主机地址">
           <ElInput v-model="form.host" placeholder="192.168.1.100" />

@@ -1,5 +1,5 @@
 """Hierarchy configuration API."""
-import json
+import json, logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -7,11 +7,15 @@ from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.hierarchy import HierarchyConfig
 from app.models.device import Device
+from app.schemas.common import ResponseModel
+from app.services.org_service import apply_device_org_filter
 from app.schemas.hierarchy import (
     HierarchyConfigCreate, HierarchyConfigUpdate, HierarchyConfigOut, HierarchyLevel,
 )
 
 router = APIRouter(prefix="/hierarchy", tags=["层级配置"])
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_levels(cfg: HierarchyConfig) -> HierarchyConfigOut:
@@ -58,7 +62,8 @@ def create_config(req: HierarchyConfigCreate, db: Session = Depends(get_db), _: 
         db.refresh(cfg)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     return _parse_levels(cfg)
 
 
@@ -82,7 +87,8 @@ def update_config(config_id: int, req: HierarchyConfigUpdate, db: Session = Depe
         db.refresh(cfg)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     return _parse_levels(cfg)
 
 
@@ -96,8 +102,9 @@ def delete_config(config_id: int, db: Session = Depends(get_db), _: User = Depen
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 # ── Tree data API ──
@@ -106,7 +113,7 @@ def delete_config(config_id: int, db: Session = Depends(get_db), _: User = Depen
 def get_hierarchy_tree(
     config_id: int = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("hierarchy.read")),
+    user: User = Depends(require_permission("hierarchy.read")),
 ):
     """Build tree data based on a hierarchy config."""
     if config_id:
@@ -124,7 +131,9 @@ def get_hierarchy_tree(
     except (json.JSONDecodeError, TypeError):
         levels = []
 
-    devices = db.query(Device).filter(Device.enabled == True).order_by(Device.id).all()
+    devices = apply_device_org_filter(
+        db.query(Device).filter(Device.enabled == True), db, user
+    ).order_by(Device.id).all()
 
     tree = _build_tree(devices, levels)
     return {"config": _parse_levels(cfg), "tree": tree}
@@ -136,7 +145,7 @@ def get_hierarchy_tree(
 def get_org_cascade_tree(
     with_devices: bool = True,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("hierarchy.read")),
+    user: User = Depends(require_permission("hierarchy.read")),
 ):
     """组织架构级联数据（关联列表框）：厂区 → 班 → 站 → 位置 → 设备名称。
 
@@ -154,16 +163,16 @@ def get_org_cascade_tree(
         {"key": "device",          "label": "设备名称", "field": "_device",     "icon": "📡"},
     ]
     if with_devices:
-        # 组织架构展示全部设备（含未启用），便于纵览整体结构
-        devices = db.query(Device).order_by(Device.id).all()
+        # 组织架构展示设备，按用户组织权限过滤
+        devices = apply_device_org_filter(
+            db.query(Device), db, user
+        ).order_by(Device.id).all()
         tree = _build_tree(devices, levels)
     else:
-        # 仅层级结构：用 DISTINCT 取 厂区/班/站/位置 的组合，避免加载全部设备
-        rows = (
-            db.query(Device.factory, Device.production_line, Device.workshop, Device.installation)
-            .distinct()
-            .all()
-        )
+        # 仅层级结构：用 DISTINCT 取 厂区/班/站/位置 的组合，按用户组织权限过滤
+        q = db.query(Device.factory, Device.production_line, Device.workshop, Device.installation)
+        q = apply_device_org_filter(q, db, user)
+        rows = q.distinct().all()
         row_dicts = [
             {
                 "factory": r[0] or "",
@@ -212,7 +221,8 @@ def _create_default(db: Session) -> HierarchyConfig:
         db.refresh(cfg)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     return cfg
 
 

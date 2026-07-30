@@ -19,7 +19,7 @@ const wsConnected = computed(() => wsStore.connected)
 const recentAlarms = computed(() => wsStore.recentAlarms.slice(0, 10))
 
 const statusColor = (s?: string) =>
-  s === 'online' ? '#22d3ee' : s === 'error' ? '#f87171' : '#64748b'
+  s === 'online' ? '#22d3ee' : s === 'error' ? '#f87171' : s === 'no-data' ? '#e6a23c' : '#64748b'
 
 const fetchData = async () => {
   try {

@@ -19,6 +19,9 @@ export interface OrgDevice {
   group_id: number | null
   host: string
   port: number
+  slave_id?: number
+  serial_port?: string
+  baudrate?: number
   mqtt_broker: string
   opc_endpoint: string
 }
@@ -31,6 +34,12 @@ export interface OrgNode {
   level_key?: string
   children?: OrgNode[]
   device?: OrgDevice
+}
+
+/** 级联选择结果：最深选中节点的 org_node_id + 展示标签 */
+export interface OrgPath {
+  org_node_id: number | null
+  labels: string[]
 }
 
 export interface OrgTreeResponse {

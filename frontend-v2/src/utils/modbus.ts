@@ -10,6 +10,16 @@ import timezone from 'dayjs/plugin/timezone'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
+/** 设备状态枚举 */
+export const DeviceStatus = {
+  ONLINE: 'online',
+  OFFLINE: 'offline',
+  ERROR: 'error',
+  NO_DATA: 'no-data',
+} as const
+
+export type DeviceStatusType = (typeof DeviceStatus)[keyof typeof DeviceStatus]
+
 /** Format UTC ISO string to local time. Default format: YYYY-MM-DD HH:mm:ss */
 export const formatTime = (val?: string | null, fmt = 'YYYY-MM-DD HH:mm:ss') => {
   if (!val) return '—'
@@ -32,17 +42,17 @@ export const saveBlob = (res: any, fallbackName: string) => {
 
 /** 设备状态 → Tag 类型 */
 export const deviceStatusType = (s?: string) => {
-  if (s === 'online') return 'success'
-  if (s === 'error') return 'danger'
-  if (s === 'no-data') return 'warning'
+  if (s === DeviceStatus.ONLINE) return 'success'
+  if (s === DeviceStatus.ERROR) return 'danger'
+  if (s === DeviceStatus.NO_DATA) return 'warning'
   return 'info'
 }
 
 /** 设备状态 → 中文文本 */
 export const deviceStatusText = (s?: string) => {
-  if (s === 'online') return '在线'
-  if (s === 'error') return '异常'
-  if (s === 'no-data') return '在线无数据'
+  if (s === DeviceStatus.ONLINE) return '在线'
+  if (s === DeviceStatus.ERROR) return '异常'
+  if (s === DeviceStatus.NO_DATA) return '在线无数据'
   return '离线'
 }
 
@@ -74,7 +84,7 @@ export function useDeviceOptions() {
   const fetchDevices = async () => {
     devices.value = unwrapList(await getDevices()).list
   }
-  const onDeviceChange = (deviceId: number, tags: any[], setTags: (t: any[]) => void) => {
+  const onDeviceChange = (deviceId: number, _tags: any[], setTags: (t: any[]) => void) => {
     const d = devices.value.find((d: any) => d.id === deviceId)
     if (d) setTags([])
   }

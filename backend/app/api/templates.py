@@ -1,4 +1,5 @@
 """Device & alarm rule templates API."""
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -10,6 +11,8 @@ from app.services.device_templates import get_all_templates, get_template
 from app.schemas.common import ResponseModel
 
 router = APIRouter(prefix="/templates", tags=["设备模板"])
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/devices")
@@ -93,7 +96,8 @@ def create_device_from_template(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
 
     # Start engine
     try:

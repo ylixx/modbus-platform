@@ -50,6 +50,7 @@ interface DeviceRow {
 }
 
 const deviceRows = ref<DeviceRow[]>([])
+const loading = ref(false)
 const autoRefresh = ref(true)
 const useWs = ref(true)
 const updatedAt = ref('')
@@ -57,7 +58,6 @@ let pollTimer: any = null
 let unsubFns: (() => void)[] = []
 
 // 关联列表框（组织架构级联 + 设备多选），与设备列表页一致
-const cascadeRef = ref()
 const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
 const selectedIds = ref<number[]>([])
 
@@ -83,6 +83,8 @@ const buildOrgPath = (d: any) =>
 
 // 按级联筛选拉取设备（org_node_id 子树 + 设备多选 ids）
 const fetchDevices = async () => {
+  loading.value = true
+  try {
   const params: any = { page: 1, page_size: 100 }
   if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
   if (selectedIds.value.length) params.ids = selectedIds.value.join(',')
@@ -111,6 +113,9 @@ const fetchDevices = async () => {
   updatedAt.value = new Date().toLocaleTimeString()
   // 拉取每台设备的实时值（读共享缓冲，成本低）
   await refreshLiveForAll()
+  } finally {
+    loading.value = false
+  }
 }
 
 const refreshLiveForRow = async (row: DeviceRow) => {
@@ -243,6 +248,12 @@ const doImport = async () => {
   }
 }
 
+const resetImportState = () => {
+  importFile.value = null
+  importResult.value = null
+  if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
 // ── WebSocket 实时数据 ──
 const onLiveValue = (msg: any) => {
   const d = msg.data as WsLiveValue
@@ -319,11 +330,12 @@ watch(wsConnected, (connected) => {
       <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="fetchDevices" />
     </div>
 
-    <ElTable :data="deviceRows" row-key="id" border stripe @expand-change="onExpand">
+    <ElTable v-loading="loading" :data="deviceRows" row-key="id" border stripe @expand-change="onExpand">
       <ElTableColumn type="expand">
         <template #default="{ row }">
           <div v-if="row.loadingLive" class="text-12px text-gray-400 p-8px">加载点位中…</div>
           <ElTable v-else :data="expandRows(row)" border size="small">
+            <template #empty><ElEmpty description="暂无点位数据" :image-size="60" /></template>
             <ElTableColumn prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
             <ElTableColumn prop="address" label="地址" width="80" />
             <ElTableColumn prop="data_type" label="类型" width="100" />
@@ -382,7 +394,7 @@ watch(wsConnected, (connected) => {
     <ElEmpty v-if="!deviceRows.length" description="当前筛选条件下没有设备" />
 
     <!-- 批量导入设备（与设备列表页一致） -->
-    <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px">
+    <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px" @close="resetImportState">
       <ElAlert
         title="请使用 CSV 模板格式填写设备数据后上传，重名设备会被跳过"
         type="info"

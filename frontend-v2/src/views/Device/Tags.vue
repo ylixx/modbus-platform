@@ -215,15 +215,7 @@ const remove = async (row: any) => {
 }
 
 // ── 导出/导入 ──
-const downloadBlob = (data: any, filename: string) => {
-  const blob = data instanceof Blob ? data : new Blob([data])
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  window.URL.revokeObjectURL(url)
-}
+import { saveBlob } from '@/utils/modbus'
 
 const exportLoading = ref(false)
 const doExport = async () => {
@@ -235,7 +227,7 @@ const doExport = async () => {
   try {
     const res: any = await exportTagsCsv(currentDevice.value)
     const deviceName = devices.value.find((d) => d.id === currentDevice.value)?.name || 'device'
-    downloadBlob(res?.data ?? res, `tags_${deviceName}_${new Date().toISOString().slice(0, 10)}.csv`)
+    saveBlob(res, `tags_${deviceName}_${new Date().toISOString().slice(0, 10)}.csv`)
     ElMessage.success('导出成功')
   } catch (e: any) {
     ElMessage.error(e?.message || '导出失败')
@@ -251,6 +243,11 @@ const importResult = ref<any>(null)
 const openImport = () => {
   importResult.value = null
   importDialogVisible.value = true
+}
+
+const resetImportState = () => {
+  importResult.value = null
+  importLoading.value = false
 }
 
 const doImport = async (opt: any) => {
@@ -397,7 +394,7 @@ onMounted(fetchDevices)
     <ElDialog v-model="dialogVisible" :title="dialogTitle" width="500px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
         <ElFormItem label="点位名称" prop="name">
-          <ElInput v-model="form.name" />
+          <ElInput v-model="form.name" placeholder="请输入点位名称" />
         </ElFormItem>
         <!-- Modbus 专属：功能码必选 -->
         <template v-if="isModbus">
@@ -486,7 +483,7 @@ onMounted(fetchDevices)
     </ElDialog>
 
     <!-- 导入点位对话框 -->
-    <ElDialog v-model="importDialogVisible" title="导入点位" width="500px">
+    <ElDialog v-model="importDialogVisible" title="导入点位" width="500px" @close="resetImportState">
       <ElAlert
         title="导入说明"
         type="info"

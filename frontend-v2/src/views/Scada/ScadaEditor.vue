@@ -4,7 +4,7 @@
  *
  * 布局：左侧图元面板 | 中间画布 | 右侧属性面板
  */
-import { ref, reactive, onMounted, computed, watch, nextTick, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, nextTick, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton,
@@ -22,9 +22,7 @@ import {
   ElCollapseItem,
   ElColorPicker,
   ElInputNumber,
-  ElSwitch,
   ElSlider,
-  ElUpload,
   ElDivider
 } from 'element-plus'
 import {
@@ -72,7 +70,6 @@ const onBeforeUnload = (e: BeforeUnloadEvent) => {
 const leftTab = ref('builtin')
 const customWidgets = ref<any[]>([])
 const devices = ref<any[]>([])
-const selectedDevice = ref<number | undefined>(undefined)
 const deviceTags = ref<any[]>([])
 
 // ── 右侧属性面板 ──
@@ -251,6 +248,14 @@ const openBindDialog = () => {
   bindForm.tagName = ''
   bindForm.prop = 'text'
   bindDialogVisible.value = true
+}
+
+const resetBindForm = () => {
+  bindForm.target = ''
+  bindForm.deviceId = undefined
+  bindForm.tagId = undefined
+  bindForm.tagName = ''
+  bindForm.prop = 'text'
 }
 
 const onDeviceSelect = (deviceId: number) => {
@@ -511,7 +516,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 绑定对话框 -->
-    <ElDialog v-model="bindDialogVisible" title="数据绑定" width="480px">
+    <ElDialog v-model="bindDialogVisible" title="数据绑定" width="480px" @close="resetBindForm">
       <ElForm label-width="90px">
         <ElFormItem label="绑定目标">
           <ElSelect v-model="bindForm.target" class="w-full" placeholder="选择绑定属性">

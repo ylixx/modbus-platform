@@ -9,25 +9,16 @@ import {
   exportHistoryCsv,
   exportDailyReport
 } from '@/api/modbus'
+import { saveBlob } from '@/utils/modbus'
 
 defineOptions({ name: 'Exports' })
-
-const downloadBlob = (data: any, filename: string) => {
-  const blob = data instanceof Blob ? data : new Blob([data])
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  window.URL.revokeObjectURL(url)
-}
 
 const busy = ref('')
 const run = async (key: string, fn: () => Promise<any>, filename: string) => {
   busy.value = key
   try {
     const res: any = await fn()
-    downloadBlob(res?.data ?? res, filename)
+    saveBlob(res, filename)
     ElMessage.success('导出成功')
   } catch (e: any) {
     ElMessage.error(e?.message || '导出失败')

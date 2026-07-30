@@ -1,10 +1,10 @@
 """Lab data CRUD + comparison API."""
-import json
+import json, logging
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
@@ -12,9 +12,13 @@ from app.models.user import User
 from app.models.device import Device, DeviceTag
 from app.models.lab_data import LabData, TagAggregate
 from app.models.history import TagHistory
+from app.schemas.common import ResponseModel
+from app.services.org_service import get_visible_device_ids, check_device_visible
 from app.services.audit_service import log_action
 
 router = APIRouter(prefix="/lab-data", tags=["化验数据"])
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════ Schemas ═══════════════════
@@ -22,12 +26,12 @@ router = APIRouter(prefix="/lab-data", tags=["化验数据"])
 class LabDataCreate(BaseModel):
     device_id: int
     tag_id: Optional[int] = None
-    lab_name: str
+    lab_name: str = Field(max_length=200)
     lab_value: float
-    unit: str = ""
+    unit: str = Field("", max_length=50)
     sample_time: str  # ISO datetime
-    operator: str = ""
-    remark: str = ""
+    operator: str = Field("", max_length=100)
+    remark: str = Field("", max_length=500)
 
 
 class LabDataUpdate(BaseModel):
@@ -60,13 +64,20 @@ def list_lab_data(
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=500),
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.read")),
+    user: User = Depends(require_permission("history.read")),
 ):
+    visible = get_visible_device_ids(db, user)
     q = db.query(LabData)
     if device_id:
+        if visible is not None and device_id not in visible:
+            return {"total": 0, "data": [], "compare_window": compare_window}
         q = q.filter(LabData.device_id == device_id)
     else:
         q = q.join(Device, LabData.device_id == Device.id).filter(Device.has_lab_data == True)
+        if visible is not None:
+            if not visible:
+                return {"total": 0, "data": [], "compare_window": compare_window}
+            q = q.filter(Device.id.in_(visible))
     if org_node_id is not None:
         from app.services.org_service import expand_org_subtree
         subtree = expand_org_subtree(db, {org_node_id})
@@ -167,6 +178,8 @@ def create_lab_data(
     user: User = Depends(require_permission("history.write")),
     request: Request = None,
 ):
+    if not check_device_visible(db, user, req.device_id):
+        raise HTTPException(403, "无权操作此设备的化验数据")
     device = db.query(Device).filter(Device.id == req.device_id).first()
     if not device:
         raise HTTPException(404, "设备不存在")
@@ -189,11 +202,12 @@ def create_lab_data(
         db.refresh(lab)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="lab_data.create", resource_type="lab_data", resource_id=lab.id,
                resource_name=lab.lab_name or str(lab.id), detail=json.dumps({"device_id": req.device_id, "lab_name": req.lab_name, "lab_value": req.lab_value}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
-    return {"message": "录入成功", "id": lab.id}
+    return ResponseModel(message="录入成功", data={"id": lab.id})
 
 
 @router.put("/{lab_id}")
@@ -207,6 +221,8 @@ def update_lab_data(
     lab = db.query(LabData).filter(LabData.id == lab_id).first()
     if not lab:
         raise HTTPException(404, "化验记录不存在")
+    if not check_device_visible(db, user, lab.device_id):
+        raise HTTPException(403, "无权操作此设备的化验数据")
     for k, v in req.model_dump(exclude_unset=True).items():
         if k == "sample_time" and v:
             v = datetime.fromisoformat(v.replace("Z", "+00:00"))
@@ -215,11 +231,12 @@ def update_lab_data(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="lab_data.update", resource_type="lab_data", resource_id=lab.id,
                resource_name=lab.lab_name or str(lab.id), detail=json.dumps({"updated_fields": list(req.model_dump(exclude_unset=True).keys())}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
-    return {"message": "更新成功"}
+    return ResponseModel(message="更新成功")
 
 
 @router.delete("/{lab_id}")
@@ -232,6 +249,8 @@ def delete_lab_data(
     lab = db.query(LabData).filter(LabData.id == lab_id).first()
     if not lab:
         raise HTTPException(404, "化验记录不存在")
+    if not check_device_visible(db, user, lab.device_id):
+        raise HTTPException(403, "无权操作此设备的化验数据")
     log_action(action="lab_data.delete", resource_type="lab_data", resource_id=lab.id,
                resource_name=lab.lab_name or str(lab.id), detail=json.dumps({"lab_name": lab.lab_name, "device_id": lab.device_id}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -240,8 +259,9 @@ def delete_lab_data(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 # ═══════════════════ 化验对比 ═══════════════════
@@ -254,13 +274,15 @@ def compare_lab_data(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.read")),
+    user: User = Depends(require_permission("history.read")),
 ):
     """Compare lab data with aggregated collection data.
 
     For each lab record, find the aggregated avg value within
     [sample_time - compare_window/2, sample_time + compare_window/2].
     """
+    if not check_device_visible(db, user, device_id):
+        raise HTTPException(403, "无权查看此设备的化验数据")
     q = db.query(LabData).filter(LabData.device_id == device_id)
     if tag_id:
         q = q.filter(LabData.tag_id == tag_id)
@@ -351,9 +373,11 @@ def query_aggregate(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     db: Session = Depends(get_db),
-    _: User = Depends(require_permission("history.read")),
+    user: User = Depends(require_permission("history.read")),
 ):
     """Query pre-aggregated data. Falls back to real-time calculation if no aggregate exists."""
+    if not check_device_visible(db, user, device_id):
+        raise HTTPException(403, "无权查看此设备的数据")
     q = db.query(TagAggregate).filter(
         TagAggregate.device_id == device_id,
         TagAggregate.tag_id == tag_id,

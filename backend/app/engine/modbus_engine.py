@@ -143,7 +143,7 @@ class ModbusEngine:
                     connected = client.connect()
                     if not connected:
                         consecutive_failures += 1
-                        self._update_device_status(device_id, "error", "连接失败")
+                        self._update_device_status(device_id, "offline", "连接失败")
 
                         # 首次离线：写入 quality=bad 标记
                         if was_online:
@@ -281,7 +281,7 @@ class ModbusEngine:
             device = db.query(Device).filter(Device.id == device_id).first()
             if device:
                 device.enabled = False
-                device.status = "error"
+                device.status = "offline"
                 device.last_error = f"自动禁用: {reason}"
                 db.commit()
                 try:

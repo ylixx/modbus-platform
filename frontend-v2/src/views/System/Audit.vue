@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
-import { ElTable, ElTableColumn, ElPagination, ElInput, ElButton, ElTag, ElMessage } from 'element-plus'
+import { ElTable, ElTableColumn, ElPagination, ElInput, ElButton, ElTag, ElMessage, ElEmpty } from 'element-plus'
 import { getAuditLogs, unwrapList } from '@/api/modbus'
 import { formatTime } from '@/utils/modbus'
 
@@ -47,6 +47,7 @@ onMounted(fetchList)
       </div>
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
+      <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="username" label="操作用户" width="130" />
       <ElTableColumn label="操作" width="130">

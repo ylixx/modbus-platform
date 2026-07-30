@@ -16,7 +16,7 @@ import {
   ElRadioGroup,
   ElRadioButton
 } from 'element-plus'
-import { getAllDevices, getDeviceTags, getHistory, getAggregate, unwrap, unwrapList } from '@/api/modbus'
+import { getAllDevices, getDeviceTags, getHistory, unwrap, unwrapList } from '@/api/modbus'
 import { formatTime } from '@/utils/modbus'
 
 defineOptions({ name: 'History' })
@@ -46,7 +46,13 @@ const intervalOptions = [
 ]
 
 const isAggregated = computed(() => query.interval !== 'raw')
-let searchTimer: any = null
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+const onIntervalChange = () => {
+  query.page = 1
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => fetchList(), 300)
+}
 
 const fetchDevices = async () => {
   try {
@@ -156,7 +162,7 @@ onMounted(fetchDevices)
 
     <!-- 粒度切换 -->
     <div class="mb-12px">
-      <ElRadioGroup v-model="query.interval" @change="((query.page = 1), clearTimeout(searchTimer), (searchTimer = setTimeout(() => fetchList(), 300)))">
+      <ElRadioGroup v-model="query.interval" @change="onIntervalChange">
         <ElRadioButton
           v-for="opt in intervalOptions"
           :key="opt.value"

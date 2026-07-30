@@ -1,5 +1,5 @@
 """Permission & Role management API."""
-import json
+import json, logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -9,10 +9,12 @@ from app.models.permission import Permission, Role, RolePermission, UserRole
 from app.models.org import RoleOrgScope
 from app.services.audit_service import log_action
 from app.schemas.common import ResponseModel
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 
 router = APIRouter(prefix="/rbac", tags=["权限管理"])
+
+logger = logging.getLogger(__name__)
 
 
 # ── Schemas ──
@@ -27,9 +29,9 @@ class PermissionOut(BaseModel):
         from_attributes = True
 
 class RoleCreate(BaseModel):
-    code: str
-    name: str
-    description: str = ""
+    code: str = Field(max_length=50)
+    name: str = Field(max_length=100)
+    description: str = Field("", max_length=500)
     permission_ids: List[int] = []
     data_scope: str = "all"              # all | org
     org_node_ids: List[int] = []         # data_scope='org' 时绑定的组织节点
@@ -121,7 +123,8 @@ def create_role(req: RoleCreate, request: Request, db: Session = Depends(get_db)
         db.refresh(role)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="创建失败，请稍后重试")
     log_action(action="role.create", resource_type="role", resource_id=role.id,
                resource_name=role.name or str(role.id), detail=json.dumps({"code": role.code, "data_scope": role.data_scope}, ensure_ascii=False),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -159,7 +162,8 @@ def update_role(role_id: int, req: RoleUpdate, request: Request, db: Session = D
         db.refresh(role)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="更新失败，请稍后重试")
     log_action(action="role.update", resource_type="role", resource_id=role.id,
                resource_name=role.name or str(role.id), detail=json.dumps(req.model_dump(exclude_unset=True), ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -185,8 +189,9 @@ def delete_role(role_id: int, request: Request, db: Session = Depends(get_db), u
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 # ── User-Role assignment ──
@@ -226,11 +231,12 @@ def assign_user_role(user_id: int, req: UserRoleAssign, request: Request, db: Se
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="role.assign_user", resource_type="user_role", resource_id=req.role_id,
                resource_name=str(user_id), detail=json.dumps({"user_id": user_id, "role_id": req.role_id, "data_scope": req.data_scope}, ensure_ascii=False),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
-    return {"message": "分配成功"}
+    return ResponseModel(message="分配成功")
 
 
 @router.delete("/user-roles/{user_role_id}")
@@ -246,8 +252,9 @@ def remove_user_role(user_role_id: int, request: Request, db: Session = Depends(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"message": "移除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="移除成功")
 
 
 # ── Current user info ──

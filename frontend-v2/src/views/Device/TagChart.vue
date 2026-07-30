@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { EChartsOption } from 'echarts'
 import { Echart } from '@/components/Echart'
@@ -67,7 +67,7 @@ const historyRangeMsMap: Record<string, number> = {
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000
 }
-const customRange = ref<[Date, Date] | null>(null)
+const customRange = ref<[Date, Date] | undefined>(undefined)
 const aggInterval = ref<'raw' | '1m' | '5m' | '15m' | '1h' | '1d'>('raw')
 const loadingHistory = ref(false)
 
