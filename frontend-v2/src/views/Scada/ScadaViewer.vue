@@ -139,7 +139,10 @@ const onFullscreenChange = () => {
 }
 
 onMounted(() => {
-  fetchPage()
+  fetchPage().then(() => {
+    // 加载完成后启动蚂蚁线流动动画
+    canvasRef.value?.startFlowAnimation()
+  })
   unsubFns.push(wsManager.on('live_value', onLiveValue))
   document.addEventListener('fullscreenchange', onFullscreenChange)
 })

@@ -23,7 +23,9 @@ import {
   ElColorPicker,
   ElInputNumber,
   ElSlider,
-  ElDivider
+  ElDivider,
+  ElTooltip,
+  ElButtonGroup
 } from 'element-plus'
 import {
   getScadaPage,
@@ -48,11 +50,30 @@ const page = ref<any>({ name: '', config_json: '[]', width: 1920, height: 1080, 
 const saving = ref(false)
 const canvasRef = ref<InstanceType<typeof ScadaCanvas>>()
 
+// ── 缩放状态 ──
+const zoomLevel = ref(100) // 百分比
+
+// ── 网格状态 ──
+const gridSize = ref(0) // 0 = 不显示
+
+// ── 撤销/重做状态 ──
+const canUndoState = ref(false)
+const canRedoState = ref(false)
+
+// ── 锁定状态 ──
+const isLockedState = ref(false)
+
+// ── 更新撤销/重做状态 ──
+const refreshUndoRedoState = () => {
+  canUndoState.value = canvasRef.value?.canUndo() ?? false
+  canRedoState.value = canvasRef.value?.canRedo() ?? false
+}
+
 // ── 未保存变更追踪 & 自动保存 ──
 const hasUnsavedChanges = ref(false)
 let autoSaveTimer: ReturnType<typeof setInterval> | null = null
 
-const markDirty = () => { hasUnsavedChanges.value = true }
+const markDirty = () => { hasUnsavedChanges.value = true; refreshUndoRedoState() }
 
 const autoSave = async () => {
   if (!hasUnsavedChanges.value) return
@@ -189,8 +210,11 @@ const onCanvasDrop = (e: DragEvent) => {
     }
 
     if (fabricObj) {
-      // 计算放置位置（相对于画布）
-      const rect = (e.target as HTMLElement).closest('.scada-canvas-wrapper')?.getBoundingClientRect()
+      // 计算放置位置（相对于画布容器）
+      // 从 drop 事件目标向上查找画布包裹元素
+      const canvasWrapper = (e.target as HTMLElement).closest('.scada-canvas-wrapper')
+        || document.querySelector('.scada-canvas-wrapper')
+      const rect = canvasWrapper?.getBoundingClientRect()
       const left = rect ? e.clientX - rect.left : 100
       const top = rect ? e.clientY - rect.top : 100
       canvasRef.value?.addWidget(fabricObj, left, top)
@@ -293,6 +317,71 @@ const handleClear = async () => {
   }
 }
 
+// ── 缩放操作 ──
+const onZoomChange = (zoom: number) => {
+  zoomLevel.value = Math.round(zoom * 100)
+}
+
+const setZoomFromSlider = (val: number) => {
+  canvasRef.value?.setZoom(val / 100)
+  zoomLevel.value = val
+}
+
+const handleZoomFit = () => {
+  canvasRef.value?.zoomFit()
+  nextTick(() => {
+    zoomLevel.value = Math.round((canvasRef.value?.getZoom() ?? 1) * 100)
+  })
+}
+
+const handleZoomReset = () => {
+  canvasRef.value?.zoomReset()
+  zoomLevel.value = 100
+}
+
+// ── 撤销/重做 ──
+const handleUndo = () => {
+  canvasRef.value?.undo()
+  refreshUndoRedoState()
+  markDirty()
+}
+
+const handleRedo = () => {
+  canvasRef.value?.redo()
+  refreshUndoRedoState()
+  markDirty()
+}
+
+// ── 层级操作 ──
+const handleBringForward = () => { canvasRef.value?.bringForward(); markDirty() }
+const handleSendBackward = () => { canvasRef.value?.sendBackward(); markDirty() }
+const handleBringToFront = () => { canvasRef.value?.bringToFront(); markDirty() }
+const handleSendToBack = () => { canvasRef.value?.sendToBack(); markDirty() }
+
+// ── 锁定/解锁 ──
+const handleLock = () => {
+  canvasRef.value?.lockSelected()
+  isLockedState.value = true
+  markDirty()
+}
+
+const handleUnlock = () => {
+  canvasRef.value?.unlockSelected()
+  isLockedState.value = false
+  markDirty()
+}
+
+// ── 复制 ──
+const handleCopy = () => {
+  canvasRef.value?.copySelected()
+  markDirty()
+}
+
+// ── 网格开关 ──
+const toggleGrid = () => {
+  gridSize.value = gridSize.value > 0 ? 0 : 20
+}
+
 // ── 键盘快捷键 ──
 const onKeyDown = (e: KeyboardEvent) => {
   if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -304,6 +393,18 @@ const onKeyDown = (e: KeyboardEvent) => {
     e.preventDefault()
     save()
     hasUnsavedChanges.value = false
+  }
+  if (e.ctrlKey && e.key === 'z') {
+    e.preventDefault()
+    handleUndo()
+  }
+  if (e.ctrlKey && e.key === 'y') {
+    e.preventDefault()
+    handleRedo()
+  }
+  if (e.ctrlKey && e.key === 'd') {
+    e.preventDefault()
+    handleCopy()
   }
 }
 
@@ -331,12 +432,134 @@ onUnmounted(() => {
   <div class="editor-layout" @dragover="onCanvasDragOver" @drop="onCanvasDrop">
     <!-- 顶栏 -->
     <div class="editor-toolbar">
-      <div class="flex items-center">
+      <div class="toolbar-left">
         <ElButton @click="router.push('/scada/pages')" size="small">← 返回</ElButton>
         <ElDivider direction="vertical" />
         <span class="text-14px font-600">{{ page.name || 'SCADA 编辑器' }}</span>
       </div>
-      <div class="flex items-center gap-8px">
+      <div class="toolbar-center">
+        <!-- 撤销/重做 -->
+        <ElButtonGroup size="small">
+          <ElTooltip content="撤销 (Ctrl+Z)" placement="bottom">
+            <ElButton :disabled="!canUndoState" @click="handleUndo">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="重做 (Ctrl+Y)" placement="bottom">
+            <ElButton :disabled="!canRedoState" @click="handleRedo">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>
+            </ElButton>
+          </ElTooltip>
+        </ElButtonGroup>
+
+        <ElDivider direction="vertical" />
+
+        <!-- 缩放控件 -->
+        <ElButtonGroup size="small">
+          <ElTooltip content="缩小" placement="bottom">
+            <ElButton @click="setZoomFromSlider(Math.max(10, zoomLevel - 10))">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zM7 9h5v1H7z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElButton class="zoom-display" @click="handleZoomReset" style="min-width: 52px; font-size: 12px">
+            {{ zoomLevel }}%
+          </ElButton>
+          <ElTooltip content="放大" placement="bottom">
+            <ElButton @click="setZoomFromSlider(Math.min(300, zoomLevel + 10))">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zm-.5-7h2v2.5H14v1h-2V11H9.5v-1H12V7z"/></svg>
+            </ElButton>
+          </ElTooltip>
+        </ElButtonGroup>
+        <ElButtonGroup size="small">
+          <ElTooltip content="适应画布" placement="bottom">
+            <ElButton @click="handleZoomFit">适应</ElButton>
+          </ElTooltip>
+        </ElButtonGroup>
+
+        <ElDivider direction="vertical" />
+
+        <!-- 对齐/分布 -->
+        <ElButtonGroup size="small">
+          <ElTooltip content="左对齐" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignLeft()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 6v12l-5-6 5-6zm-8 0v12H3V6h2z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="右对齐" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignRight()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M11 6v12l5-6-5-6zm8 0v12h-2V6h2z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="顶对齐" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignTop()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 13h12l-6 5-6-5zm0-8v2h12V5H6z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="底对齐" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignBottom()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 11h12l-6-5-6 5zm0 8v-2h12v2H6z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="水平居中" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignCenterH()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 5v14l5-4.5L17 19V5l-5 4.5L7 5z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="垂直居中" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignCenterV()">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5 7h14l-4.5 5L19 17H5l4.5-5L5 7z"/></svg>
+            </ElButton>
+          </ElTooltip>
+        </ElButtonGroup>
+
+        <ElDivider direction="vertical" />
+
+        <!-- 层级 -->
+        <ElButtonGroup size="small">
+          <ElTooltip content="上移一层" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="handleBringForward">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 2h20v20H2V2zm2 2v16h16V4H4z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="下移一层" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="handleSendBackward">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 2h20v20H2V2z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="置顶" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="handleBringToFront">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 2h20v4H2V2zm0 6h20v4H2V8zm0 6h20v4H2v-4zm0 6h20v2H2v-2z"/></svg>
+            </ElButton>
+          </ElTooltip>
+          <ElTooltip content="置底" placement="bottom">
+            <ElButton :disabled="!selectedObj" @click="handleSendToBack">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 2h20v2H2V2zm0 4h20v4H2V6zm0 6h20v4H2v-4zm0 6h20v4H2v-4z"/></svg>
+            </ElButton>
+          </ElTooltip>
+        </ElButtonGroup>
+      </div>
+      <div class="toolbar-right">
+        <!-- 锁定/解锁 -->
+        <ElTooltip :content="isLockedState ? '解锁' : '锁定'" placement="bottom">
+          <ElButton size="small" :disabled="!selectedObj" @click="isLockedState ? handleUnlock() : handleLock()">
+            {{ isLockedState ? '🔓' : '🔒' }}
+          </ElButton>
+        </ElTooltip>
+        <!-- 复制 -->
+        <ElTooltip content="复制 (Ctrl+D)" placement="bottom">
+          <ElButton size="small" :disabled="!selectedObj" @click="handleCopy">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+          </ElButton>
+        </ElTooltip>
+        <!-- 网格 -->
+        <ElTooltip :content="gridSize > 0 ? '关闭网格' : '显示网格 (20px)'" placement="bottom">
+          <ElButton size="small" @click="toggleGrid" :type="gridSize > 0 ? 'primary' : ''">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM8 20H4v-4h4v4zm0-6H4v-4h4v4zm0-6H4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4z"/></svg>
+          </ElButton>
+        </ElTooltip>
+
+        <ElDivider direction="vertical" />
+
         <ElButton size="small" @click="canvasRef?.deleteSelected()" :disabled="!selectedObj">
           删除
         </ElButton>
@@ -344,7 +567,7 @@ onUnmounted(() => {
         <ElButton size="small" type="warning" @click="handleClear">清空</ElButton>
         <ElDivider direction="vertical" />
         <ElButton size="small" type="primary" :loading="saving" @click="save">
-          💾 保存 (Ctrl+S)
+          保存 (Ctrl+S)
         </ElButton>
         <span v-if="hasUnsavedChanges" class="text-12px text-orange-400 ml-4px">● 未保存</span>
       </div>
@@ -412,7 +635,9 @@ onUnmounted(() => {
           :background="page.background || '#1a1a2e'"
           @object:selected="onObjectSelected"
           @object:deselected="onObjectDeselected"
-          @canvas:modified="markDirty"
+          @canvas:changed="markDirty"
+          @zoom:changed="onZoomChange"
+          :grid-size="gridSize"
         />
       </div>
 
@@ -582,6 +807,25 @@ onUnmounted(() => {
   padding: 8px 16px;
   border-bottom: 1px solid var(--el-border-color);
   background: var(--el-fill-color-blank);
+  flex-shrink: 0;
+  gap: 12px;
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.toolbar-center {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
 }
 .editor-body {
