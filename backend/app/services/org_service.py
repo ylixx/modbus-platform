@@ -20,6 +20,11 @@ from app.models.permission import UserRole, Role
 from app.models.org import OrgNode, RoleOrgScope
 
 
+def get_descendant_ids(db: Session, org_node_id: int) -> Set[int]:
+    """返回指定节点及其所有后代节点 id 集合（含自身）。"""
+    return expand_org_subtree(db, {org_node_id})
+
+
 def expand_org_subtree(db: Session, root_ids: Set[int]) -> Set[int]:
     """展开组织节点集合为包含所有后代的完整集合（一次查询全表，内存展开）。"""
     if not root_ids:

@@ -35,6 +35,7 @@ export const batchWriteDevices = (data: { items: any[]; stop_on_error?: boolean 
 export const getLocations = () => request.get({ url: '/devices/locations' })
 
 // ============ Tags ============
+export const getAllTags = (params?: any) => request.get({ url: '/devices/tags/all', params })
 export const createTag = (data: any) => request.post({ url: '/devices/tags', data })
 export const batchCreateTags = (data: any) => request.post({ url: '/devices/tags/batch', data })
 export const updateTag = (id: number, data: any) =>

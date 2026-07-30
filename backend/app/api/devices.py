@@ -11,7 +11,7 @@ from app.services.audit_service import log_action
 from app.schemas.device import (
     DeviceCreate, DeviceUpdate, DeviceOut, DeviceDetailOut,
     GroupCreate, GroupUpdate, GroupOut,
-    TagCreate, TagUpdate, TagOut,
+    TagCreate, TagUpdate, TagOut, TagListOut,
     WriteRequest,
 )
 from app.schemas.common import ResponseModel, PageResponse
@@ -450,6 +450,43 @@ def duplicate_device(
 
 
 # ============ Tags ============
+
+@router.get("/tags/all", response_model=PageResponse)
+def list_all_tags(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    org_node_id: int = Query(None),
+    search: str = Query(""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("tag.read")),
+):
+    """全局点位列表（跨设备，用于实时数据页扁平分页展示）。"""
+    q = db.query(DeviceTag).join(Device, DeviceTag.device_id == Device.id)
+    # 组织架构范围过滤
+    if org_node_id:
+        from app.services.org_service import get_descendant_ids
+        ids = get_descendant_ids(db, org_node_id)
+        q = q.filter(Device.org_node_id.in_(ids))
+    # 关键词搜索（设备名 or 点位名）
+    if search and search.strip():
+        kw = f"%{search.strip()}%"
+        q = q.filter((Device.name.ilike(kw)) | (DeviceTag.name.ilike(kw)))
+    total = q.count()
+    items = q.order_by(DeviceTag.device_id, DeviceTag.sort_order, DeviceTag.id) \
+             .offset((page - 1) * page_size).limit(page_size).all()
+    # 构建 device_id → name 映射
+    dids = list({t.device_id for t in items})
+    dmap = {}
+    if dids:
+        for d in db.query(Device.id, Device.name).filter(Device.id.in_(dids)).all():
+            dmap[d.id] = d.name
+    out = []
+    for t in items:
+        o = TagListOut.model_validate(t)
+        o.device_name = dmap.get(t.device_id, "")
+        out.append(o)
+    return PageResponse(total=total, page=page, page_size=page_size, data=out)
+
 
 @router.get("/{device_id}/tags", response_model=PageResponse)
 def list_tags(device_id: int, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=500), db: Session = Depends(get_db), current_user: User = Depends(require_permission("tag.read"))):
