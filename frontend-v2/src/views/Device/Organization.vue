@@ -212,7 +212,7 @@ onMounted(fetchTree)
       </template>
     </ElTree>
 
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="480px">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="480px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
         <ElFormItem label="名称" prop="name">
           <ElInput v-model="form.name" placeholder="如：一号厂 / A区 / 一班" />

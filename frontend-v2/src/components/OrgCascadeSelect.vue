@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { ElButton, ElTag, ElSelect, ElOption, ElEmpty } from 'element-plus'
-import { getOrgTreeApi, OrgLevel, OrgNode, OrgDevice } from '@/api/hierarchy'
+import { ElButton, ElTag, ElSelect, ElOption } from 'element-plus'
+import { getOrgTreeApi, OrgLevel, OrgNode, OrgDevice, OrgPath } from '@/api/hierarchy'
 import { getDevices, unwrapList } from '@/api/modbus'
 
 // v-model: 选中的设备 ID 列表；v-model:path: 选中的层级路径（用于表格筛选）
@@ -42,18 +42,9 @@ const selections = ref<(OrgNode | null)[]>([])
 const deviceOptions = ref<OrgDevice[]>([])
 const loadingDevices = ref(false)
 
-interface Leaf {
-  device: OrgDevice
-  path: string[]
-}
-// 级联选择结果：最深选中节点的 org_node_id（用于按子树筛选设备）+ 展示标签
-interface OrgPath {
-  org_node_id: number | null
-  labels: string[]
-}
+// OrgPath 类型已在 @/api/hierarchy.ts 中统一导出
 
 const groupLevels = computed<OrgLevel[]>(() => levels.value.slice(0, -1))
-const deviceLevel = computed<OrgLevel | undefined>(() => levels.value[levels.value.length - 1])
 const selectedIds = computed<number[]>({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v)
@@ -61,23 +52,6 @@ const selectedIds = computed<number[]>({
 // 是否已选择至少一个层级（决定设备框是否可用）
 const hasCascade = computed(() => selections.value.some((s) => s != null))
 
-function collectLeaves(nodes: OrgNode[], prefix: string[], acc: Leaf[]) {
-  for (const n of nodes) {
-    if (n.type === 'device' && n.device) {
-      acc.push({ device: n.device, path: [...prefix, n.label] })
-    } else if (n.children) {
-      collectLeaves(n.children, [...prefix, n.label], acc)
-    }
-  }
-}
-
-const allLeaves = computed<Leaf[]>(() => {
-  const acc: Leaf[] = []
-  collectLeaves(tree.value, [], acc)
-  return acc
-})
-
-// 第 i 个分组下拉框的可选项（随上层联动）
 function levelOptions(index: number): OrgNode[] {
   if (index === 0) return tree.value
   const parent = selections.value[index - 1]
@@ -210,7 +184,7 @@ defineExpose({ clearPath, clearSelection, resetAll, selectAllVisible, deviceOpti
       <ElSelect
         v-for="(lv, i) in groupLevels"
         :key="lv.key"
-        :model-value="selections[i]?.label ?? null"
+        :model-value="selections[i]?.label ?? undefined"
         :placeholder="lv.label"
         clearable
         class="oc-select"
@@ -244,7 +218,7 @@ defineExpose({ clearPath, clearSelection, resetAll, selectAllVisible, deviceOpti
           <span class="oc-opt">
             <span class="dot" :class="d.status"></span>
             {{ d.name }}
-            <ElTag :type="statusOf(d.status).type" size="small" effect="plain" class="oc-opt-tag">
+            <ElTag :type="statusOf(d.status).type || 'info'" size="small" effect="plain" class="oc-opt-tag">
               {{ statusOf(d.status).label }}
             </ElTag>
           </span>

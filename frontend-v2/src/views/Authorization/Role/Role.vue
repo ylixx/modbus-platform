@@ -15,7 +15,8 @@ import {
   ElMessage,
   ElMessageBox,
   ElCheckbox,
-  ElCheckboxGroup
+  ElCheckboxGroup,
+  ElEmpty
 } from 'element-plus'
 import { getRoles, createRole, updateRole, deleteRole, getPermissions } from '@/api/modbus'
 
@@ -143,6 +144,7 @@ onMounted(() => {
     </div>
 
     <ElTable v-loading="loading" :data="list" border stripe>
+      <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="code" label="角色代码" width="140" />
       <ElTableColumn prop="name" label="角色名称" min-width="140" />
@@ -174,7 +176,7 @@ onMounted(() => {
     </ElTable>
 
     <!-- 新增/编辑对话框 -->
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="640px" top="5vh">
+    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="640px" top="5vh" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="formRules" label-width="100px">
         <ElFormItem label="角色代码" prop="code">
           <ElInput v-model="form.code" placeholder="如 admin, operator" :disabled="!!form.id" />

@@ -4,19 +4,20 @@ import { useRouter } from 'vue-router'
 import { ContentWrap } from '@/components/ContentWrap'
 import { ElEmpty, ElTag } from 'element-plus'
 import { getAllDevices, unwrapList } from '@/api/modbus'
+import { deviceStatusType, deviceStatusText } from '@/utils/modbus'
 
 defineOptions({ name: 'Topology' })
 
 const router = useRouter()
 const devices = ref<any[]>([])
+const loading = ref(false)
 const filter = ref<'all' | 'online' | 'offline' | 'error' | 'no-data'>('all')
 let timer: any = null
 
 // ── 状态相关 ──
-const statusText = (s?: string) =>
-  s === 'online' ? '在线' : s === 'error' ? '异常' : s === 'no-data' ? '在线无数据' : '离线'
-const statusTagType = (s?: string): any =>
-  s === 'online' ? 'success' : s === 'error' ? 'danger' : s === 'no-data' ? 'warning' : 'info'
+// statusText / deviceStatusType 已从 @/utils/modbus 导入
+const statusTagType = deviceStatusType
+const statusText = deviceStatusText
 const statusClass = (s?: string) =>
   s === 'online' ? 'online' : s === 'error' ? 'error' : s === 'no-data' ? 'no-data' : 'offline'
 
@@ -62,10 +63,13 @@ const updateLinks = () => {
 const openDetail = (d: any) => router.push(`/device/detail/${d.id}`)
 
 const fetchData = async () => {
+  loading.value = true
   try {
     devices.value = unwrapList(await getAllDevices()).list
   } catch (e) {
     // 忽略单次刷新失败，保留上次数据
+  } finally {
+    loading.value = false
   }
 }
 
@@ -103,7 +107,7 @@ watch([devices, filter], updateLinks, { flush: 'post' })
 
     <ElEmpty v-if="!filteredDevices.length" :description="devices.length ? '当前筛选无设备' : '暂无设备'" />
 
-    <div v-else ref="containerRef" class="topo-canvas">
+    <div v-else ref="containerRef" v-loading="loading" class="topo-canvas">
       <svg class="links">
         <path v-for="(l, i) in links" :key="i" :d="l.d" />
       </svg>

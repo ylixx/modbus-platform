@@ -8,12 +8,13 @@ import { Dialog } from '@/components/Dialog'
 import EditInfo from './components/EditInfo.vue'
 import EditPassword from './components/EditPassword.vue'
 
-import { getMe, updateMyProfile } from '@/api/modbus'
+import { getMeApi } from '@/api/login'
+import { updateMyProfile } from '@/api/modbus'
 
 const userInfo = ref()
 const fetchDetailUserApi = async () => {
   try {
-    const res = await getMe()
+    const res = await getMeApi()
     const user = res?.data || res
     userInfo.value = {
       id: user.id,

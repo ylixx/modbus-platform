@@ -7,24 +7,15 @@ import {
   getImportTemplateDevices,
   getImportTemplateTags
 } from '@/api/modbus'
+import { saveBlob } from '@/utils/modbus'
 
 defineOptions({ name: 'Imports' })
-
-const downloadBlob = (data: any, filename: string) => {
-  const blob = data instanceof Blob ? data : new Blob([data])
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  window.URL.revokeObjectURL(url)
-}
 
 const dlTpl = async (type: string) => {
   try {
     const res: any =
       type === 'devices' ? await getImportTemplateDevices() : await getImportTemplateTags()
-    downloadBlob(res?.data ?? res, `${type}-template.csv`)
+    saveBlob(res, `${type}-template.csv`)
   } catch (e: any) {
     ElMessage.error(e?.message || '下载失败')
   }

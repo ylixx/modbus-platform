@@ -1,14 +1,15 @@
 """SCADA page + custom widget API."""
-import json, base64
+import json, logging, base64
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.scada import ScadaPage, CustomWidget
+from app.schemas.common import ResponseModel
 from app.services.audit_service import log_action
 
 # 上传文件大小限制（5MB）
@@ -16,12 +17,14 @@ MAX_UPLOAD_SIZE = 5 * 1024 * 1024
 
 router = APIRouter(prefix="/scada", tags=["SCADA"])
 
+logger = logging.getLogger(__name__)
+
 
 # ═══════════════════ SCADA Pages ═══════════════════
 
 class ScadaPageCreate(BaseModel):
-    name: str
-    description: str = ""
+    name: str = Field(max_length=100)
+    description: str = Field("", max_length=500)
     width: int = 1920
     height: int = 1080
     background: str = "#1a1a2e"
@@ -53,13 +56,36 @@ def _parse_page(page: ScadaPage) -> dict:
 
 
 @router.get("/pages")
-def list_pages(db: Session = Depends(get_db), _: User = Depends(require_permission("scada.read"))):
-    return [_parse_page(p) for p in db.query(ScadaPage).order_by(ScadaPage.sort_order, ScadaPage.id).all()]
+def list_pages(db: Session = Depends(get_db), user: User = Depends(require_permission("scada.read"))):
+    from app.services.org_service import get_visible_device_ids
+    visible = get_visible_device_ids(db, user)
+    pages = db.query(ScadaPage).order_by(ScadaPage.sort_order, ScadaPage.id).all()
+    if visible is not None:
+        # 过滤：只返回包含可见设备的画面（或 device_ids 为空的画面）
+        result = []
+        for p in pages:
+            try:
+                p_dids = set(json.loads(p.device_ids)) if p.device_ids else set()
+            except (json.JSONDecodeError, TypeError):
+                p_dids = set()
+            if not p_dids or p_dids & visible:
+                result.append(p)
+        return [_parse_page(p) for p in result]
+    return [_parse_page(p) for p in pages]
 
 @router.get("/pages/{page_id}")
-def get_page(page_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("scada.read"))):
+def get_page(page_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("scada.read"))):
+    from app.services.org_service import get_visible_device_ids
     page = db.query(ScadaPage).filter(ScadaPage.id == page_id).first()
     if not page: raise HTTPException(404, "画面不存在")
+    visible = get_visible_device_ids(db, user)
+    if visible is not None:
+        try:
+            p_dids = set(json.loads(page.device_ids)) if page.device_ids else set()
+        except (json.JSONDecodeError, TypeError):
+            p_dids = set()
+        if p_dids and not (p_dids & visible):
+            raise HTTPException(403, "无权查看此画面")
     return _parse_page(page)
 
 @router.post("/pages")
@@ -73,7 +99,8 @@ def create_page(req: ScadaPageCreate, db: Session = Depends(get_db), user: User 
         db.refresh(page)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="scada.create_page", resource_type="scada_page", resource_id=page.id,
                resource_name=page.name or str(page.id), detail=json.dumps({"name": page.name, "width": page.width, "height": page.height}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -91,7 +118,8 @@ def update_page(page_id: int, req: ScadaPageUpdate, db: Session = Depends(get_db
         db.refresh(page)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="scada.update_page", resource_type="scada_page", resource_id=page.id,
                resource_name=page.name or str(page.id), detail=json.dumps({"name": page.name, "updated_fields": list(req.model_dump(exclude_unset=True).keys())}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -109,8 +137,9 @@ def delete_page(page_id: int, db: Session = Depends(get_db), user: User = Depend
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 @router.post("/pages/{page_id}/duplicate")
 def duplicate_page(page_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("scada.write")), request: Request = None):
@@ -124,7 +153,8 @@ def duplicate_page(page_id: int, db: Session = Depends(get_db), user: User = Dep
         db.refresh(page)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     log_action(action="scada.duplicate_page", resource_type="scada_page", resource_id=page.id,
                resource_name=page.name or str(page.id), detail=json.dumps({"source_id": src.id, "source_name": src.name, "new_name": page.name}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -209,14 +239,15 @@ async def upload_widget(
         db.refresh(widget)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     return _parse_widget(widget)
 
 
 class WidgetCreate(BaseModel):
-    name: str
-    category: str = "custom"
-    description: str = ""
+    name: str = Field(max_length=100)
+    category: str = Field("custom", max_length=50)
+    description: str = Field("", max_length=500)
     source_type: str = "svg"         # svg | png | fabric
     source_data: str = ""            # SVG string / base64 data URI / fabric JSON
     default_width: int = 100
@@ -239,7 +270,8 @@ def create_widget(req: WidgetCreate, db: Session = Depends(get_db), _: User = De
         db.refresh(widget)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     return _parse_widget(widget)
 
 
@@ -264,7 +296,8 @@ def update_widget(widget_id: int, req: WidgetUpdate, db: Session = Depends(get_d
         db.refresh(w)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
     return _parse_widget(w)
 
 
@@ -277,8 +310,9 @@ def delete_widget(widget_id: int, db: Session = Depends(get_db), _: User = Depen
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 @router.post("/widgets/batch-upload")
@@ -320,5 +354,6 @@ async def batch_upload_widgets(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"操作失败: {e}")
-    return {"uploaded": results, "count": len(results)}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
+    return ResponseModel(message="上传完成", data={"uploaded": results, "count": len(results)})

@@ -1,5 +1,5 @@
 """User management API (admin only)."""
-import json
+import json, logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
@@ -11,6 +11,8 @@ from app.schemas.user import UserCreate, UserOut, UserUpdate, ResetPasswordReque
 from app.schemas.common import ResponseModel, PageResponse
 
 router = APIRouter(prefix="/users", tags=["用户管理"])
+
+logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -48,7 +50,8 @@ def create_user(req: UserCreate, request: Request, db: Session = Depends(get_db)
         db.refresh(user)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="创建失败，请稍后重试")
     log_action(action="user.create", resource_type="user", resource_id=user.id,
                resource_name=user.username, detail=json.dumps({"display_name": user.display_name, "role": user.role}, ensure_ascii=False),
                user_id=admin.id, username=admin.username, ip_address=request.client.host if request.client else "")
@@ -74,7 +77,8 @@ def update_user(user_id: int, req: UserUpdate, request: Request, db: Session = D
         db.refresh(user)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="更新失败，请稍后重试")
     return user
 
 
@@ -93,8 +97,9 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), a
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="删除失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 @router.post("/{user_id}/reset-password")
@@ -110,5 +115,6 @@ def reset_password(user_id: int, req: ResetPasswordRequest, request: Request, db
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"重置失败: {e}")
-    return {"message": "密码已重置"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="重置失败，请稍后重试")
+    return ResponseModel(message="密码已重置")

@@ -24,7 +24,6 @@ import {
   deleteScript,
   testScript,
   getScriptTemplates,
-  unwrap,
   unwrapList
 } from '@/api/modbus'
 
@@ -188,7 +187,7 @@ onMounted(() => {
     <ElDialog v-model="dialogVisible" :title="dialogTitle" width="800px" top="5vh" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="80px">
         <ElFormItem label="名称" prop="name">
-          <ElInput v-model="form.name" />
+          <ElInput v-model="form.name" placeholder="请输入脚本名称" />
         </ElFormItem>
         <ElFormItem label="语言">
           <ElSelect v-model="form.language" class="!w-160px">

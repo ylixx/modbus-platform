@@ -236,24 +236,44 @@ def daily_report(
     day_start = f"{date} 00:00:00"
     day_end = f"{date} 23:59:59"
 
+    # Organization filter
+    from app.services.org_service import get_visible_device_ids
+    visible = get_visible_device_ids(db, current_user)
+
     # Device stats
-    total_devices = db.query(sql_func.count()).select_from(Device).scalar()
-    online_devices = db.query(sql_func.count()).select_from(Device).filter(Device.status == "online").scalar()
+    total_devices_q = db.query(sql_func.count()).select_from(Device)
+    online_devices_q = db.query(sql_func.count()).select_from(Device).filter(Device.status == "online")
+    if visible is not None:
+        if not visible:
+            return {"date": date, "devices": {"total": 0, "online": 0}, "alarms": {"total": 0, "by_level": {}}, "sms": {"sent": 0}}
+        total_devices_q = total_devices_q.filter(Device.id.in_(visible))
+        online_devices_q = online_devices_q.filter(Device.id.in_(visible))
+    total_devices = total_devices_q.scalar()
+    online_devices = online_devices_q.scalar()
 
-    # Alarm stats
-    alarm_count = db.query(sql_func.count()).select_from(AlarmRecord).filter(
+    # Alarm stats — filter by visible devices
+    alarm_base = db.query(AlarmRecord).filter(
         AlarmRecord.triggered_at >= day_start, AlarmRecord.triggered_at <= day_end
-    ).scalar()
-    alarms_by_level = dict(db.query(
-        AlarmRecord.alarm_level, sql_func.count()
-    ).filter(
-        AlarmRecord.triggered_at >= day_start, AlarmRecord.triggered_at <= day_end
-    ).group_by(AlarmRecord.alarm_level).all())
+    )
+    if visible is not None:
+        alarm_base = alarm_base.filter(AlarmRecord.device_id.in_(visible))
+    alarm_count = alarm_base.count()
+    alarms_by_level = dict(
+        alarm_base.with_entities(AlarmRecord.alarm_level, sql_func.count())
+        .group_by(AlarmRecord.alarm_level).all()
+    )
 
-    # SMS stats
-    sms_sent = db.query(sql_func.count()).select_from(SmsRecord).filter(
+    # SMS stats — filter by visible devices' alarms
+    sms_q = db.query(sql_func.count()).select_from(SmsRecord).filter(
         SmsRecord.sent_at >= day_start, SmsRecord.sent_at <= day_end
-    ).scalar()
+    )
+    if visible is not None:
+        visible_alarm_ids = db.query(AlarmRecord.id).filter(
+            AlarmRecord.triggered_at >= day_start, AlarmRecord.triggered_at <= day_end,
+            AlarmRecord.device_id.in_(visible)
+        ).subquery()
+        sms_q = sms_q.filter(SmsRecord.alarm_record_id.in_(visible_alarm_ids))
+    sms_sent = sms_q.scalar()
 
     log_action(action="export.daily_report", resource_type="export", resource_id="daily_report",
                resource_name="导出日报", detail=json.dumps({"date": date, "total_devices": total_devices, "online_devices": online_devices, "alarm_count": alarm_count, "sms_sent": sms_sent}, ensure_ascii=False, default=str),

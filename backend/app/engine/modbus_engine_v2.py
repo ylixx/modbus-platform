@@ -217,10 +217,10 @@ class ModbusEngineV2:
             except asyncio.CancelledError:
                 break
             except ConnectError as e:
-                # 连接层失败：视为离线/错误，进入退避
+                # 连接层失败：设备不可达，标记离线，进入退避
                 logger.error(f"Device {device_id} connect error: {e}")
                 state["consecutive_failures"] += 1
-                self._update_status(device_id, "error", str(e))
+                self._update_status(device_id, "offline", str(e))
 
                 if state["was_online"]:
                     self._mark_tags_offline(device_id)
@@ -238,6 +238,7 @@ class ModbusEngineV2:
                 await asyncio.sleep(sleep_time)
                 continue
             except Exception as e:
+                # 应用层异常：连接可能正常但数据有问题，标记异常
                 logger.error(f"Device {device_id} poll error: {e}")
                 state["consecutive_failures"] += 1
                 self._update_status(device_id, "error", str(e))
@@ -581,7 +582,7 @@ class ModbusEngineV2:
             device = db.query(Device).filter(Device.id == device_id).first()
             if device:
                 device.enabled = False
-                device.status = "error"
+                device.status = "offline"
                 device.last_error = f"自动禁用: {reason}"
                 db.commit()
                 ws_pusher.push_device_status(device_id, device.name, "disabled", reason)

@@ -9,7 +9,7 @@
  * - 画布序列化（保存）
  * - 数据绑定模式（运行时）
  */
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import * as fabric from 'fabric'
 
 const props = withDefaults(
@@ -59,12 +59,12 @@ onMounted(() => {
   }
 
   // 选中事件
-  canvas.on('selection:created', (e) => {
+  canvas.on('selection:created', (_e) => {
     if (props.runtime) return
     const obj = canvas?.getActiveObject()
     emit('object:selected', obj)
   })
-  canvas.on('selection:updated', (e) => {
+  canvas.on('selection:updated', (_e) => {
     if (props.runtime) return
     const obj = canvas?.getActiveObject()
     emit('object:selected', obj)

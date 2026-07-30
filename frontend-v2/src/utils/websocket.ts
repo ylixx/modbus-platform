@@ -89,7 +89,6 @@ class WebSocketManager {
     }
 
     this.ws.onopen = () => {
-      console.log('[WS] Connected')
       this._connected = true
       this.reconnectAttempts = 0
       // 通过首条消息发送 JWT 认证
@@ -108,8 +107,7 @@ class WebSocketManager {
       }
     }
 
-    this.ws.onclose = (event: CloseEvent) => {
-      console.log('[WS] Closed:', event.code, event.reason)
+    this.ws.onclose = (_event: CloseEvent) => {
       this._connected = false
       this.stopHeartbeat()
       this.emit({ type: '__disconnected' } as any)
@@ -198,7 +196,6 @@ class WebSocketManager {
       RECONNECT_MAX_DELAY
     )
     this.reconnectAttempts++
-    console.log(`[WS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
 
     this.reconnectTimer = setTimeout(() => {
       this.connect()

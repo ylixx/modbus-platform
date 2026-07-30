@@ -11,7 +11,8 @@ import {
   ElFormItem,
   ElInput,
   ElMessage,
-  ElMessageBox
+  ElMessageBox,
+  ElEmpty
 } from 'element-plus'
 import {
   getScadaPages,
@@ -88,6 +89,7 @@ onMounted(fetchList)
       </div>
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
+      <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
       <ElTableColumn prop="id" label="ID" width="70" />
       <ElTableColumn prop="name" label="画面名称" min-width="160" show-overflow-tooltip />
       <ElTableColumn prop="description" label="描述" min-width="200" show-overflow-tooltip />
@@ -117,7 +119,7 @@ onMounted(fetchList)
     <ElDialog v-model="dialogVisible" title="新建 SCADA 画面" width="460px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="80px">
         <ElFormItem label="名称" prop="name">
-          <ElInput v-model="form.name" />
+          <ElInput v-model="form.name" placeholder="请输入画面名称" />
         </ElFormItem>
         <ElFormItem label="描述">
           <ElInput v-model="form.description" type="textarea" :rows="2" />

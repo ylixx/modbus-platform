@@ -1,8 +1,8 @@
 """Script management API — CRUD + test execution."""
-import json
+import json, logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from app.core.database import get_db
@@ -10,18 +10,20 @@ from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.script import Script
 from app.models.device import DeviceTag
-from app.schemas.common import PageResponse
+from app.schemas.common import ResponseModel, PageResponse
 from app.engine.script_engine import script_engine
 from app.services.audit_service import log_action
 
 router = APIRouter(prefix="/scripts", tags=["脚本算法"])
 
+logger = logging.getLogger(__name__)
+
 
 class ScriptCreate(BaseModel):
-    name: str
-    description: str = ""
+    name: str = Field(max_length=100)
+    description: str = Field("", max_length=500)
     language: str = "python"
-    code: str
+    code: str = Field(max_length=50000)
     default_params: str = "{}"
     timeout_ms: int = 1000
     max_history: int = 100
@@ -96,7 +98,8 @@ def create_script(req: ScriptCreate, request: Request, db: Session = Depends(get
         db.refresh(script)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="创建失败，请稍后重试")
     log_action(action="script.create", resource_type="script", resource_id=script.id,
                resource_name=script.name or str(script.id), detail=json.dumps({"language": script.language}, ensure_ascii=False),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -115,7 +118,8 @@ def update_script(script_id: int, req: ScriptUpdate, request: Request, db: Sessi
         db.refresh(script)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="更新失败，请稍后重试")
     # Invalidate cache
     script_engine.invalidate_cache(script_id)
     log_action(action="script.update", resource_type="script", resource_id=script.id,
@@ -143,8 +147,9 @@ def delete_script(script_id: int, request: Request, db: Session = Depends(get_db
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="删除失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 @router.post("/test")
@@ -170,12 +175,13 @@ def assign_script(req: AssignRequest, request: Request, db: Session = Depends(ge
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"绑定失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="绑定失败，请稍后重试")
     action_msg = f"绑定脚本#{req.script_id}" if req.script_id else "解除脚本绑定"
     log_action(action="script.assign", resource_type="device_tag", resource_id=req.tag_id,
                resource_name=tag.name or str(tag.id), detail=json.dumps({"tag_id": req.tag_id, "script_id": req.script_id, "action": action_msg}, ensure_ascii=False),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
-    return {"message": f"点位 {tag.name} {action_msg}成功"}
+    return ResponseModel(message=f"点位 {tag.name} {action_msg}成功")
 
 
 # ── Script templates (pre-defined) ──

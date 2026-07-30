@@ -22,7 +22,8 @@ import {
   ElOption,
   ElMessage,
   ElMessageBox,
-  ElPagination
+  ElPagination,
+  ElEmpty
 } from 'element-plus'
 import {
   getRoles,
@@ -219,12 +220,12 @@ const userRules = {
   ],
   role: [{ required: true, message: '请选择角色', trigger: 'change' }],
   phone: [{ pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }],
-  email: [{ type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }]
+  email: [{ type: 'email' as const, message: '请输入正确的邮箱地址', trigger: 'blur' }]
 }
 const userEditRules = {
   role: [{ required: true, message: '请选择角色', trigger: 'change' }],
   phone: [{ pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }],
-  email: [{ type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }]
+  email: [{ type: 'email' as const, message: '请输入正确的邮箱地址', trigger: 'blur' }]
 }
 
 const roleOptions = computed(() => roles.value.map((r) => ({ label: r.name, value: r.code || r.name })))
@@ -328,6 +329,7 @@ onMounted(() => {
           <ElButton v-hasPermi="['rbac.write']" type="success" @click="openCreate">新增角色</ElButton>
         </div>
         <ElTable v-loading="loading" :data="roles" border stripe>
+          <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
           <ElTableColumn prop="id" label="ID" width="70" />
           <ElTableColumn prop="name" label="角色名称" width="150" />
           <ElTableColumn prop="code" label="角色代码" width="140" />
@@ -365,6 +367,7 @@ onMounted(() => {
           <ElButton v-hasPermi="['rbac.write']" type="success" @click="openUserCreate">新增用户</ElButton>
         </div>
         <ElTable v-loading="loading" :data="users" border stripe>
+          <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
           <ElTableColumn prop="id" label="ID" width="60" />
           <ElTableColumn prop="username" label="用户名" width="120" />
           <ElTableColumn prop="display_name" label="显示名" width="120" />
@@ -422,7 +425,7 @@ onMounted(() => {
           <ElInput v-model="form.code" :disabled="!!form.id" placeholder="如：workshop_admin" />
         </ElFormItem>
         <ElFormItem label="名称" prop="name">
-          <ElInput v-model="form.name" />
+          <ElInput v-model="form.name" placeholder="请输入角色名称" />
         </ElFormItem>
         <ElFormItem label="描述">
           <ElInput v-model="form.description" type="textarea" :rows="2" />

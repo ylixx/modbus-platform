@@ -21,6 +21,8 @@ export interface UserInfo {
   role: string
   is_active: boolean
   permissions: string[]
+  avatar_url?: string
+  roles?: string[]
 }
 
 // 登录返回结构（后端 TokenResponse）

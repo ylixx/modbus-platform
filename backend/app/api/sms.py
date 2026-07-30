@@ -1,5 +1,5 @@
 """SMS management API."""
-import json
+import json, logging, logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -14,6 +14,8 @@ from app.schemas.sms import (
 )
 from app.schemas.common import ResponseModel, PageResponse
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sms", tags=["短信管理"])
 
@@ -44,7 +46,8 @@ def create_contact(req: SmsContactCreate, request: Request, db: Session = Depend
         db.refresh(contact)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="创建失败，请稍后重试")
     log_action(action="sms.contact.create", resource_type="sms_contact", resource_id=contact.id,
                resource_name=contact.name, detail=json.dumps({"phone": contact.phone}, ensure_ascii=False),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -67,7 +70,8 @@ def update_contact(contact_id: int, req: SmsContactUpdate, request: Request, db:
         db.refresh(contact)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="更新失败，请稍后重试")
     return contact
 
 
@@ -84,8 +88,9 @@ def delete_contact(contact_id: int, request: Request, db: Session = Depends(get_
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="删除失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 # ============ Push Rules ============
@@ -112,7 +117,8 @@ def create_push_rule(req: SmsPushRuleCreate, request: Request, db: Session = Dep
         db.refresh(rule)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="创建失败，请稍后重试")
     log_action(action="sms.push_rule.create", resource_type="sms_push_rule", resource_id=rule.id,
                resource_name=rule.name, detail=json.dumps({"alarm_levels": getattr(rule, 'alarm_levels', None)}, ensure_ascii=False, default=str),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
@@ -135,7 +141,8 @@ def update_push_rule(rule_id: int, req: SmsPushRuleUpdate, request: Request, db:
         db.refresh(rule)
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="更新失败，请稍后重试")
     return rule
 
 
@@ -152,8 +159,9 @@ def delete_push_rule(rule_id: int, request: Request, db: Session = Depends(get_d
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return {"message": "删除成功"}
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="删除失败，请稍后重试")
+    return ResponseModel(message="删除成功")
 
 
 # ============ SMS Records ============
@@ -184,5 +192,5 @@ def test_sms(req: SmsTestRequest, request: Request, db: Session = Depends(get_db
                resource_name=req.phone, detail=json.dumps({"phone": req.phone, "success": success}, ensure_ascii=False),
                user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
     if success:
-        return {"message": "短信发送成功"}
+        return ResponseModel(message="短信发送成功")
     raise HTTPException(status_code=500, detail="短信发送失败，请检查短信配置")

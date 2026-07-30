@@ -19,13 +19,12 @@ import {
   ElEmpty,
   ElAlert,
   ElPagination,
-  ElBadge,
-  ElTree,
-  ElTreeSelect
+  ElBadge
 } from 'element-plus'
+import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
+import type { OrgPath } from '@/api/hierarchy'
 import {
   getDevices,
-  getOrgTree,
   getDeviceTags,
   getLabData,
   createLabData,
@@ -37,57 +36,42 @@ import {
 
 defineOptions({ name: 'LabCompare' })
 
-// ── 组织架构 ──
-const orgTree = ref<any[]>([])
-const selectedOrg = ref<number | null>(null)
-const orgNodeName = ref('')
-const fetchOrgTree = async () => {
-  try {
-    const res = await getOrgTree()
-    orgTree.value = res?.data || []
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取组织架构失败')
-  }
-}
-const onOrgClick = (data: any) => {
-  selectedOrg.value = data.id
-  orgNodeName.value = data.name
+// ── 组织级联筛选 ──
+const cascadeRef = ref()
+const orgPath = ref<OrgPath | null>(null)
+const onPathChange = (path: OrgPath | null) => {
+  orgPath.value = path
+  // 组织变化 → 重置设备/点位 → 重新加载数据
   currentDevice.value = undefined
   currentTag.value = undefined
   tags.value = []
-  fetchDevices()
-  allPage.value = 1
-  fetchAllLabData()
-}
-const clearOrgFilter = () => {
-  selectedOrg.value = null
-  orgNodeName.value = ''
-  currentDevice.value = undefined
-  currentTag.value = undefined
-  tags.value = []
-  fetchDevices()
   allPage.value = 1
   fetchAllLabData()
 }
 
 // ── 设备/点位 ──
-const devices = ref<any[]>([])
-const labDevices = computed(() => devices.value.filter((d) => d.has_lab_data))
+const deviceOptions = ref<any[]>([])
+const loadingDevices = ref(false)
 const tags = ref<any[]>([])
 const currentDevice = ref<number | undefined>(undefined)
 const currentTag = ref<number | undefined>(undefined)
-const loading = ref(false)
 
-const fetchDevices = async () => {
+// 设备远程搜索（替代预读 500 条）
+const remoteSearchDevices = async (query: string) => {
+  loadingDevices.value = true
   try {
-    const params: any = { page: 1, page_size: 500 }
-    if (selectedOrg.value != null) params.org_node_id = selectedOrg.value
+    const params: any = { page: 1, page_size: 50, has_lab_data: true }
+    if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
+    if (query) params.search = query
     const res = await getDevices(params)
-    devices.value = unwrapList(res).list
+    deviceOptions.value = unwrapList(res).list
   } catch (e: any) {
     ElMessage.error(e?.message || '获取设备列表失败')
+  } finally {
+    loadingDevices.value = false
   }
 }
+
 const onDeviceChange = async (deviceId: number) => {
   currentTag.value = undefined
   tags.value = []
@@ -113,7 +97,7 @@ const fetchAllLabData = async () => {
   allLoading.value = true
   try {
     const params: any = { page: allPage.value, page_size: allPageSize.value, compare_window: compareWindow.value }
-    if (selectedOrg.value != null) params.org_node_id = selectedOrg.value
+    if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
     if (currentDevice.value != null) params.device_id = currentDevice.value
     const res = await getLabData(params)
     const body = unwrap(res)
@@ -231,7 +215,7 @@ const backToAll = () => {
   fetchAllLabData()
 }
 
-const statusTag = (s: string) => {
+const statusTag = (s: string): { type: 'success' | 'warning' | 'danger' | 'info'; text: string } => {
   if (s === 'normal') return { type: 'success', text: '正常' }
   if (s === 'warning') return { type: 'warning', text: '偏差' }
   if (s === 'abnormal') return { type: 'danger', text: '异常' }
@@ -242,10 +226,10 @@ const statusTag = (s: string) => {
 const entryDialogVisible = ref(false)
 const entryFormRef = ref()
 const entryForm = reactive({
-  device_id: null as number | null,
-  tag_id: null as number | null,
+  device_id: undefined as number | undefined,
+  tag_id: undefined as number | undefined,
   lab_name: '',
-  lab_value: null as number | null,
+  lab_value: undefined as number | undefined,
   unit: '',
   sample_time: '',
   operator: '',
@@ -260,9 +244,9 @@ const entryRules = {
 
 const openEntry = () => {
   Object.assign(entryForm, {
-    device_id: currentDevice.value || null,
-    tag_id: currentTag.value || null,
-    lab_name: '', lab_value: null, unit: '',
+    device_id: currentDevice.value || undefined,
+    tag_id: currentTag.value || undefined,
+    lab_name: '', lab_value: undefined, unit: '',
     sample_time: '', operator: '', remark: ''
   })
   entryDialogVisible.value = true
@@ -273,7 +257,7 @@ const submitEntry = async () => {
     await entryFormRef.value?.validate()
     await createLabData({
       device_id: entryForm.device_id,
-      tag_id: entryForm.tag_id || null,
+      tag_id: entryForm.tag_id || undefined,
       lab_name: entryForm.lab_name,
       lab_value: entryForm.lab_value,
       unit: entryForm.unit,
@@ -327,47 +311,25 @@ watch(compareWindow, () => {
 })
 
 onMounted(async () => {
-  try {
-    await fetchOrgTree()
-    await fetchDevices()
-    fetchAllLabData()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '初始化失败')
-  }
+  // 初始加载设备选项（供录入对话框使用）+ 化验数据
+  remoteSearchDevices('')
+  fetchAllLabData()
 })
 </script>
 
 <template>
   <div>
     <ContentWrap title="化验数据对比">
-      <div class="flex items-start">
-        <!-- 左侧组织架构树 -->
-        <div class="w-240px mr-16px shrink-0 border-r border-solid border-gray-200 pr-12px">
-          <div class="flex items-center justify-between mb-8px">
-            <span class="text-14px font-bold">组织架构</span>
-            <ElButton v-if="selectedOrg != null" link type="primary" size="small" @click="clearOrgFilter"
-              >查看全部</ElButton
-            >
-          </div>
-          <div v-if="orgTree.length" class="org-tree-container">
-            <ElTree
-              :data="orgTree"
-              node-key="id"
-              :props="{ label: 'name', children: 'children' }"
-              highlight-current
-              :expand-on-click-node="false"
-              default-expand-all
-              @node-click="onOrgClick"
-            />
-          </div>
-          <div v-else class="text-center text-gray-400 py-20px text-12px">加载中...</div>
-          <div v-if="selectedOrg != null" class="mt-8px text-12px text-gray-500">
-            已按「{{ orgNodeName }}」及其下级筛选
-          </div>
-        </div>
+      <!-- 组织级联 + 设备/点位筛选 -->
+      <OrgCascadeSelect
+        ref="cascadeRef"
+        :show-device-select="false"
+        :show-device-actions="false"
+        v-model:path="orgPath"
+        @update:path="onPathChange"
+        class="mb-12px"
+      />
 
-        <!-- 右侧内容 -->
-        <div class="flex-1 min-w-0">
       <ElAlert
         v-if="listMode === 'all'"
         title="默认展示所有开启了化验数据的设备，同一设备的化验记录自动折叠。点击「查询对比」可进入对比分析模式。"
@@ -389,12 +351,15 @@ onMounted(async () => {
         <ElSelect
           v-model="currentDevice"
           class="!w-200px"
-          placeholder="选择设备"
+          placeholder="输入设备名搜索"
           filterable
+          remote
+          :remote-method="remoteSearchDevices"
+          :loading="loadingDevices"
           clearable
           @change="onDeviceChange"
         >
-          <ElOption v-for="d in labDevices" :key="d.id" :label="d.name" :value="d.id" />
+          <ElOption v-for="d in deviceOptions" :key="d.id" :label="d.name" :value="d.id" />
         </ElSelect>
 
         <span class="text-13px text-gray-500">点位：</span>
@@ -443,6 +408,7 @@ onMounted(async () => {
         <ElEmpty v-if="!allLoading && !groupedData.length" description="暂无化验数据，请录入或开启设备的化验数据功能" />
         <ElTable
           v-else
+          v-loading="allLoading"
           :data="groupedData"
           row-key="rowKey"
           :tree-props="{ children: 'children' }"
@@ -571,7 +537,7 @@ onMounted(async () => {
       <!-- 对比模式表格 -->
       <template v-else>
         <ElEmpty v-if="!compareLoading && !compareData.length" description="暂无对比数据，请选择设备并点击查询对比" />
-        <ElTable v-else :data="compareData" border stripe>
+        <ElTable v-else v-loading="compareLoading" :data="compareData" border stripe>
           <ElTableColumn prop="sample_time" label="采样时间" width="170">
             <template #default="{ row }">{{ row.sample_time?.replace('T', ' ').slice(0, 19) }}</template>
           </ElTableColumn>
@@ -629,16 +595,22 @@ onMounted(async () => {
           </ElTableColumn>
         </ElTable>
       </template>
-        </div>
-      </div>
     </ContentWrap>
 
     <!-- 录入对话框 -->
-    <ElDialog v-model="entryDialogVisible" title="录入化验数据" width="500px">
+    <ElDialog v-model="entryDialogVisible" title="录入化验数据" width="500px" @close="entryFormRef?.resetFields()">
       <ElForm ref="entryFormRef" :model="entryForm" :rules="entryRules" label-width="100px">
         <ElFormItem label="设备" prop="device_id">
-          <ElSelect v-model="entryForm.device_id" class="w-full" filterable @change="(v: number) => { entryForm.tag_id = null; onDeviceChange(v) }">
-            <ElOption v-for="d in labDevices" :key="d.id" :label="d.name" :value="d.id" />
+          <ElSelect
+            v-model="entryForm.device_id"
+            class="w-full"
+            filterable
+            remote
+            :remote-method="remoteSearchDevices"
+            :loading="loadingDevices"
+            @change="(v: number) => { entryForm.tag_id = undefined; onDeviceChange(v) }"
+          >
+            <ElOption v-for="d in deviceOptions" :key="d.id" :label="d.name" :value="d.id" />
           </ElSelect>
         </ElFormItem>
         <ElFormItem label="对应点位">

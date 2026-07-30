@@ -13,7 +13,6 @@ import {
   ElTableColumn,
   ElTag,
   ElMessage,
-  ElMessageBox,
   ElDialog,
   ElAlert,
   ElDescriptions,
@@ -157,7 +156,7 @@ onMounted(fetchDevices)
     </div>
 
     <!-- 二次确认对话框 -->
-    <ElDialog v-model="confirmDialogVisible" title="⚠️ 远程控制确认" width="480px" :close-on-click-modal="false">
+    <ElDialog v-model="confirmDialogVisible" title="⚠️ 远程控制确认" width="480px" :close-on-click-modal="false" @close="confirmText = ''">
       <ElAlert type="error" :closable="false" class="mb-16px">
         请仔细确认以下操作信息，写入指令一旦下发将直接作用于设备。
       </ElAlert>

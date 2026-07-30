@@ -17,7 +17,7 @@ import {
   ElMessage,
   ElMessageBox,
   ElPagination,
-  ElTimePicker
+  ElEmpty
 } from 'element-plus'
 import {
   getSmsContacts,
@@ -253,6 +253,7 @@ onMounted(() => {
           >
         </div>
         <ElTable v-loading="loading" :data="contacts" border stripe>
+          <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
           <ElTableColumn prop="id" label="ID" width="70" />
           <ElTableColumn prop="name" label="姓名" min-width="120" />
           <ElTableColumn label="手机号" min-width="140">
@@ -285,6 +286,7 @@ onMounted(() => {
           >
         </div>
         <ElTable v-loading="pushLoading" :data="pushRules" border stripe>
+          <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
           <ElTableColumn prop="id" label="ID" width="70" />
           <ElTableColumn prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
           <ElTableColumn label="时间窗口" min-width="120">
@@ -327,6 +329,7 @@ onMounted(() => {
 
       <ElTabPane label="发送记录" name="records">
         <ElTable v-loading="recordsLoading" :data="records" border stripe>
+          <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
           <ElTableColumn prop="id" label="ID" width="70" />
           <ElTableColumn label="手机号" min-width="140">
             <template #default="{ row }">{{ maskPhone(row.phone) }}</template>
@@ -354,7 +357,7 @@ onMounted(() => {
     <ElDialog v-model="dialogVisible" :title="dialogTitle" width="440px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="80px">
         <ElFormItem label="姓名" prop="name">
-          <ElInput v-model="form.name" />
+          <ElInput v-model="form.name" placeholder="请输入联系人名称" />
         </ElFormItem>
         <ElFormItem label="手机号" prop="phone">
           <ElInput v-model="form.phone" />

@@ -59,8 +59,19 @@ def _device_out(device: Device, pmap: dict) -> DeviceOut:
 # ============ Device Groups ============
 
 @router.get("/groups", response_model=List[GroupOut])
-def list_groups(db: Session = Depends(get_db), _: User = Depends(require_permission("group.read"))):
-    return db.query(DeviceGroup).order_by(DeviceGroup.sort_order, DeviceGroup.id).all()
+def list_groups(db: Session = Depends(get_db), user: User = Depends(require_permission("group.read"))):
+    # 非管理员只能看到包含可见设备的分组
+    from app.services.org_service import get_visible_device_ids
+    visible = get_visible_device_ids(db, user)
+    groups = db.query(DeviceGroup).order_by(DeviceGroup.sort_order, DeviceGroup.id).all()
+    if visible is not None:
+        if not visible:
+            return []
+        # 过滤出包含可见设备的分组
+        device_group_ids = set(db.query(Device.group_id).filter(Device.id.in_(visible), Device.group_id.isnot(None)).distinct().all())
+        device_group_ids = {r[0] for r in device_group_ids}
+        groups = [g for g in groups if g.id in device_group_ids]
+    return groups
 
 
 @router.post("/groups", response_model=GroupOut)
@@ -105,17 +116,19 @@ def delete_group(group_id: int, db: Session = Depends(get_db), _: User = Depends
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ============ Locations ============
 
 @router.get("/locations")
-def get_locations(db: Session = Depends(get_db), _: User = Depends(require_permission("device.read"))):
+def get_locations(db: Session = Depends(get_db), user: User = Depends(require_permission("device.read"))):
     """Get distinct factory/workshop/line values for filter dropdowns."""
-    factories = [r[0] for r in db.query(Device.factory).filter(Device.factory != "").distinct().all()]
-    workshops = [r[0] for r in db.query(Device.workshop).filter(Device.workshop != "").distinct().all()]
-    lines = [r[0] for r in db.query(Device.production_line).filter(Device.production_line != "").distinct().all()]
+    from app.services.org_service import apply_device_org_filter
+    base_q = apply_device_org_filter(db.query(Device), db, user)
+    factories = [r[0] for r in base_q.filter(Device.factory != "").with_entities(Device.factory).distinct().all()]
+    workshops = [r[0] for r in apply_device_org_filter(db.query(Device), db, user).filter(Device.workshop != "").with_entities(Device.workshop).distinct().all()]
+    lines = [r[0] for r in apply_device_org_filter(db.query(Device), db, user).filter(Device.production_line != "").with_entities(Device.production_line).distinct().all()]
     return {"factories": factories, "workshops": workshops, "production_lines": lines}
 
 
@@ -136,6 +149,7 @@ def list_devices(
     ids: str = Query(None, description="按设备 ID 列表精确筛选，逗号分隔（关联列表框多选）"),
     search: str = Query("", max_length=100),
     writable: bool = None,
+    has_lab_data: bool = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("device.read")),
 ):
@@ -175,6 +189,8 @@ def list_devices(
             .distinct()
         )
         q = q.filter(Device.id.in_(writable_subq))
+    if has_lab_data is not None:
+        q = q.filter(Device.has_lab_data == has_lab_data)
     total = q.count()
     items = q.order_by(Device.id).offset((page - 1) * page_size).limit(page_size).all()
     pmap = _org_path_map(db)
@@ -291,7 +307,7 @@ def delete_device(device_id: int, request: Request, db: Session = Depends(get_db
         protocol_router.stop_device(device_id_val, device_protocol)
     except Exception:
         pass
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 @router.post("/{device_id}/duplicate")
@@ -419,16 +435,18 @@ def duplicate_device(
             from loguru import logger
             logger.error(f"reload_device(duplicate {new_device.id}) failed: {e}")
 
-    return {
-        "message": f"设备复制成功，已复制 {tag_count} 个点位",
-        "device": {
-            "id": new_device.id,
-            "name": new_device.name,
-            "protocol": new_device.protocol,
-            "enabled": new_device.enabled,
+    return ResponseModel(
+        message=f"设备复制成功，已复制 {tag_count} 个点位",
+        data={
+            "device": {
+                "id": new_device.id,
+                "name": new_device.name,
+                "protocol": new_device.protocol,
+                "enabled": new_device.enabled,
+            },
+            "tag_count": tag_count,
         },
-        "tag_count": tag_count,
-    }
+    )
 
 
 # ============ Tags ============
@@ -510,7 +528,7 @@ def delete_tag(tag_id: int, db: Session = Depends(get_db), _: User = Depends(req
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 @router.post("/tags/batch", response_model=List[TagOut])

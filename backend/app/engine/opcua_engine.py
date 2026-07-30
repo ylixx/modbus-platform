@@ -105,7 +105,7 @@ class OpcUaDeviceSession:
             from asyncua import Client, ua
         except ImportError:
             logger.error("asyncua not installed. Run: pip install asyncua")
-            self._update_status("error", "asyncua not installed")
+            self._update_status("offline", "asyncua not installed")
             return
 
         client = Client(self._endpoint)
@@ -125,7 +125,7 @@ class OpcUaDeviceSession:
                 )
             except Exception as e:
                 logger.warning(f"OPC-UA security setup failed: {e}, falling back to None")
-                self._update_status("error", f"安全模式降级: {e}")
+                self._update_status("offline", f"安全模式降级: {e}")
 
         try:
             await client.connect()
@@ -134,7 +134,7 @@ class OpcUaDeviceSession:
             logger.info(f"OPC-UA device '{self.device_name}' connected to {self._endpoint}")
         except Exception as e:
             logger.error(f"OPC-UA connect error: {e}")
-            self._update_status("error", str(e))
+            self._update_status("offline", str(e))
             return
 
         # Build node handles
@@ -166,7 +166,7 @@ class OpcUaDeviceSession:
                     logger.info(f"OPC-UA device '{self.device_name}' reconnected")
                 except Exception as e:
                     consecutive_failures += 1
-                    self._update_status("error", f"重连失败({consecutive_failures}): {e}")
+                    self._update_status("offline", f"重连失败({consecutive_failures}): {e}")
                     # 超过最大重连次数，自动禁用
                     if consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
                         logger.error(f"OPC-UA device '{self.device_name}' auto-disable after {consecutive_failures} failures")
@@ -292,7 +292,7 @@ class OpcUaDeviceSession:
             device = db.query(Device).filter(Device.id == self.device_id).first()
             if device:
                 device.enabled = False
-                device.status = "error"
+                device.status = "offline"
                 device.last_error = f"自动禁用: {reason}"
                 db.commit()
         except Exception:

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElTable,
   ElTableColumn,
-  ElTag
+  ElTag,
+  ElEmpty
 } from 'element-plus'
-import { getAllRoutes } from '@/router'
+import { constantRouterMap, asyncRouterMap } from '@/router'
 
 defineOptions({ name: 'MenuManagement' })
 
@@ -16,7 +17,7 @@ const routes = ref<any[]>([])
 
 const fetchRoutes = () => {
   try {
-    const allRoutes = getAllRoutes ? getAllRoutes() : []
+    const allRoutes = [...constantRouterMap, ...asyncRouterMap]
     routes.value = flattenRoutes(allRoutes)
   } catch {
     routes.value = []
@@ -52,6 +53,7 @@ fetchRoutes()
       当前系统菜单基于路由配置自动生成，如需调整请联系管理员修改路由配置。
     </div>
     <ElTable :data="routes" border stripe row-key="path" default-expand-all>
+      <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
       <ElTableColumn prop="name" label="菜单名称" min-width="160" show-overflow-tooltip />
       <ElTableColumn prop="path" label="路径" min-width="200" show-overflow-tooltip />
       <ElTableColumn prop="component" label="组件" min-width="120" show-overflow-tooltip />

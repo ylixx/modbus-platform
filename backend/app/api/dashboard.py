@@ -32,6 +32,7 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
     online_devices = _device_count(db, visible, Device.status == "online")
     offline_devices = _device_count(db, visible, Device.status == "offline")
     error_devices = _device_count(db, visible, Device.status == "error")
+    nodata_devices = _device_count(db, visible, Device.status == "no-data")
 
     total_tags = db.query(sql_func.count()).select_from(DeviceTag)
     if visible is not None:
@@ -53,8 +54,16 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
     active_alarms = active_alarms.filter(AlarmRecord.status == AlarmStatus.ACTIVE).scalar()
     acked_alarms = acked_alarms.filter(AlarmRecord.status == AlarmStatus.ACKNOWLEDGED).scalar()
 
-    total_sms = db.query(sql_func.count()).select_from(SmsRecord).scalar()
-    failed_sms = db.query(sql_func.count()).select_from(SmsRecord).filter(SmsRecord.status == "failed").scalar()
+    total_sms = db.query(sql_func.count()).select_from(SmsRecord)
+    failed_sms = db.query(sql_func.count()).select_from(SmsRecord).filter(SmsRecord.status == "failed")
+    # 非管理员只统计可见设备关联的短信记录
+    if visible is not None:
+        alarm_filter_sms = AlarmRecord.device_id.in_(visible) if visible else AlarmRecord.device_id == -1
+        alarm_ids_sub = db.query(AlarmRecord.id).filter(alarm_filter_sms).subquery()
+        total_sms = total_sms.filter(SmsRecord.alarm_record_id.in_(alarm_ids_sub))
+        failed_sms = failed_sms.filter(SmsRecord.alarm_record_id.in_(alarm_ids_sub))
+    total_sms = total_sms.scalar()
+    failed_sms = failed_sms.scalar()
 
     return {
         "devices": {
@@ -62,6 +71,7 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
             "online": online_devices,
             "offline": offline_devices,
             "error": error_devices,
+            "no_data": nodata_devices,
         },
         "tags": {"total": total_tags},
         "alarms": {

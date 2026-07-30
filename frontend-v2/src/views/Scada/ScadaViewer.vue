@@ -7,7 +7,7 @@
  */
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElButton, ElEmpty, ElBadge } from 'element-plus'
+import { ElButton, ElBadge } from 'element-plus'
 import { getScadaPage, unwrap } from '@/api/modbus'
 import ScadaCanvas from './ScadaCanvas.vue'
 import { useWsStore } from '@/store/modules/websocket'

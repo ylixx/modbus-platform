@@ -12,7 +12,7 @@ Export all platform configuration as a single JSON file:
 
 Import: restore from exported JSON.
 """
-import json
+import json, logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from fastapi.responses import Response
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
+from app.schemas.common import ResponseModel
 from app.services.audit_service import log_action
 from app.models.device import Device, DeviceGroup, DeviceTag
 from app.models.alarm import AlarmRule
@@ -30,10 +31,14 @@ from app.models.scada import ScadaPage, CustomWidget
 
 router = APIRouter(prefix="/config", tags=["配置导出"])
 
+logger = logging.getLogger(__name__)
+
 
 @router.get("/export")
 def export_config(request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("config.read"))):
-    """Export all platform configuration as JSON."""
+    """Export all platform configuration as JSON. Admin only."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="配置导出仅限管理员操作")
     data = {
         "version": "1.0.0",
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -180,7 +185,9 @@ async def import_config(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("config.write")),
 ):
-    """Import configuration from JSON file."""
+    """Import configuration from JSON file. Admin only."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="配置导入仅限管理员操作")
     content = await file.read()
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件大小超过10MB限制")
@@ -292,12 +299,10 @@ async def import_config(
                    resource_name=file.filename or "unknown",
                    detail=json.dumps({"overwrite": overwrite, "stats": stats}, ensure_ascii=False),
                    user_id=user.id, username=user.username, ip_address=request.client.host if request and request.client else "")
-        return {
-            "message": "导入完成",
-            "stats": stats,
-        }
+        return ResponseModel(message="导入完成", data={"stats": stats})
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+        logger.exception("数据库操作失败")
+        raise HTTPException(status_code=500, detail="导入失败，请稍后重试")

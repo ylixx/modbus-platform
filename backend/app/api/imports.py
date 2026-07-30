@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
+from app.schemas.common import ResponseModel
 from app.services.import_service import import_devices_csv, import_tags_csv
 
 router = APIRouter(prefix="/import", tags=["批量导入"])
@@ -19,11 +20,10 @@ async def import_devices(
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件大小超过5MB限制")
     result = import_devices_csv(content)
-    return {
-        "message": f"导入完成：成功 {result['created']} 条",
-        "created": result["created"],
-        "errors": result["errors"],
-    }
+    return ResponseModel(
+        message=f"导入完成：成功 {result['created']} 条",
+        data={"created": result["created"], "errors": result["errors"]},
+    )
 
 
 @router.post("/tags")
@@ -36,11 +36,10 @@ async def import_tags(
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件大小超过5MB限制")
     result = import_tags_csv(content)
-    return {
-        "message": f"导入完成：成功 {result['created']} 条",
-        "created": result["created"],
-        "errors": result["errors"],
-    }
+    return ResponseModel(
+        message=f"导入完成：成功 {result['created']} 条",
+        data={"created": result["created"], "errors": result["errors"]},
+    )
 
 
 @router.get("/template/devices")

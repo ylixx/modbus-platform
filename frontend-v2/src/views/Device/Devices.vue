@@ -95,12 +95,6 @@ const fetchOrgTree = async () => {
   orgTree.value = res?.data || []
 }
 
-const clearOrgFilter = () => {
-  query.org_node_id = null
-  query.page = 1
-  fetchList()
-}
-
 // ── 批量操作（基于关联列表框多选） ──
 const batchBusy = ref(false)
 
@@ -256,7 +250,6 @@ const isModbusTcp = computed(() => form.protocol === 'modbus_tcp')
 const isModbusRtu = computed(() => form.protocol === 'modbus_rtu')
 const isMqtt = computed(() => form.protocol === 'mqtt')
 const isOpcua = computed(() => form.protocol === 'opc_ua')
-const isModbus = computed(() => isModbusTcp.value || isModbusRtu.value)
 
 const rules = computed(() => {
   const base: Record<string, any[]> = {
