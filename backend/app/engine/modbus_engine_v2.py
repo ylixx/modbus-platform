@@ -103,6 +103,15 @@ class ModbusEngineV2:
         db = SessionLocal()
         try:
             devices = db.query(Device).filter(Device.enabled == True).all()
+            # 启动时将所有启用设备状态重置为 offline，避免残留旧的 online 状态
+            for device in devices:
+                if device.status in ("online", "no-data"):
+                    device.status = "offline"
+                    device.last_error = None
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
             for device in devices:
                 self._start_device_task(device)
         finally:
@@ -192,7 +201,11 @@ class ModbusEngineV2:
                 state["consecutive_failures"] = 0
                 backoff = self.BACKOFF_BASE
                 state["was_online"] = True
-                if read_ok is False:
+                if read_ok is None:
+                    # 无可用点位：不标记为 online，保持 offline 状态
+                    self._update_status(device_id, "offline", "设备无启用的点位，无法采集")
+                    state["was_online"] = False
+                elif read_ok is False:
                     # 连接正常，但本轮未读取到任何点位数据：区分「在线无数据」状态
                     self._update_status(
                         device_id, "no-data",
@@ -245,9 +258,10 @@ class ModbusEngineV2:
                 await asyncio.sleep(sleep_time)
                 continue
 
-            # 正常间隔
-            logger.debug(f"[采集] 设备 {device_name}(ID={device_id}) 本轮完成，等待 {device.poll_interval}s")
-            await asyncio.sleep(device.poll_interval)
+            # 正常间隔（无点位的设备等待更久，避免空轮询浪费资源）
+            wait = 60 if read_ok is None else device.poll_interval
+            logger.debug(f"[采集] 设备 {device_name}(ID={device_id}) 本轮完成，等待 {wait}s")
+            await asyncio.sleep(wait)
 
         # 清理
         self._tasks.pop(device_id, None)
