@@ -90,10 +90,10 @@ onMounted(fetchList)
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
       <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="name" label="画面名称" min-width="160" show-overflow-tooltip />
-      <ElTableColumn prop="description" label="描述" min-width="200" show-overflow-tooltip />
-      <ElTableColumn prop="updated_at" label="更新时间" width="180" />
+      <ElTableColumn sortable prop="id" label="ID" width="70" />
+      <ElTableColumn sortable prop="name" label="画面名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="description" label="描述" min-width="200" show-overflow-tooltip />
+      <ElTableColumn sortable prop="updated_at" label="更新时间" width="180" />
       <ElTableColumn label="操作" width="280" fixed="right">
         <template #default="{ row }">
           <ElButton link type="primary" @click="router.push(`/scada/view/${row.id}`)"

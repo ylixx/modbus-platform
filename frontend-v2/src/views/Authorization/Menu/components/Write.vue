@@ -221,7 +221,7 @@ const formSchema = reactive<FormSchema[]>([
               添加权限
             </BaseButton>
             <ElTable data={data?.permissionList}>
-              <ElTableColumn type="index" prop="id" />
+              <ElTableColumn type="index" sortable prop="id" />
               <ElTableColumn
                 prop="value"
                 label="Value"

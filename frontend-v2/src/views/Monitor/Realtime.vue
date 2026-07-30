@@ -336,9 +336,9 @@ watch(wsConnected, (connected) => {
           <div v-if="row.loadingLive" class="text-12px text-gray-400 p-8px">加载点位中…</div>
           <ElTable v-else :data="expandRows(row)" border size="small">
             <template #empty><ElEmpty description="暂无点位数据" :image-size="60" /></template>
-            <ElTableColumn prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
-            <ElTableColumn prop="address" label="地址" width="80" />
-            <ElTableColumn prop="data_type" label="类型" width="100" />
+            <ElTableColumn sortable prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
+            <ElTableColumn sortable prop="address" label="地址" width="80" />
+            <ElTableColumn sortable prop="data_type" label="类型" width="100" />
             <ElTableColumn label="当前值" min-width="120">
               <template #default="{ row: r }">
                 <span
@@ -367,8 +367,8 @@ watch(wsConnected, (connected) => {
         </template>
       </ElTableColumn>
 
-      <ElTableColumn prop="device.name" label="设备名称" min-width="160" show-overflow-tooltip />
-      <ElTableColumn prop="orgPath" label="层级" min-width="220" show-overflow-tooltip />
+      <ElTableColumn sortable prop="device.name" label="设备名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="orgPath" label="层级" min-width="220" show-overflow-tooltip />
       <ElTableColumn label="状态" width="90">
         <template #default="{ row }">
           <ElTag :type="STATUS_TYPE[row.status] || 'info'">
@@ -383,7 +383,7 @@ watch(wsConnected, (connected) => {
           </span>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="updatedAt" label="最近更新" min-width="160" />
+      <ElTableColumn sortable prop="updatedAt" label="最近更新" min-width="160" />
       <ElTableColumn label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <ElButton type="primary" link @click="goDetail(row)">查看实时点位</ElButton>

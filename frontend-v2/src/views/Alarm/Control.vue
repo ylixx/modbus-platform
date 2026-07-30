@@ -143,9 +143,9 @@ onMounted(fetchDevices)
       <div class="text-14px font-600 mb-8px">当前设备可写点位</div>
       <ElEmpty v-if="form.device_id == null" description="请先选择设备" :image-size="70" />
       <ElTable v-else v-loading="tagsLoading" :data="writableTags" border stripe>
-        <ElTableColumn prop="name" label="点位名称" min-width="140" />
-        <ElTableColumn prop="address" label="地址" width="90" />
-        <ElTableColumn prop="register_type" label="寄存器" width="120" />
+        <ElTableColumn sortable prop="name" label="点位名称" min-width="140" />
+        <ElTableColumn sortable prop="address" label="地址" width="90" />
+        <ElTableColumn sortable prop="register_type" label="寄存器" width="120" />
         <ElTableColumn label="当前值" width="120">
           <template #default="{ row }">{{ row.value ?? '—' }}{{ row.unit || '' }}</template>
         </ElTableColumn>

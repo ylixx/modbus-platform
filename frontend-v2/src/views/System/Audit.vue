@@ -48,16 +48,16 @@ onMounted(fetchList)
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
       <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="username" label="操作用户" width="130" />
+      <ElTableColumn sortable prop="id" label="ID" width="70" />
+      <ElTableColumn sortable prop="username" label="操作用户" width="130" />
       <ElTableColumn label="操作" width="130">
         <template #default="{ row }"
           ><ElTag>{{ row.action || row.operation || '—' }}</ElTag></template
         >
       </ElTableColumn>
-      <ElTableColumn prop="resource" label="对象" min-width="140" show-overflow-tooltip />
-      <ElTableColumn prop="detail" label="详情" min-width="240" show-overflow-tooltip />
-      <ElTableColumn prop="ip" label="IP" width="140" />
+      <ElTableColumn sortable prop="resource" label="对象" min-width="140" show-overflow-tooltip />
+      <ElTableColumn sortable prop="detail" label="详情" min-width="240" show-overflow-tooltip />
+      <ElTableColumn sortable prop="ip" label="IP" width="140" />
       <ElTableColumn label="时间" width="170">
         <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
       </ElTableColumn>

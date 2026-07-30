@@ -162,15 +162,15 @@ onUnmounted(() => {
       <template #empty>
         <div class="py-20px text-center text-gray-400">暂无报警记录</div>
       </template>
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="device_name" label="设备" min-width="140" show-overflow-tooltip />
-      <ElTableColumn prop="tag_name" label="点位" min-width="120" show-overflow-tooltip />
+      <ElTableColumn sortable prop="id" label="ID" width="70" />
+      <ElTableColumn sortable prop="device_name" label="设备" min-width="140" show-overflow-tooltip />
+      <ElTableColumn sortable prop="tag_name" label="点位" min-width="120" show-overflow-tooltip />
       <ElTableColumn label="级别" width="90">
         <template #default="{ row }"
           ><ElTag :type="levelType(row.alarm_level)">{{ levelLabel(row.alarm_level) }}</ElTag></template
         >
       </ElTableColumn>
-      <ElTableColumn prop="alarm_message" label="报警内容" min-width="200" show-overflow-tooltip />
+      <ElTableColumn sortable prop="alarm_message" label="报警内容" min-width="200" show-overflow-tooltip />
       <ElTableColumn label="状态" width="100">
         <template #default="{ row }"
           ><ElTag :type="statusType(row.status)">{{ statusText(row.status) }}</ElTag></template
