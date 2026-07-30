@@ -79,7 +79,7 @@ const STATUS_TYPE: Record<string, any> = {
 }
 
 const buildOrgPath = (d: any) =>
-  [d.factory, d.production_line, d.workshop, d.installation].filter(Boolean).join(' / ')
+  d.org_path || [d.factory, d.workshop, d.production_line, d.installation].filter(Boolean).join(' / ')
 
 // 按级联筛选拉取设备（org_node_id 子树 + 设备多选 ids）
 const fetchDevices = async () => {

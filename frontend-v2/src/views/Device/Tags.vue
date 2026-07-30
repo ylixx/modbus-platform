@@ -20,6 +20,7 @@ import {
   ElPagination
 } from 'element-plus'
 import {
+  getDevices,
   getAllDevices,
   getDeviceTags,
   createTag,
@@ -45,8 +46,11 @@ const pageSize = ref(100)
 const total = ref(0)
 
 // 当前选中设备的协议（决定点位表单显示哪些必填字段）
+// 优先查对话框选中设备（新增/编辑时），否则查列表选中设备
 const currentProtocol = computed(() => {
-  const d = devices.value.find((x) => x.id === currentDevice.value)
+  const targetId = dialogDeviceId.value || currentDevice.value
+  const d = dialogDeviceOptions.value.find((x: any) => x.id === targetId)
+    || devices.value.find((x) => x.id === targetId)
   return d?.protocol || 'modbus_tcp'
 })
 const isModbus = computed(() => ['modbus_tcp', 'modbus_rtu'].includes(currentProtocol.value))
@@ -55,10 +59,11 @@ const isOpc = computed(() => currentProtocol.value === 'opc_ua')
 // 回读寄存器下拉：从后端获取该设备全量点位（排除自身），避免分页导致选项不全
 const allDeviceTags = ref<any[]>([])
 const readbackOptions = computed(() => allDeviceTags.value.filter((t) => t.id !== form.id))
-const fetchAllDeviceTags = async () => {
-  if (!currentDevice.value) { allDeviceTags.value = []; return }
+const fetchAllDeviceTags = async (deviceId?: number) => {
+  const id = deviceId || currentDevice.value
+  if (!id) { allDeviceTags.value = []; return }
   try {
-    const res = await getDeviceTags(currentDevice.value, { page: 1, page_size: 500 })
+    const res = await getDeviceTags(id, { page: 1, page_size: 500 })
     const body = unwrap(res)
     allDeviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
   } catch { allDeviceTags.value = [] }
@@ -124,6 +129,9 @@ const onSizeChange = (s: number) => {
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增点位')
 const formRef = ref()
+const dialogDeviceId = ref<number | undefined>(undefined)
+const dialogDeviceLoading = ref(false)
+const dialogDeviceOptions = ref<any[]>([])
 const emptyForm = () => ({
   id: null,
   name: '',
@@ -157,10 +165,30 @@ const rules = computed(() => ({
     ? { opc_node_id: [{ required: true, message: '请输入节点ID', trigger: 'blur' }] }
     : {})
 }))
+const remoteSearchDialogDevices = async (query: string) => {
+  dialogDeviceLoading.value = true
+  try {
+    const params: any = { page: 1, page_size: 50 }
+    if (query) params.search = query
+    dialogDeviceOptions.value = unwrapList(await getDevices(params)).list
+  } catch {
+    dialogDeviceOptions.value = []
+  } finally {
+    dialogDeviceLoading.value = false
+  }
+}
+
 const openCreate = () => {
   dialogTitle.value = '新增点位'
   Object.assign(form, emptyForm())
+  dialogDeviceId.value = currentDevice.value
   dialogVisible.value = true
+  // 预加载设备选项（回显当前设备名）
+  if (currentDevice.value && !devices.value.length) {
+    remoteSearchDialogDevices('')
+  } else {
+    dialogDeviceOptions.value = devices.value
+  }
 }
 const openEdit = (row: any) => {
   dialogTitle.value = '编辑点位'
@@ -180,11 +208,23 @@ const openEdit = (row: any) => {
     writable: !!row.writable,
     readback_tag_id: row.readback_tag_id ?? null
   })
+  dialogDeviceId.value = row.device_id || currentDevice.value
   dialogVisible.value = true
+  if (!devices.value.length) {
+    remoteSearchDialogDevices('')
+  } else {
+    dialogDeviceOptions.value = devices.value
+  }
 }
+
 const submit = async () => {
   await formRef.value?.validate()
-  const payload = { ...form, device_id: currentDevice.value }
+  const submitDeviceId = dialogDeviceId.value || currentDevice.value
+  if (!submitDeviceId) {
+    ElMessage.warning('请选择归属设备')
+    return
+  }
+  const payload = { ...form, device_id: submitDeviceId }
   delete payload.id
   try {
     if (form.id) {
@@ -291,6 +331,13 @@ watch(selectedIds, (ids) => {
   }
 })
 
+// 对话框内切换归属设备时，联动加载回读点位下拉
+watch(dialogDeviceId, (newId) => {
+  if (dialogVisible.value && newId) {
+    fetchAllDeviceTags(newId)
+  }
+})
+
 onMounted(fetchDevices)
 </script>
 
@@ -393,6 +440,19 @@ onMounted(fetchDevices)
 
     <ElDialog v-model="dialogVisible" :title="dialogTitle" width="500px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
+        <ElFormItem label="归属设备" prop="device_id">
+          <ElSelect
+            v-model="dialogDeviceId"
+            class="w-full"
+            placeholder="输入设备名搜索"
+            filterable
+            remote
+            :remote-method="remoteSearchDialogDevices"
+            :loading="dialogDeviceLoading"
+          >
+            <ElOption v-for="d in dialogDeviceOptions" :key="d.id" :label="d.name" :value="d.id" />
+          </ElSelect>
+        </ElFormItem>
         <ElFormItem label="点位名称" prop="name">
           <ElInput v-model="form.name" placeholder="请输入点位名称" />
         </ElFormItem>
