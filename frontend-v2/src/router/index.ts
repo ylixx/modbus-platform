@@ -366,6 +366,7 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         meta: {
           title: t('router.scadaEditor'),
           hidden: true,
+          canTo: true,
           activeMenu: '/scada/pages',
           permission: 'scada.write'
         }
@@ -377,6 +378,7 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         meta: {
           title: t('router.scadaViewer'),
           hidden: true,
+          canTo: true,
           activeMenu: '/scada/pages',
           permission: 'scada.read'
         }
