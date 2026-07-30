@@ -43,8 +43,8 @@ const tagRowMap = computed<Record<number, any>>(() => {
   return m
 })
 
-const statusType = (s?: string) => (s === 'online' ? 'success' : s === 'error' ? 'danger' : 'info')
-const statusText = (s?: string) => (s === 'online' ? '在线' : s === 'error' ? '异常' : '离线')
+const statusType = (s?: string) => (s === 'online' ? 'success' : s === 'error' ? 'danger' : s === 'no-data' ? 'warning' : 'info')
+const statusText = (s?: string) => (s === 'online' ? '在线' : s === 'error' ? '异常' : s === 'no-data' ? '在线无数据' : '离线')
 
 // 把实时字典（按 tag_id 索引）合并进 tags 基准行，保证「所有点位」始终显示
 const mergeLive = (tags: any[], values: Record<number, any> = {}) => {
