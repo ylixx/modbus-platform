@@ -377,10 +377,10 @@ onMounted(() => {
     </div>
 
     <ElTable v-loading="loading" :data="list" border stripe>
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="address" label="地址" width="80" />
+      <ElTableColumn sortable prop="id" label="ID" width="70" />
+      <ElTableColumn sortable prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
+      <ElTableColumn sortable prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
+      <ElTableColumn sortable prop="address" label="地址" width="80" />
       <ElTableColumn label="功能码" width="130">
         <template #default="{ row }">
           <ElTag v-if="row.function_code" size="small">{{
@@ -396,7 +396,7 @@ onMounted(() => {
           <ElTag v-else type="info" size="small">{{ row.data_type || '—' }}</ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="data_type" label="数据类型" width="100" />
+      <ElTableColumn sortable prop="data_type" label="数据类型" width="100" />
       <ElTableColumn label="单位" width="80">
         <template #default="{ row }">{{ row.unit || '—' }}</template>
       </ElTableColumn>

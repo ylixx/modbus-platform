@@ -217,9 +217,9 @@ onUnmounted(() => {
       </template>
       <ElEmpty v-if="!liveRows.length" description="该设备暂未配置点位" />
       <ElTable v-else v-loading="liveLoading" :data="liveRows" border stripe max-height="520">
-        <ElTableColumn prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
-        <ElTableColumn prop="address" label="地址" width="90" />
-        <ElTableColumn prop="data_type" label="类型" width="110" />
+        <ElTableColumn sortable prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
+        <ElTableColumn sortable prop="address" label="地址" width="90" />
+        <ElTableColumn sortable prop="data_type" label="类型" width="110" />
         <ElTableColumn label="当前值" min-width="120">
           <template #default="{ row }">
             <span

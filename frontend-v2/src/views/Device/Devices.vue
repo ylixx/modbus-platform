@@ -493,8 +493,8 @@ onMounted(() => {
         <div class="py-20px text-center text-gray-400">暂无设备数据</div>
       </template>
       <ElTableColumn type="selection" width="50" :reserve-selection="true" />
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="id" label="ID" width="70" />
+      <ElTableColumn sortable prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
       <ElTableColumn label="层级" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">
           <span class="text-gray-500">{{
@@ -529,7 +529,7 @@ onMounted(() => {
           <ElTag :type="statusType(row.status)">{{ statusText(row.status) }}</ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="description" label="描述" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="description" label="描述" min-width="160" show-overflow-tooltip />
       <ElTableColumn label="操作" width="280" fixed="right">
         <template #default="{ row }">
           <ElButton link type="primary" @click="router.push(`/device/detail/${row.id}`)"

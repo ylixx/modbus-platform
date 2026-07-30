@@ -165,10 +165,10 @@ onMounted(() => {
       <template #empty>
         <div class="py-20px text-center text-gray-400">暂无脚本</div>
       </template>
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="name" label="脚本名称" min-width="160" show-overflow-tooltip />
-      <ElTableColumn prop="language" label="语言" width="110" />
-      <ElTableColumn prop="description" label="描述" min-width="200" show-overflow-tooltip />
+      <ElTableColumn sortable prop="id" label="ID" width="70" />
+      <ElTableColumn sortable prop="name" label="脚本名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="language" label="语言" width="110" />
+      <ElTableColumn sortable prop="description" label="描述" min-width="200" show-overflow-tooltip />
       <ElTableColumn label="启用" width="90">
         <template #default="{ row }">
           <ElTag :type="row.enabled !== false ? 'success' : 'info'">

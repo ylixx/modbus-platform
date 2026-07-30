@@ -321,8 +321,8 @@ onMounted(() => {
       <template #empty>
         <div class="py-20px text-center text-gray-400">暂无报警规则</div>
       </template>
-      <ElTableColumn prop="id" label="ID" width="60" />
-      <ElTableColumn prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
+      <ElTableColumn sortable prop="id" label="ID" width="60" />
+      <ElTableColumn sortable prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
       <ElTableColumn label="设备" min-width="120" show-overflow-tooltip>
         <template #default="{ row }">
           {{ devices.find((d) => d.id === row.device_id)?.name || `#${row.device_id}` }}

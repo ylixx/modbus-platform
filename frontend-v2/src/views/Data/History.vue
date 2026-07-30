@@ -177,11 +177,11 @@ onMounted(fetchDevices)
     <!-- 原始数据表格 -->
     <template v-if="!isAggregated">
       <ElTable v-loading="loading" :data="list" border stripe>
-        <ElTableColumn prop="id" label="ID" width="80" />
-        <ElTableColumn prop="tag_name" label="点位" min-width="140" show-overflow-tooltip />
-        <ElTableColumn prop="value" label="数值" min-width="120" />
-        <ElTableColumn prop="raw_value" label="原始值" min-width="100" />
-        <ElTableColumn prop="quality" label="质量" width="80">
+        <ElTableColumn sortable prop="id" label="ID" width="80" />
+        <ElTableColumn sortable prop="tag_name" label="点位" min-width="140" show-overflow-tooltip />
+        <ElTableColumn sortable prop="value" label="数值" min-width="120" />
+        <ElTableColumn sortable prop="raw_value" label="原始值" min-width="100" />
+        <ElTableColumn sortable prop="quality" label="质量" width="80">
           <template #default="{ row }">
             <ElTag :type="row.quality === 'good' ? 'success' : 'danger'" size="small">
               {{ row.quality || '—' }}
@@ -211,16 +211,16 @@ onMounted(fetchDevices)
         <ElTableColumn label="时间" width="190">
           <template #default="{ row }">{{ formatTime(row.time) }}</template>
         </ElTableColumn>
-        <ElTableColumn prop="avg" label="均值" min-width="100">
+        <ElTableColumn sortable prop="avg" label="均值" min-width="100">
           <template #default="{ row }">
             <span class="font-700 text-blue-500">{{ row.avg }}</span>
           </template>
         </ElTableColumn>
-        <ElTableColumn prop="min" label="最小值" min-width="100" />
-        <ElTableColumn prop="max" label="最大值" min-width="100" />
-        <ElTableColumn prop="first" label="首值" min-width="100" />
-        <ElTableColumn prop="last" label="末值" min-width="100" />
-        <ElTableColumn prop="count" label="采样数" width="80" />
+        <ElTableColumn sortable prop="min" label="最小值" min-width="100" />
+        <ElTableColumn sortable prop="max" label="最大值" min-width="100" />
+        <ElTableColumn sortable prop="first" label="首值" min-width="100" />
+        <ElTableColumn sortable prop="last" label="末值" min-width="100" />
+        <ElTableColumn sortable prop="count" label="采样数" width="80" />
       </ElTable>
     </template>
   </ContentWrap>

@@ -254,8 +254,8 @@ onMounted(() => {
         </div>
         <ElTable v-loading="loading" :data="contacts" border stripe>
           <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-          <ElTableColumn prop="id" label="ID" width="70" />
-          <ElTableColumn prop="name" label="姓名" min-width="120" />
+          <ElTableColumn sortable prop="id" label="ID" width="70" />
+          <ElTableColumn sortable prop="name" label="姓名" min-width="120" />
           <ElTableColumn label="手机号" min-width="140">
             <template #default="{ row }">{{ maskPhone(row.phone) }}</template>
           </ElTableColumn>
@@ -287,8 +287,8 @@ onMounted(() => {
         </div>
         <ElTable v-loading="pushLoading" :data="pushRules" border stripe>
           <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-          <ElTableColumn prop="id" label="ID" width="70" />
-          <ElTableColumn prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
+          <ElTableColumn sortable prop="id" label="ID" width="70" />
+          <ElTableColumn sortable prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
           <ElTableColumn label="时间窗口" min-width="120">
             <template #default="{ row }">{{ row.time_start || '00:00' }} ~ {{ row.time_end || '23:59' }}</template>
           </ElTableColumn>
@@ -330,12 +330,12 @@ onMounted(() => {
       <ElTabPane label="发送记录" name="records">
         <ElTable v-loading="recordsLoading" :data="records" border stripe>
           <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-          <ElTableColumn prop="id" label="ID" width="70" />
+          <ElTableColumn sortable prop="id" label="ID" width="70" />
           <ElTableColumn label="手机号" min-width="140">
             <template #default="{ row }">{{ maskPhone(row.phone) }}</template>
           </ElTableColumn>
-          <ElTableColumn prop="content" label="内容" min-width="240" show-overflow-tooltip />
-          <ElTableColumn prop="status" label="状态" width="100" />
+          <ElTableColumn sortable prop="content" label="内容" min-width="240" show-overflow-tooltip />
+          <ElTableColumn sortable prop="status" label="状态" width="100" />
           <ElTableColumn label="发送时间" width="170">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </ElTableColumn>

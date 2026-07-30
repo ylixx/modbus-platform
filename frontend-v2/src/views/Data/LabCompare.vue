@@ -489,19 +489,19 @@ onMounted(async () => {
               <span v-else class="text-gray-400">—</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn prop="sample_time" label="采样时间" width="160">
+          <ElTableColumn sortable prop="sample_time" label="采样时间" width="160">
             <template #default="{ row }">
               <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
               <span v-else>{{ row.sample_time?.replace('T', ' ').slice(0, 19) }}</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn prop="operator" label="化验员" width="90">
+          <ElTableColumn sortable prop="operator" label="化验员" width="90">
             <template #default="{ row }">
               <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
               <span v-else>{{ row.operator || '—' }}</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn prop="remark" label="备注" min-width="100" show-overflow-tooltip>
+          <ElTableColumn sortable prop="remark" label="备注" min-width="100" show-overflow-tooltip>
             <template #default="{ row }">
               <span v-if="row.isDevice && !row.showFirst" class="text-gray-300">—</span>
               <span v-else>{{ row.remark || '—' }}</span>
@@ -538,11 +538,11 @@ onMounted(async () => {
       <template v-else>
         <ElEmpty v-if="!compareLoading && !compareData.length" description="暂无对比数据，请选择设备并点击查询对比" />
         <ElTable v-else v-loading="compareLoading" :data="compareData" border stripe>
-          <ElTableColumn prop="sample_time" label="采样时间" width="170">
+          <ElTableColumn sortable prop="sample_time" label="采样时间" width="170">
             <template #default="{ row }">{{ row.sample_time?.replace('T', ' ').slice(0, 19) }}</template>
           </ElTableColumn>
-          <ElTableColumn prop="lab_name" label="化验项目" width="120" />
-          <ElTableColumn prop="tag_name" label="对应点位" width="120" show-overflow-tooltip />
+          <ElTableColumn sortable prop="lab_name" label="化验项目" width="120" />
+          <ElTableColumn sortable prop="tag_name" label="对应点位" width="120" show-overflow-tooltip />
           <ElTableColumn label="化验值" width="100">
             <template #default="{ row }">
               <span class="font-700">{{ row.lab_value }}</span>
@@ -585,7 +585,7 @@ onMounted(async () => {
               </ElTag>
             </template>
           </ElTableColumn>
-          <ElTableColumn prop="operator" label="化验员" width="90" />
+          <ElTableColumn sortable prop="operator" label="化验员" width="90" />
           <ElTableColumn label="操作" width="80" fixed="right">
             <template #default="{ row }">
               <ElButton v-hasPermi="['history.write']" link type="danger" @click="removeEntry(row)"

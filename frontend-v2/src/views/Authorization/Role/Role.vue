@@ -145,10 +145,10 @@ onMounted(() => {
 
     <ElTable v-loading="loading" :data="list" border stripe>
       <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-      <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn prop="code" label="角色代码" width="140" />
-      <ElTableColumn prop="name" label="角色名称" min-width="140" />
-      <ElTableColumn prop="description" label="描述" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="id" label="ID" width="70" />
+      <ElTableColumn sortable prop="code" label="角色代码" width="140" />
+      <ElTableColumn sortable prop="name" label="角色名称" min-width="140" />
+      <ElTableColumn sortable prop="description" label="描述" min-width="160" show-overflow-tooltip />
       <ElTableColumn label="数据范围" width="100">
         <template #default="{ row }">
           <ElTag :type="row.data_scope === 'all' ? 'success' : 'warning'">

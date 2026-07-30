@@ -330,10 +330,10 @@ onMounted(() => {
         </div>
         <ElTable v-loading="loading" :data="roles" border stripe>
           <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-          <ElTableColumn prop="id" label="ID" width="70" />
-          <ElTableColumn prop="name" label="角色名称" width="150" />
-          <ElTableColumn prop="code" label="角色代码" width="140" />
-          <ElTableColumn prop="description" label="描述" min-width="160" show-overflow-tooltip />
+          <ElTableColumn sortable prop="id" label="ID" width="70" />
+          <ElTableColumn sortable prop="name" label="角色名称" width="150" />
+          <ElTableColumn sortable prop="code" label="角色代码" width="140" />
+          <ElTableColumn sortable prop="description" label="描述" min-width="160" show-overflow-tooltip />
           <ElTableColumn label="数据范围" width="130">
             <template #default="{ row }">
               <ElTag :type="(row.data_scope || 'all') === 'all' ? 'success' : 'warning'">
@@ -368,16 +368,16 @@ onMounted(() => {
         </div>
         <ElTable v-loading="loading" :data="users" border stripe>
           <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-          <ElTableColumn prop="id" label="ID" width="60" />
-          <ElTableColumn prop="username" label="用户名" width="120" />
-          <ElTableColumn prop="display_name" label="显示名" width="120" />
+          <ElTableColumn sortable prop="id" label="ID" width="60" />
+          <ElTableColumn sortable prop="username" label="用户名" width="120" />
+          <ElTableColumn sortable prop="display_name" label="显示名" width="120" />
           <ElTableColumn label="角色" width="110">
             <template #default="{ row }">
               <ElTag>{{ row.role || '—' }}</ElTag>
             </template>
           </ElTableColumn>
-          <ElTableColumn prop="phone" label="手机号" width="130" />
-          <ElTableColumn prop="email" label="邮箱" min-width="160" show-overflow-tooltip />
+          <ElTableColumn sortable prop="phone" label="手机号" width="130" />
+          <ElTableColumn sortable prop="email" label="邮箱" min-width="160" show-overflow-tooltip />
           <ElTableColumn label="状态" width="80">
             <template #default="{ row }">
               <ElTag :type="row.is_active !== false ? 'success' : 'info'">

@@ -54,10 +54,10 @@ fetchRoutes()
     </div>
     <ElTable :data="routes" border stripe row-key="path" default-expand-all>
       <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-      <ElTableColumn prop="name" label="菜单名称" min-width="160" show-overflow-tooltip />
-      <ElTableColumn prop="path" label="路径" min-width="200" show-overflow-tooltip />
-      <ElTableColumn prop="component" label="组件" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="permission" label="权限标识" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="name" label="菜单名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="path" label="路径" min-width="200" show-overflow-tooltip />
+      <ElTableColumn sortable prop="component" label="组件" min-width="120" show-overflow-tooltip />
+      <ElTableColumn sortable prop="permission" label="权限标识" min-width="160" show-overflow-tooltip />
       <ElTableColumn label="状态" width="80">
         <template #default="{ row }">
           <ElTag :type="row.status === 1 ? 'success' : 'danger'" size="small">
