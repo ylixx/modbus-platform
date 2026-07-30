@@ -22,6 +22,7 @@ import {
 import {
   getDevices,
   getAllDevices,
+  getAllTags,
   getDeviceTags,
   createTag,
   updateTag,
@@ -36,19 +37,27 @@ import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 defineOptions({ name: 'Tags' })
 
 const devices = ref<any[]>([])
-const currentDevice = ref<number | undefined>(undefined)
 const loading = ref(false)
 const list = ref<any[]>([])
 
 // ── 分页 ──
 const page = ref(1)
-const pageSize = ref(100)
+const pageSize = ref(50)
 const total = ref(0)
 
-// 当前选中设备的协议（决定点位表单显示哪些必填字段）
-// 优先查对话框选中设备（新增/编辑时），否则查列表选中设备
+// ── 级联筛选 + 搜索 ──
+const selectedIds = ref<number[]>([])
+const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
+const searchKeyword = ref('')
+
+// ── 对话框中归属设备远程搜索 ──
+const dialogDeviceId = ref<number | undefined>(undefined)
+const dialogDeviceLoading = ref(false)
+const dialogDeviceOptions = ref<any[]>([])
+
+// 当前协议（用于对话框表单字段显示，由对话框中选中的设备决定）
 const currentProtocol = computed(() => {
-  const targetId = dialogDeviceId.value || currentDevice.value
+  const targetId = dialogDeviceId.value
   const d = dialogDeviceOptions.value.find((x: any) => x.id === targetId)
     || devices.value.find((x) => x.id === targetId)
   return d?.protocol || 'modbus_tcp'
@@ -56,11 +65,12 @@ const currentProtocol = computed(() => {
 const isModbus = computed(() => ['modbus_tcp', 'modbus_rtu'].includes(currentProtocol.value))
 const isMqtt = computed(() => currentProtocol.value === 'mqtt')
 const isOpc = computed(() => currentProtocol.value === 'opc_ua')
-// 回读寄存器下拉：从后端获取该设备全量点位（排除自身），避免分页导致选项不全
+
+// 回读寄存器下拉：从后端获取该设备全量点位（排除自身）
 const allDeviceTags = ref<any[]>([])
 const readbackOptions = computed(() => allDeviceTags.value.filter((t) => t.id !== form.id))
 const fetchAllDeviceTags = async (deviceId?: number) => {
-  const id = deviceId || currentDevice.value
+  const id = deviceId
   if (!id) { allDeviceTags.value = []; return }
   try {
     const res = await getDeviceTags(id, { page: 1, page_size: 500 })
@@ -69,53 +79,37 @@ const fetchAllDeviceTags = async (deviceId?: number) => {
   } catch { allDeviceTags.value = [] }
 }
 
-// 当前设备的展示信息（用于工具栏与表格「归属设备」列）
-const currentDeviceName = computed(() => {
-  const d = devices.value.find((x) => x.id === currentDevice.value)
-  return d?.name || '—'
-})
-const currentProtocolText = computed(() => {
-  const map: Record<string, string> = {
-    modbus_tcp: 'Modbus TCP',
-    modbus_rtu: 'Modbus RTU',
-    mqtt: 'MQTT',
-    opc_ua: 'OPC-UA'
-  }
-  return map[currentProtocol.value] || currentProtocol.value
-})
-
+// ── 获取设备列表（用于对话框设备搜索、导出等） ──
 const fetchDevices = async () => {
   try {
     devices.value = unwrapList(await getAllDevices()).list
-    if (devices.value.length && currentDevice.value == null) {
-      currentDevice.value = devices.value[0].id
-      page.value = 1
-      fetchTags()
-    }
   } catch (e: any) {
     ElMessage.error(e?.message || '获取设备列表失败')
   }
 }
+
+// ── 全局点位列表（跨设备分页） ──
 const fetchTags = async () => {
-  if (currentDevice.value == null) return
   loading.value = true
   try {
-    const res = await getDeviceTags(currentDevice.value, { page: page.value, page_size: pageSize.value })
-    const body = unwrap(res)
-    if (Array.isArray(body)) {
-      list.value = body
-      total.value = body.length
-    } else {
-      const parsed = unwrapList(res)
-      list.value = parsed.list
-      total.value = parsed.total
+    const params: any = {
+      page: page.value,
+      page_size: pageSize.value
     }
-    // 同时加载全量点位（用于回读寄存器下拉）
-    fetchAllDeviceTags()
+    if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
+    if (selectedIds.value.length) params.device_ids = selectedIds.value.join(',')
+    if (searchKeyword.value.trim()) params.search = searchKeyword.value.trim()
+    const res = await getAllTags(params)
+    const { list: l, total: t } = unwrapList(res)
+    list.value = l
+    total.value = t
+  } catch (e: any) {
+    ElMessage.error(e?.message || '获取点位列表失败')
   } finally {
     loading.value = false
   }
 }
+
 const onPageChange = (p: number) => {
   page.value = p
   fetchTags()
@@ -126,27 +120,46 @@ const onSizeChange = (s: number) => {
   fetchTags()
 }
 
+// 级联框搜索/重置
+const onCascadeSearch = () => {
+  page.value = 1
+  fetchTags()
+}
+// 关键词搜索
+const onKeywordSearch = () => {
+  page.value = 1
+  fetchTags()
+}
+
+// ── 对话框：远程搜索设备 ──
+const remoteSearchDialogDevices = async (query: string) => {
+  dialogDeviceLoading.value = true
+  try {
+    const params: any = { page: 1, page_size: 50 }
+    if (query) params.search = query
+    dialogDeviceOptions.value = unwrapList(await getDevices(params)).list
+  } catch {
+    dialogDeviceOptions.value = []
+  } finally {
+    dialogDeviceLoading.value = false
+  }
+}
+
+// ── 新增/编辑/删除 ──
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增点位')
 const formRef = ref()
-const dialogDeviceId = ref<number | undefined>(undefined)
-const dialogDeviceLoading = ref(false)
-const dialogDeviceOptions = ref<any[]>([])
 const emptyForm = () => ({
   id: null,
   name: '',
-  // Modbus
   function_code: '',
   address: 0,
   data_type: 'uint16',
-  // MQTT
   mqtt_topic: '',
   mqtt_json_path: '',
   mqtt_value_type: 'float64',
-  // OPC UA
   opc_node_id: '',
   opc_node_type: 'float64',
-  // 通用
   unit: '',
   scale_factor: 1,
   writable: false,
@@ -165,29 +178,17 @@ const rules = computed(() => ({
     ? { opc_node_id: [{ required: true, message: '请输入节点ID', trigger: 'blur' }] }
     : {})
 }))
-const remoteSearchDialogDevices = async (query: string) => {
-  dialogDeviceLoading.value = true
-  try {
-    const params: any = { page: 1, page_size: 50 }
-    if (query) params.search = query
-    dialogDeviceOptions.value = unwrapList(await getDevices(params)).list
-  } catch {
-    dialogDeviceOptions.value = []
-  } finally {
-    dialogDeviceLoading.value = false
-  }
-}
 
 const openCreate = () => {
   dialogTitle.value = '新增点位'
   Object.assign(form, emptyForm())
-  dialogDeviceId.value = currentDevice.value
+  // 默认归属设备：级联框选中的第一个设备
+  dialogDeviceId.value = selectedIds.value.length ? selectedIds.value[0] : undefined
   dialogVisible.value = true
-  // 预加载设备选项（回显当前设备名）
-  if (currentDevice.value && !devices.value.length) {
-    remoteSearchDialogDevices('')
-  } else {
+  if (devices.value.length) {
     dialogDeviceOptions.value = devices.value
+  } else {
+    remoteSearchDialogDevices('')
   }
 }
 const openEdit = (row: any) => {
@@ -208,7 +209,7 @@ const openEdit = (row: any) => {
     writable: !!row.writable,
     readback_tag_id: row.readback_tag_id ?? null
   })
-  dialogDeviceId.value = row.device_id || currentDevice.value
+  dialogDeviceId.value = row.device_id
   dialogVisible.value = true
   if (!devices.value.length) {
     remoteSearchDialogDevices('')
@@ -219,7 +220,7 @@ const openEdit = (row: any) => {
 
 const submit = async () => {
   await formRef.value?.validate()
-  const submitDeviceId = dialogDeviceId.value || currentDevice.value
+  const submitDeviceId = dialogDeviceId.value
   if (!submitDeviceId) {
     ElMessage.warning('请选择归属设备')
     return
@@ -259,14 +260,17 @@ import { saveBlob } from '@/utils/modbus'
 
 const exportLoading = ref(false)
 const doExport = async () => {
-  if (!currentDevice.value) {
-    ElMessage.warning('请先选择设备')
+  // 优先导出级联选中的设备，否则提示选择
+  if (!selectedIds.value.length) {
+    ElMessage.warning('请先在级联框中选择要导出的设备')
     return
   }
   exportLoading.value = true
   try {
-    const res: any = await exportTagsCsv(currentDevice.value)
-    const deviceName = devices.value.find((d) => d.id === currentDevice.value)?.name || 'device'
+    // 逐设备导出合并（或导出第一个选中设备）
+    const did = selectedIds.value[0]
+    const res: any = await exportTagsCsv(did)
+    const deviceName = devices.value.find((d) => d.id === did)?.name || 'device'
     saveBlob(res, `tags_${deviceName}_${new Date().toISOString().slice(0, 10)}.csv`)
     ElMessage.success('导出成功')
   } catch (e: any) {
@@ -310,27 +314,6 @@ const doImport = async (opt: any) => {
   }
 }
 
-// 组织架构级联筛选（与实时数据页一致）：选中设备即加载该设备点位
-const selectedIds = ref<number[]>([])
-const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
-const onCascadeSearch = () => {
-  if (selectedIds.value.length) {
-    currentDevice.value = selectedIds.value[0]
-    page.value = 1
-    fetchTags()
-  } else {
-    ElMessage.info('请在级联中选择设备')
-  }
-}
-// 级联直接选设备（不点搜索按钮）也联动加载该设备点位
-watch(selectedIds, (ids) => {
-  if (ids.length && ids[0] !== currentDevice.value) {
-    currentDevice.value = ids[0]
-    page.value = 1
-    fetchTags()
-  }
-})
-
 // 对话框内切换归属设备时，联动加载回读点位下拉
 watch(dialogDeviceId, (newId) => {
   if (dialogVisible.value && newId) {
@@ -339,26 +322,33 @@ watch(dialogDeviceId, (newId) => {
 })
 
 onMounted(fetchDevices)
+// 初始加载：拉全部点位
+onMounted(fetchTags)
 </script>
 
 <template>
   <ContentWrap title="采集点位">
-    <!-- 组织架构级联筛选（与实时数据页一致） -->
+    <!-- 组织架构级联筛选 -->
     <div class="mb-16px">
       <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="onCascadeSearch" />
     </div>
 
-    <!-- 操作工具栏：当前设备信息 + 导入/导出/新增点位（从右侧 header 移至此） -->
+    <!-- 关键词搜索 + 操作工具栏 -->
     <div class="flex items-center mb-12px flex-wrap gap-8px">
-      <ElTag v-if="currentDevice != null" type="primary" effect="plain" size="small">
-        当前设备：{{ currentDeviceName }}（{{ currentProtocolText }}）
-      </ElTag>
+      <ElInput
+        v-model="searchKeyword"
+        placeholder="输入设备名或点位名搜索"
+        clearable
+        style="max-width: 280px"
+        @keyup.enter="onKeywordSearch"
+        @clear="onKeywordSearch"
+      />
+      <ElButton type="primary" @click="onKeywordSearch">搜索</ElButton>
       <span class="flex-grow" />
       <ElButton v-hasPermi="['import.write']" @click="openImport">导入点位</ElButton>
       <ElButton
         v-hasPermi="['export.download']"
         :loading="exportLoading"
-        :disabled="currentDevice == null"
         @click="doExport"
       >
         导出点位
@@ -366,53 +356,39 @@ onMounted(fetchDevices)
       <ElButton
         v-hasPermi="['tag.write']"
         type="success"
-        :disabled="currentDevice == null"
         @click="openCreate"
       >
         新增点位
       </ElButton>
     </div>
 
-    <ElEmpty v-if="currentDevice == null" description="请在上方级联中选择设备" />
-    <ElTable v-else v-loading="loading" :data="list" border stripe>
+    <ElTable v-loading="loading" :data="list" border stripe>
       <ElTableColumn prop="id" label="ID" width="70" />
-      <ElTableColumn label="归属设备" min-width="150" show-overflow-tooltip>
-        <template #default>{{ currentDeviceName }}</template>
-      </ElTableColumn>
-      <ElTableColumn prop="name" label="点位名称" min-width="150" show-overflow-tooltip />
-      <template v-if="isModbus">
-        <ElTableColumn prop="address" label="地址" width="90" />
-        <ElTableColumn label="功能码" width="130">
-          <template #default="{ row }">
-            <ElTag v-if="row.function_code" size="small">{{
-              (
-                {
-                  coil: '线圈 FC01',
-                  discrete_input: '离散输入 FC02',
-                  input_register: '输入寄存器 FC04',
-                  holding_register: '保持寄存器 FC03'
-                } as any
-              )[row.function_code] || row.function_code
-            }}</ElTag>
-            <ElTag v-else type="danger" size="small">未设置</ElTag>
-          </template>
-        </ElTableColumn>
-        <ElTableColumn prop="data_type" label="数据类型" width="110" />
-      </template>
-      <template v-else-if="isMqtt">
-        <ElTableColumn prop="mqtt_topic" label="订阅主题" min-width="180" show-overflow-tooltip />
-        <ElTableColumn prop="mqtt_json_path" label="JSON路径" width="130" show-overflow-tooltip />
-      </template>
-      <template v-else-if="isOpc">
-        <ElTableColumn prop="opc_node_id" label="节点ID" min-width="180" show-overflow-tooltip />
-        <ElTableColumn prop="opc_node_type" label="节点类型" width="110" />
-      </template>
-      <ElTableColumn label="当前值" width="110">
-        <template #default="{ row }">{{ row.value ?? '—' }}{{ row.unit || '' }}</template>
-      </ElTableColumn>
-      <ElTableColumn label="可写" width="80">
+      <ElTableColumn prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
+      <ElTableColumn prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
+      <ElTableColumn prop="address" label="地址" width="80" />
+      <ElTableColumn label="功能码" width="130">
         <template #default="{ row }">
-          <ElTag :type="row.writable ? 'success' : 'info'">{{ row.writable ? '是' : '否' }}</ElTag>
+          <ElTag v-if="row.function_code" size="small">{{
+            (
+              {
+                coil: '线圈 FC01',
+                discrete_input: '离散输入 FC02',
+                input_register: '输入寄存器 FC04',
+                holding_register: '保持寄存器 FC03'
+              } as any
+            )[row.function_code] || row.function_code
+          }}</ElTag>
+          <ElTag v-else type="info" size="small">{{ row.data_type || '—' }}</ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn prop="data_type" label="数据类型" width="100" />
+      <ElTableColumn label="单位" width="80">
+        <template #default="{ row }">{{ row.unit || '—' }}</template>
+      </ElTableColumn>
+      <ElTableColumn label="可写" width="70">
+        <template #default="{ row }">
+          <ElTag :type="row.writable ? 'success' : 'info'" size="small">{{ row.writable ? '是' : '否' }}</ElTag>
         </template>
       </ElTableColumn>
       <ElTableColumn label="操作" width="150" fixed="right">
@@ -426,17 +402,19 @@ onMounted(fetchDevices)
         </template>
       </ElTableColumn>
     </ElTable>
-    <div v-if="currentDevice != null" class="flex justify-end mt-12px">
+    <div class="flex justify-end mt-12px">
       <ElPagination
         v-model:current-page="page"
         v-model:page-size="pageSize"
         :total="total"
         layout="total, sizes, prev, pager, next, jumper"
-        :page-sizes="[10, 20, 50, 100]"
+        :page-sizes="[20, 50, 100, 200]"
         @current-change="onPageChange"
         @size-change="onSizeChange"
       />
     </div>
+
+    <ElEmpty v-if="!loading && !list.length" description="当前筛选条件下没有点位" />
 
     <ElDialog v-model="dialogVisible" :title="dialogTitle" width="500px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
