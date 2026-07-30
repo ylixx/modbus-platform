@@ -12,13 +12,12 @@ import {
   ElButton,
   ElDialog,
   ElAlert,
-  ElMessage,
-  ElPagination,
-  ElInput
+  ElMessage
 } from 'element-plus'
 import {
+  getDevices,
+  getDevice,
   getDeviceLive,
-  getAllTags,
   unwrap,
   unwrapList,
   exportDevicesCsv,
@@ -36,25 +35,21 @@ defineOptions({ name: 'Realtime' })
 const wsStore = useWsStore()
 const router = useRouter()
 
-// ── 点位扁平列表 + 分页 ──
-interface TagRow {
+interface DeviceRow {
   id: number
-  device_id: number
-  device_name: string
-  name: string
-  unit: string
-  function_code: string
-  address: number
-  data_type: string
-  writable: boolean
-  enabled: boolean
-  // 实时值（来自 live API / WS）
-  value: any
-  quality: string
+  device: any
+  orgPath: string
+  status: string
+  onlineCount: number
+  totalCount: number
   updatedAt: string
+  live: Record<string, any> | null
+  tags: any[]
+  tagsLoaded: boolean
+  loadingLive: boolean
 }
 
-const tagRows = ref<TagRow[]>([])
+const deviceRows = ref<DeviceRow[]>([])
 const loading = ref(false)
 const autoRefresh = ref(true)
 const useWs = ref(true)
@@ -62,123 +57,144 @@ const updatedAt = ref('')
 let pollTimer: any = null
 let unsubFns: (() => void)[] = []
 
-// 分页
-const currentPage = ref(1)
-const pageSize = ref(50)
-const total = ref(0)
-
-// 搜索
-const searchKeyword = ref('')
-
-// 关联列表框（组织架构级联 + 设备多选）
+// 关联列表框（组织架构级联 + 设备多选），与设备列表页一致
 const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
 const selectedIds = ref<number[]>([])
 
 const wsConnected = computed(() => wsStore.connected)
 
-// ── 拉取全局点位列表（分页） ──
-const fetchTags = async () => {
+const STATUS_TEXT: Record<string, string> = {
+  online: '在线',
+  offline: '离线',
+  error: '异常',
+  maintenance: '维护',
+  disabled: '已禁用'
+}
+const STATUS_TYPE: Record<string, any> = {
+  online: 'success',
+  offline: 'info',
+  error: 'danger',
+  maintenance: 'warning',
+  disabled: 'info'
+}
+
+const buildOrgPath = (d: any) =>
+  d.org_path || [d.factory, d.workshop, d.production_line, d.installation].filter(Boolean).join(' / ')
+
+// 按级联筛选拉取设备（org_node_id 子树 + 设备多选 ids）
+const fetchDevices = async () => {
   loading.value = true
   try {
-    const params: any = {
-      page: currentPage.value,
-      page_size: pageSize.value
-    }
-    if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
-    if (selectedIds.value.length) params.device_ids = selectedIds.value.join(',')
-    if (searchKeyword.value.trim()) params.search = searchKeyword.value.trim()
-    const res = await getAllTags(params)
-    const { list, total: t } = unwrapList(res)
-    total.value = t
-    tagRows.value = list.map((t: any) => ({
-      id: t.id,
-      device_id: t.device_id,
-      device_name: t.device_name,
-      name: t.name,
-      unit: t.unit || '',
-      function_code: t.function_code || '',
-      address: t.address,
-      data_type: t.data_type || '',
-      writable: t.writable,
-      enabled: t.enabled,
-      value: null,
-      quality: 'pending',
-      updatedAt: '—'
-    }))
-    updatedAt.value = new Date().toLocaleTimeString()
-    // 拉取实时值
-    await refreshLiveForAll()
+  const params: any = { page: 1, page_size: 100 }
+  if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
+  if (selectedIds.value.length) params.ids = selectedIds.value.join(',')
+  const list: any[] = []
+  while (true) {
+    const res = await getDevices(params)
+    const { list: l, total } = unwrapList(res)
+    list.push(...l)
+    if (list.length >= total || l.length < params.page_size) break
+    params.page += 1
+  }
+  // 即使没有实时数据，设备也要作为行显示（初始 0/0、状态取自设备本身）
+  deviceRows.value = list.map((d: any) => ({
+    id: d.id,
+    device: d,
+    orgPath: buildOrgPath(d),
+    status: d.status || 'offline',
+    onlineCount: 0,
+    totalCount: 0,
+    updatedAt: d.last_poll_at ? new Date(d.last_poll_at).toLocaleString() : '—',
+    live: null,
+    tags: [],
+    tagsLoaded: false,
+    loadingLive: false
+  }))
+  updatedAt.value = new Date().toLocaleTimeString()
+  // 拉取每台设备的实时值（读共享缓冲，成本低）
+  await refreshLiveForAll()
   } finally {
     loading.value = false
   }
 }
 
-// ── 实时值批量刷新：按设备分组，并发拉取 /live ──
-const deviceLiveMap = ref<Record<number, Record<string, any>>>({})
+const refreshLiveForRow = async (row: DeviceRow) => {
+  try {
+    const res = await getDeviceLive(row.device.id)
+    const body = unwrap(res)
+    const values = body?.values || {}
+    const ids = Object.keys(values)
+    let online = 0
+    for (const k of ids) {
+      if (values[k]?.quality === 'good') online += 1
+    }
+    row.totalCount = ids.length
+    row.onlineCount = online
+    row.live = values
+  } catch (e) {
+    row.onlineCount = 0
+    row.totalCount = 0
+  }
+}
 
 const refreshLiveForAll = async () => {
-  // 收集当前页涉及的所有设备 ID
-  const deviceIds = [...new Set(tagRows.value.map((r) => r.device_id))]
-  const concurrency = 6
+  // 并发限制：最多同时 8 个请求，避免大量设备时压垮浏览器/后端
+  const rows = deviceRows.value
+  const concurrency = 8
   let idx = 0
   const next = async (): Promise<void> => {
     const i = idx++
-    if (i >= deviceIds.length) return
-    const did = deviceIds[i]
-    try {
-      const res = await getDeviceLive(did)
-      const body = unwrap(res)
-      const values = body?.values || {}
-      deviceLiveMap.value[did] = values
-      // 更新 tagRows 中对应设备的点位实时值
-      for (const row of tagRows.value) {
-        if (row.device_id !== did) continue
-        const lv = values[row.id]
-        if (lv) {
-          row.value = lv.value ?? null
-          row.quality = lv.quality || 'unknown'
-          row.updatedAt = lv.time
-            ? new Date(lv.time).toLocaleString()
-            : new Date().toLocaleString()
-        }
-      }
-    } catch {
-      // 静默忽略
-    }
+    if (i >= rows.length) return
+    await refreshLiveForRow(rows[i])
     await next()
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, deviceIds.length) }, () => next()))
+  await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, () => next()))
   updatedAt.value = new Date().toLocaleTimeString()
 }
 
-// 分页/搜索变化
-const onCurrentChange = (p: number) => {
-  currentPage.value = p
-  fetchTags()
-}
-const onSizeChange = (s: number) => {
-  pageSize.value = s
-  currentPage.value = 1
-  fetchTags()
-}
-// 关键词搜索
-const onKeywordSearch = () => {
-  currentPage.value = 1
-  fetchTags()
-}
-
-// 级联筛选变化
-const onCascadeSearch = () => {
-  currentPage.value = 1
-  fetchTags()
-}
-
-// 跳转到设备详情
-const goDetail = (row: TagRow) => {
-  router.push(`/device/detail/${row.device_id}`)
+// 展开行：懒加载该设备的点位定义，并刷新实时值（与对话框一致）
+const onExpand = async (row: DeviceRow, expandedRows: any[]) => {
+  const expanded = Array.isArray(expandedRows) && expandedRows.includes(row)
+  if (!expanded || row.tagsLoaded || row.loadingLive) return
+  row.loadingLive = true
+  try {
+    const [devRes, liveRes] = await Promise.all([
+      getDevice(row.device.id),
+      getDeviceLive(row.device.id)
+    ])
+    const body = unwrap(devRes)
+    row.tags = body?.tags || (Array.isArray(body) ? body : []) || []
+    row.tagsLoaded = true
+    const values = unwrap(liveRes)?.values || {}
+    row.live = values
+    const ids = Object.keys(values)
+    row.totalCount = ids.length
+    row.onlineCount = ids.filter((k) => values[k]?.quality === 'good').length
+  } finally {
+    row.loadingLive = false
+  }
 }
 
-// ── 导入 / 导出（设备级） ──
+const expandRows = (row: DeviceRow) =>
+  (row.tags || []).map((t: any) => {
+    const lv = row.live?.[t.id]
+    return {
+      tag_id: t.id,
+      name: t.name,
+      address: t.address,
+      data_type: t.data_type,
+      unit: t.unit,
+      value: lv?.value ?? null,
+      quality: lv?.quality ?? (row.live ? 'unknown' : 'pending')
+    }
+  })
+
+// 跳转到设备详情页（统一查看/写值入口，避免与详情页重复维护点位表与写值逻辑）
+const goDetail = (row: DeviceRow) => {
+  router.push(`/device/detail/${row.device.id}`)
+}
+
+// ── 导入 / 导出（与设备列表页一致） ──
 const exporting = ref(false)
 const doExport = async () => {
   exporting.value = true
@@ -226,7 +242,7 @@ const doImport = async () => {
     ElMessage.success(body?.message || '导入完成')
     if (fileInputRef.value) fileInputRef.value.value = ''
     importFile.value = null
-    fetchTags()
+    fetchDevices()
   } finally {
     importing.value = false
   }
@@ -242,12 +258,16 @@ const resetImportState = () => {
 const onLiveValue = (msg: any) => {
   const d = msg.data as WsLiveValue
   if (!d) return
-  // 找到当前页中匹配的点位行
-  const row = tagRows.value.find((r) => r.id === d.tag_id && r.device_id === d.device_id)
+  const row = deviceRows.value.find((r) => r.id === d.device_id)
   if (row) {
-    row.value = d.value ?? null
-    row.quality = d.quality || 'unknown'
-    row.updatedAt = new Date().toLocaleString()
+    if (!row.live) row.live = {}
+    row.live = {
+      ...row.live,
+      [d.tag_id]: { value: d.value, quality: d.quality, time: new Date().toISOString() }
+    }
+    const ids = Object.keys(row.live)
+    row.onlineCount = ids.filter((k) => row.live![k]?.quality === 'good').length
+    row.totalCount = ids.length
   }
   updatedAt.value = new Date().toLocaleTimeString()
 }
@@ -258,7 +278,7 @@ const onBatchLive = (msg: any) => {
   for (const d of items) onLiveValue({ data: d } as any)
 }
 
-// ── 轮询兜底 ──
+// ── 轮询兜底：WS 未连接或用户关闭 WS 时，按时刷新实时值 ──
 const setupPolling = () => {
   if (pollTimer) clearInterval(pollTimer)
   if (autoRefresh.value && (!wsConnected.value || !useWs.value)) {
@@ -267,7 +287,7 @@ const setupPolling = () => {
 }
 
 onMounted(() => {
-  fetchTags()
+  fetchDevices()
   unsubFns.push(wsManager.on('live_value', onLiveValue))
   unsubFns.push(wsManager.on('batch_live', onBatchLive))
   setupPolling()
@@ -305,79 +325,75 @@ watch(wsConnected, (connected) => {
       </div>
     </template>
 
-    <!-- 组织架构级联筛选 + 搜索 -->
+    <!-- 组织架构级联筛选（与设备列表页一致） -->
     <div class="mb-16px">
-      <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="onCascadeSearch" />
+      <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="fetchDevices" />
     </div>
 
-    <!-- 关键词搜索栏 -->
-    <div class="mb-12px flex items-center gap-8px">
-      <ElInput
-        v-model="searchKeyword"
-        placeholder="输入设备名或点位名搜索"
-        clearable
-        style="max-width: 320px"
-        @keyup.enter="onKeywordSearch"
-        @clear="onKeywordSearch"
-      />
-      <ElButton type="primary" @click="onKeywordSearch">搜索</ElButton>
-    </div>
-
-    <!-- 扁平点位列表 -->
-    <ElTable v-loading="loading" :data="tagRows" row-key="id" border stripe>
-      <ElTableColumn prop="device_name" label="设备名称" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
-      <ElTableColumn prop="address" label="地址" width="80" />
-      <ElTableColumn prop="data_type" label="数据类型" width="100" />
-      <ElTableColumn label="当前值" min-width="140">
+    <ElTable v-loading="loading" :data="deviceRows" row-key="id" border stripe @expand-change="onExpand">
+      <ElTableColumn type="expand">
         <template #default="{ row }">
-          <span
-            class="text-15px font-700"
-            :class="{
-              'text-green-500': row.quality === 'good',
-              'text-red-500': row.quality === 'bad',
-              'text-gray-400': row.value == null
-            }"
-          >
-            {{ row.value ?? '—' }}
-          </span>
-          <span class="text-12px text-gray-400 ml-4px">{{ row.unit }}</span>
+          <div v-if="row.loadingLive" class="text-12px text-gray-400 p-8px">加载点位中…</div>
+          <ElTable v-else :data="expandRows(row)" border size="small">
+            <template #empty><ElEmpty description="暂无点位数据" :image-size="60" /></template>
+            <ElTableColumn prop="name" label="点位名称" min-width="160" show-overflow-tooltip />
+            <ElTableColumn prop="address" label="地址" width="80" />
+            <ElTableColumn prop="data_type" label="类型" width="100" />
+            <ElTableColumn label="当前值" min-width="120">
+              <template #default="{ row: r }">
+                <span
+                  class="text-15px font-700"
+                  :class="{
+                    'text-green-500': r.quality === 'good',
+                    'text-red-500': r.quality === 'bad',
+                    'text-gray-400': r.value == null
+                  }"
+                >
+                  {{ r.value ?? '—' }}
+                </span>
+                <span class="text-12px text-gray-400 ml-4px">{{ r.unit || '' }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="状态" width="90">
+              <template #default="{ row: r }">
+                <ElTag
+                  :type="r.quality === 'good' ? 'success' : r.quality === 'bad' ? 'danger' : 'info'"
+                >
+                  {{ r.quality === 'good' ? '正常' : r.quality === 'bad' ? '异常' : '—' }}
+                </ElTag>
+              </template>
+            </ElTableColumn>
+          </ElTable>
         </template>
       </ElTableColumn>
-      <ElTableColumn label="质量" width="90">
+
+      <ElTableColumn prop="device.name" label="设备名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn prop="orgPath" label="层级" min-width="220" show-overflow-tooltip />
+      <ElTableColumn label="状态" width="90">
         <template #default="{ row }">
-          <ElTag
-            :type="row.quality === 'good' ? 'success' : row.quality === 'bad' ? 'danger' : 'info'"
-          >
-            {{ row.quality === 'good' ? '正常' : row.quality === 'bad' ? '异常' : '—' }}
+          <ElTag :type="STATUS_TYPE[row.status] || 'info'">
+            {{ STATUS_TEXT[row.status] || row.status }}
           </ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn prop="updatedAt" label="更新时间" min-width="160" show-overflow-tooltip />
-      <ElTableColumn label="操作" width="100" fixed="right">
+      <ElTableColumn label="在线点位" width="100">
         <template #default="{ row }">
-          <ElButton type="primary" link @click="goDetail(row)">设备详情</ElButton>
+          <span :class="row.onlineCount > 0 ? 'text-green-500 font-700' : 'text-gray-400'">
+            {{ row.onlineCount }} / {{ row.totalCount }}
+          </span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn prop="updatedAt" label="最近更新" min-width="160" />
+      <ElTableColumn label="操作" width="120" fixed="right">
+        <template #default="{ row }">
+          <ElButton type="primary" link @click="goDetail(row)">查看实时点位</ElButton>
         </template>
       </ElTableColumn>
     </ElTable>
 
-    <!-- 分页 -->
-    <div class="flex justify-between items-center mt-12px" v-if="total > 0">
-      <span class="text-13px text-gray-400">共 {{ total }} 条</span>
-      <ElPagination
-        v-model:current-page="currentPage"
-        v-model:page-size="pageSize"
-        :total="total"
-        :page-sizes="[20, 50, 100, 200]"
-        layout="sizes, prev, pager, next, jumper"
-        @current-change="onCurrentChange"
-        @size-change="onSizeChange"
-      />
-    </div>
+    <ElEmpty v-if="!deviceRows.length" description="当前筛选条件下没有设备" />
 
-    <ElEmpty v-if="!loading && !tagRows.length" description="当前筛选条件下没有点位数据" />
-
-    <!-- 批量导入设备 -->
+    <!-- 批量导入设备（与设备列表页一致） -->
     <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px" @close="resetImportState">
       <ElAlert
         title="请使用 CSV 模板格式填写设备数据后上传，重名设备会被跳过"
