@@ -32,6 +32,7 @@ import {
   unwrap,
   unwrapList
 } from '@/api/modbus'
+import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
 defineOptions({ name: 'Tags' })
 
@@ -44,11 +45,9 @@ const page = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
 
-// ── 设备筛选 ──
-const filterDeviceIds = ref<number[]>([])
-const filterDeviceLoading = ref(false)
-const filterDeviceOptions = ref<any[]>([])
-const filterDeviceKeyword = ref('')
+// ── 级联筛选 ──
+const selectedIds = ref<number[]>([])
+const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
 
 // ── 关键词搜索 ──
 const searchKeyword = ref('')
@@ -82,34 +81,13 @@ const fetchAllDeviceTags = async (deviceId?: number) => {
   } catch { allDeviceTags.value = [] }
 }
 
-// ── 获取设备列表（全局，用于筛选 + 对话框） ──
+// ── 获取设备列表（用于对话框设备搜索、导出等） ──
 const fetchDevices = async () => {
   try {
     devices.value = unwrapList(await getAllDevices()).list
   } catch (e: any) {
     ElMessage.error(e?.message || '获取设备列表失败')
   }
-}
-
-// ── 设备筛选远程搜索 ──
-const remoteSearchFilterDevices = async (query: string) => {
-  filterDeviceLoading.value = true
-  filterDeviceKeyword.value = query
-  try {
-    const params: any = { page: 1, page_size: 100 }
-    if (query) params.search = query
-    filterDeviceOptions.value = unwrapList(await getDevices(params)).list
-  } catch {
-    filterDeviceOptions.value = []
-  } finally {
-    filterDeviceLoading.value = false
-  }
-}
-
-// 设备筛选变化 → 自动刷新点位列表
-const onFilterDeviceChange = () => {
-  page.value = 1
-  fetchTags()
 }
 
 // ── 全局点位列表（跨设备分页） ──
@@ -120,7 +98,8 @@ const fetchTags = async () => {
       page: page.value,
       page_size: pageSize.value
     }
-    if (filterDeviceIds.value.length) params.device_ids = filterDeviceIds.value.join(',')
+    if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
+    if (selectedIds.value.length) params.device_ids = selectedIds.value.join(',')
     if (searchKeyword.value.trim()) params.search = searchKeyword.value.trim()
     const res = await getAllTags(params)
     const { list: l, total: t } = unwrapList(res)
@@ -142,6 +121,17 @@ const onSizeChange = (s: number) => {
   page.value = 1
   fetchTags()
 }
+
+// 级联框搜索
+const onCascadeSearch = () => {
+  page.value = 1
+  fetchTags()
+}
+// 级联框选中的设备变化 → 自动刷新点位列表
+watch(selectedIds, () => {
+  page.value = 1
+  fetchTags()
+})
 
 // 关键词搜索
 const onKeywordSearch = () => {
@@ -207,7 +197,7 @@ const openCreate = () => {
   dialogTitle.value = '新增点位'
   Object.assign(form, emptyForm())
   // 默认归属设备：筛选框选中的第一个设备
-  dialogDeviceId.value = filterDeviceIds.value.length ? filterDeviceIds.value[0] : undefined
+  dialogDeviceId.value = selectedIds.value.length ? selectedIds.value[0] : undefined
   dialogVisible.value = true
   if (devices.value.length) {
     dialogDeviceOptions.value = devices.value
@@ -285,14 +275,13 @@ import { saveBlob } from '@/utils/modbus'
 const exportLoading = ref(false)
 const doExport = async () => {
   // 优先导出级联选中的设备，否则提示选择
-  if (!filterDeviceIds.value.length) {
+  if (!selectedIds.value.length) {
     ElMessage.warning('请先选择要导出的设备')
     return
   }
   exportLoading.value = true
   try {
-    // 逐设备导出合并（或导出第一个选中设备）
-    const did = filterDeviceIds.value[0]
+    const did = selectedIds.value[0]
     const res: any = await exportTagsCsv(did)
     const deviceName = devices.value.find((d) => d.id === did)?.name || 'device'
     saveBlob(res, `tags_${deviceName}_${new Date().toISOString().slice(0, 10)}.csv`)
@@ -347,32 +336,19 @@ watch(dialogDeviceId, (newId) => {
 
 onMounted(() => {
   fetchDevices()
-  remoteSearchFilterDevices('')
   fetchTags()
 })
 </script>
 
 <template>
   <ContentWrap title="采集点位">
-    <!-- 工具栏：设备筛选 + 关键词搜索 + 操作按钮 -->
+    <!-- 组织架构级联筛选 -->
+    <div class="mb-16px">
+      <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="onCascadeSearch" />
+    </div>
+
+    <!-- 关键词搜索 + 操作工具栏 -->
     <div class="flex items-center mb-12px flex-wrap gap-8px">
-      <ElSelect
-        v-model="filterDeviceIds"
-        multiple
-        filterable
-        remote
-        :remote-method="remoteSearchFilterDevices"
-        :loading="filterDeviceLoading"
-        placeholder="选择设备筛选"
-        clearable
-        collapse-tags
-        collapse-tags-tooltip
-        style="min-width: 240px; max-width: 400px"
-        @change="onFilterDeviceChange"
-        @clear="onFilterDeviceChange"
-      >
-        <ElOption v-for="d in filterDeviceOptions" :key="d.id" :label="d.name" :value="d.id" />
-      </ElSelect>
       <ElInput
         v-model="searchKeyword"
         placeholder="搜索点位名称"
