@@ -16,6 +16,10 @@ from app.engine.modbus_codec import get_register_count, decode_value
 from app.engine.shared_buffer import write_buffer, ws_pusher
 
 
+class ConnectError(Exception):
+    """连接层失败（区别于 Modbus 应用层异常），需冒泡到协程做离线/重连处理。"""
+
+
 # ═══════════════════════════════════════════════════
 # WriteBuffer — 批量写入缓冲
 # ModbusEngineV2 — 异步采集引擎
@@ -45,6 +49,10 @@ class ModbusEngineV2:
         self._running = False
         self._live_values: dict[str, dict] = {}
         self._device_states: dict[int, dict] = {}  # device_id -> {status, error, consecutive_failures}
+        # 共享连接池：按 (host, port) 复用单条 TCP 连接，避免单连接类从机被并发连接踢掉
+        self._clients: dict[tuple, object] = {}
+        self._client_locks: dict[tuple, "asyncio.Lock"] = {}
+        self._conn_lock: Optional["asyncio.Lock"] = None  # 在事件循环内创建
 
     def start(self):
         if self._running:
@@ -91,6 +99,7 @@ class ModbusEngineV2:
 
     async def _async_start(self):
         """加载所有设备并启动采集协程。"""
+        self._conn_lock = asyncio.Lock()
         db = SessionLocal()
         try:
             devices = db.query(Device).filter(Device.enabled == True).all()
@@ -104,6 +113,9 @@ class ModbusEngineV2:
         # 之后 reload_device 无法动态启动新设备任务。
         while self._running:
             await asyncio.sleep(1)
+
+        # 引擎停止：关闭所有共享连接
+        await self._close_all_clients()
 
     def _start_device_task(self, device: Device):
         device_id = device.id
@@ -158,15 +170,9 @@ class ModbusEngineV2:
 
     async def _device_coroutine(self, device: Device):
         """单个设备的采集协程。"""
-        from pymodbus.client import AsyncModbusTcpClient
-
         device_id = device.id
         device_name = device.name
         state = self._device_states[device_id]
-        client = AsyncModbusTcpClient(
-            host=device.host, port=device.port,
-            timeout=device.timeout, retries=device.retries,
-        )
 
         logger.info(f"[采集] 设备 {device_name}(ID={device_id}) 采集协程启动 → {device.host}:{device.port} slave={device.slave_id}")
 
@@ -174,33 +180,8 @@ class ModbusEngineV2:
 
         while self._running:
             try:
-                # 连接
-                if not client.connected:
-                    logger.debug(f"[采集] 设备 {device_name}(ID={device_id}) 正在连接 {device.host}:{device.port}...")
-                    connected = await client.connect()
-                    if not connected:
-                        state["consecutive_failures"] += 1
-                        self._update_status(device_id, "error", "连接失败")
-
-                        if state["was_online"]:
-                            self._mark_tags_offline(device_id)
-                            state["was_online"] = False
-
-                        if state["consecutive_failures"] == self.OFFLINE_ALARM_THRESHOLD:
-                            self._trigger_disconnect_alarm(device_id)
-
-                        if state["consecutive_failures"] >= self.MAX_CONSECUTIVE_FAILURES:
-                            self._auto_disable(device_id, f"连续 {state['consecutive_failures']} 次连接失败")
-                            break
-
-                        sleep_time = min(backoff, self.BACKOFF_MAX)
-                        backoff *= self.BACKOFF_MULTIPLIER
-                        await asyncio.sleep(sleep_time)
-                        continue
-
-                # 采集
-                logger.debug(f"[采集] 设备 {device_name}(ID={device_id}) 开始本轮采集 ({len(tags) if 'tags' in dir() else '?'} 点位)")
-                await self._poll_device_async(device_id, client, device.slave_id)
+                # 采集（共享连接池 + 串行锁 + 断线重连由引擎内部处理）
+                read_ok = await self._poll_device_async(device_id, device)
 
                 # 恢复
                 if state["consecutive_failures"] > 0:
@@ -211,10 +192,38 @@ class ModbusEngineV2:
                 state["consecutive_failures"] = 0
                 backoff = self.BACKOFF_BASE
                 state["was_online"] = True
-                self._update_status(device_id, "online", None)
+                if read_ok is False:
+                    # 连接正常，但本轮未读取到任何点位数据：区分「在线无数据」状态
+                    self._update_status(
+                        device_id, "no-data",
+                        "连接正常，但本轮未读取到任何点位数据（请检查寄存器地址/功能码/从机ID配置）",
+                    )
+                else:
+                    self._update_status(device_id, "online", None)
 
             except asyncio.CancelledError:
                 break
+            except ConnectError as e:
+                # 连接层失败：视为离线/错误，进入退避
+                logger.error(f"Device {device_id} connect error: {e}")
+                state["consecutive_failures"] += 1
+                self._update_status(device_id, "error", str(e))
+
+                if state["was_online"]:
+                    self._mark_tags_offline(device_id)
+                    state["was_online"] = False
+
+                if state["consecutive_failures"] == self.OFFLINE_ALARM_THRESHOLD:
+                    self._trigger_disconnect_alarm(device_id)
+
+                if state["consecutive_failures"] >= self.MAX_CONSECUTIVE_FAILURES:
+                    self._auto_disable(device_id, f"连续 {state['consecutive_failures']} 次连接失败")
+                    break
+
+                sleep_time = min(backoff, self.BACKOFF_MAX)
+                backoff *= self.BACKOFF_MULTIPLIER
+                await asyncio.sleep(sleep_time)
+                continue
             except Exception as e:
                 logger.error(f"Device {device_id} poll error: {e}")
                 state["consecutive_failures"] += 1
@@ -231,11 +240,6 @@ class ModbusEngineV2:
                     self._auto_disable(device_id, f"连续 {state['consecutive_failures']} 次异常: {e}")
                     break
 
-                try:
-                    client.close()
-                except Exception:
-                    pass
-
                 sleep_time = min(backoff, self.BACKOFF_MAX)
                 backoff *= self.BACKOFF_MULTIPLIER
                 await asyncio.sleep(sleep_time)
@@ -246,10 +250,6 @@ class ModbusEngineV2:
             await asyncio.sleep(device.poll_interval)
 
         # 清理
-        try:
-            client.close()
-        except Exception:
-            pass
         self._tasks.pop(device_id, None)
         self._device_states.pop(device_id, None)
         # 清理实时缓存
@@ -258,23 +258,45 @@ class ModbusEngineV2:
         for k in keys_to_remove:
             del self._live_values[k]
 
-    async def _poll_device_async(self, device_id: int, client, slave_id: int):
-        """异步采集单个设备的所有点位。"""
+    async def _poll_device_async(self, device_id: int, device: Device) -> Optional[bool]:
+        """异步采集单个设备的所有点位。
+
+        使用 (host, port) 共享连接 + 串行锁 + 断线重连，避免单连接类从机被并发踢掉。
+
+        返回：
+          True  - 本轮至少成功读取到一组寄存器（即真正读到数据）
+          False - 设备有配置点位，但全部读取返回空（连接正常却读不到数据）
+          None  - 设备无可用点位（不纳入「在线无数据」判定）
+        连接失败会抛 ConnectError，由协程层做离线/重连处理。
+        """
         db = SessionLocal()
         try:
+            # 获取共享连接（连接失败会抛 ConnectError 冒泡到协程）
+            client, lock = await self._get_client(device)
+
             tags = db.query(DeviceTag).filter(
                 DeviceTag.device_id == device_id, DeviceTag.enabled == True,
             ).all()
 
             groups = self._group_tags(tags)
+
+            if not groups:
+                # 无可用点位，不纳入「在线无数据」判定
+                return None
+
             logger.debug(f"[采集] 设备ID={device_id}: {len(tags)} 个点位, {len(groups)} 组读取请求")
 
+            read_any = False
             for (fc, start_addr, count), tag_list in groups.items():
                 try:
-                    raw_values = await self._read_registers_async(client, slave_id, fc, start_addr, count)
+                    raw_values = await self._read_with_reconnect(
+                        client, lock, device.slave_id, fc, start_addr, count,
+                        device.host, device.port,
+                    )
                     if raw_values is None:
-                        logger.warning(f"[采集] 设备ID={device_id}: FC={fc} addr={start_addr}+{count} 读取返回空")
+                        logger.warning(f"[采集] 设备ID={device_id}: FC={fc} addr={start_addr}+{count} 读取返回空（应用层异常，可能地址/功能码错误）")
                         continue
+                    read_any = True
 
                     for tag in tag_list:
                         offset = tag.address - start_addr
@@ -320,15 +342,22 @@ class ModbusEngineV2:
                             from app.services.alarm_service import alarm_service
                             alarm_service.evaluate(device_id, tag.id, tag.name, processed)
 
+                except ConnectError:
+                    # 连接失败：向上抛出，由协程做离线/重连处理
+                    raise
                 except Exception as e:
                     logger.error(f"[采集] 设备ID={device_id}: FC={fc} addr={start_addr} 读取异常: {e}")
 
             # 更新最后采集时间
-            device = db.query(Device).filter(Device.id == device_id).first()
-            if device:
-                device.last_poll_at = datetime.now(timezone.utc)
+            dev_row = db.query(Device).filter(Device.id == device_id).first()
+            if dev_row:
+                dev_row.last_poll_at = datetime.now(timezone.utc)
             db.commit()
 
+            return read_any
+
+        except ConnectError:
+            raise
         except Exception as e:
             logger.error(f"[采集] 设备ID={device_id} 采集过程异常: {e}")
             db.rollback()
@@ -336,7 +365,13 @@ class ModbusEngineV2:
             db.close()
 
     async def _read_registers_async(self, client, slave_id: int, fc: str, address: int, count: int):
-        """异步读取寄存器。"""
+        """异步读取寄存器。
+
+        连接层异常（断线/未连接/超时）重新抛出，由调用方重连重试；
+        Modbus 应用层异常（非法地址/功能，从机回 isError）返回 None，不重试。
+        """
+        from pymodbus.exceptions import ModbusIOException, ConnectionException
+
         try:
             if fc == FunctionCode.COIL:
                 result = await client.read_coils(address, count=count, slave=slave_id)
@@ -359,9 +394,57 @@ class ModbusEngineV2:
                     return None
                 return result.registers
             return None
+        except (ModbusIOException, ConnectionException, OSError, asyncio.TimeoutError):
+            # 连接层失败：重新抛出，由 _read_with_reconnect 重连后重试
+            raise
         except Exception as e:
             logger.error(f"Async read error: FC={fc}, addr={address}: {e}")
             return None
+
+    async def _get_client(self, device: Device):
+        """按 (host, port) 获取或创建共享连接，并发安全。"""
+        from pymodbus.client import AsyncModbusTcpClient
+
+        key = (device.host, device.port)
+        async with self._conn_lock:
+            client = self._clients.get(key)
+            if client is None:
+                client = AsyncModbusTcpClient(
+                    host=device.host, port=device.port,
+                    timeout=device.timeout, retries=device.retries,
+                )
+                self._clients[key] = client
+                self._client_locks[key] = asyncio.Lock()
+            lock = self._client_locks[key]
+        return client, lock
+
+    async def _read_with_reconnect(self, client, lock, slave_id, fc, address, count, host, port):
+        """在连接锁内读取；连不上或读中掉线则重连一次再试。"""
+        async with lock:
+            if not client.connected:
+                if not await client.connect():
+                    raise ConnectError(f"connect {host}:{port} failed")
+            try:
+                return await self._read_registers_async(client, slave_id, fc, address, count)
+            except (ModbusIOException, ConnectionException, OSError, asyncio.TimeoutError) as e:
+                logger.warning(f"[采集] {host}:{port} 读取连接异常({e})，重连一次")
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                if not await client.connect():
+                    raise ConnectError(f"reconnect {host}:{port} failed")
+                return await self._read_registers_async(client, slave_id, fc, address, count)
+
+    async def _close_all_clients(self):
+        """关闭所有共享连接（引擎停止时调用）。"""
+        for key, client in list(self._clients.items()):
+            try:
+                await client.close()
+            except Exception:
+                pass
+        self._clients.clear()
+        self._client_locks.clear()
 
     def _group_tags(self, tags: list[DeviceTag]) -> dict:
         """按功能码和连续地址分组。"""
@@ -521,53 +604,164 @@ class ModbusEngineV2:
                 result[tag_id] = val
         return result
 
-    def write_value(self, device_id: int, tag: DeviceTag, value) -> bool:
-        """写入值（同步，通过事件循环调度）。"""
-        # 简化实现：直接创建同步连接写入
+    async def _write_via_shared_client(self, device: Device, tag: DeviceTag, value) -> bool:
+        """通过共享连接池异步写值（与读共用同一连接 + 同一把锁）。
+
+        避免单连接真机写操作新建第 2 条连接把读连接踢掉。
+        连接失败抛 ConnectError；写中掉线重连一次再试。
+        """
+        from pymodbus.payload import BinaryPayloadBuilder
+        from pymodbus.constants import Endian
+        from pymodbus.exceptions import ModbusIOException, ConnectionException
+
+        client, lock = await self._get_client(device)
+        slave_id = device.slave_id
+
+        # 构造待写报文（同步、快速）
+        try:
+            if tag.function_code == FunctionCode.COIL:
+                async def _do_write():
+                    return await client.write_coil(tag.address, bool(value), slave=slave_id)
+            elif tag.function_code == FunctionCode.HOLDING_REGISTER:
+                if tag.data_type in ("int16", "uint16", "bcd", "bool"):
+                    iv = int(value)
+                    async def _do_write():
+                        return await client.write_register(tag.address, iv, slave=slave_id)
+                elif tag.data_type == "int32":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_32bit_int(int(value))
+                    regs = encoder.to_registers()
+                    async def _do_write():
+                        return await client.write_registers(tag.address, regs, slave=slave_id)
+                elif tag.data_type == "uint32":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_32bit_uint(int(value))
+                    regs = encoder.to_registers()
+                    async def _do_write():
+                        return await client.write_registers(tag.address, regs, slave=slave_id)
+                elif tag.data_type == "float32":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_32bit_float(float(value))
+                    regs = encoder.to_registers()
+                    async def _do_write():
+                        return await client.write_registers(tag.address, regs, slave=slave_id)
+                elif tag.data_type == "float64":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_64bit_float(float(value))
+                    regs = encoder.to_registers()
+                    async def _do_write():
+                        return await client.write_registers(tag.address, regs, slave=slave_id)
+                else:
+                    return False
+            else:
+                # 输入寄存器 / 离散输入只读
+                return False
+        except Exception as e:
+            logger.error(f"[写] device {device.id} tag {tag.name} 编码失败: {e}")
+            return False
+
+        async def _ensure_connected():
+            if not client.connected:
+                if not await client.connect():
+                    raise ConnectError(f"connect {device.host}:{device.port} failed")
+
+        async with lock:
+            try:
+                await _ensure_connected()
+                result = await _do_write()
+                if result is not None and getattr(result, "isError", None) and result.isError():
+                    logger.warning(f"[写] device {device.id} tag {tag.name} 从机返回错误: {result}")
+                    return False
+                return True
+            except (ModbusIOException, ConnectionException, OSError, asyncio.TimeoutError) as e:
+                logger.warning(f"[写] {device.host}:{device.port} 写入连接异常({e})，重连一次")
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                try:
+                    await _ensure_connected()
+                    result = await _do_write()
+                    if result is not None and getattr(result, "isError", None) and result.isError():
+                        return False
+                    return True
+                except (ModbusIOException, ConnectionException, OSError, asyncio.TimeoutError) as e2:
+                    raise ConnectError(f"write reconnect {device.host}:{device.port} failed: {e2}")
+            except ConnectError:
+                raise
+            except Exception as e:
+                logger.error(f"[写] device {device.id} tag {tag.name} 写入异常: {e}")
+                return False
+
+    def _write_via_sync_client(self, device: Device, tag: DeviceTag, value) -> bool:
+        """引擎未运行时的退回实现（一次性同步连接），保证仍可写。"""
         from pymodbus.client import ModbusTcpClient
+        from pymodbus.payload import BinaryPayloadBuilder
+        from pymodbus.constants import Endian
+        client = ModbusTcpClient(host=device.host, port=device.port, timeout=3, retries=1)
+        if not client.connect():
+            return False
+        try:
+            if tag.function_code == FunctionCode.COIL:
+                result = client.write_coil(tag.address, bool(value), slave=device.slave_id)
+            elif tag.function_code == FunctionCode.HOLDING_REGISTER:
+                if tag.data_type in ("int16", "uint16", "bcd", "bool"):
+                    result = client.write_register(tag.address, int(value), slave=device.slave_id)
+                elif tag.data_type == "int32":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_32bit_int(int(value))
+                    result = client.write_registers(tag.address, encoder.to_registers(), slave=device.slave_id)
+                elif tag.data_type == "uint32":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_32bit_uint(int(value))
+                    result = client.write_registers(tag.address, encoder.to_registers(), slave=device.slave_id)
+                elif tag.data_type == "float32":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_32bit_float(float(value))
+                    result = client.write_registers(tag.address, encoder.to_registers(), slave=device.slave_id)
+                elif tag.data_type == "float64":
+                    encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
+                    encoder.add_64bit_float(float(value))
+                    result = client.write_registers(tag.address, encoder.to_registers(), slave=device.slave_id)
+                else:
+                    return False
+            else:
+                return False
+            return not result.isError()
+        finally:
+            client.close()
+
+    def write_value(self, device_id: int, tag: DeviceTag, value) -> bool:
+        """写入值：复用共享连接池（与读同连接同锁），避免单连接真机写踢读。
+
+        同步 API（由 FastAPI 线程池调用），内部通过事件循环线程安全地执行异步写。
+        引擎未运行时退回一次性同步连接，保证仍可写。
+        """
         db = SessionLocal()
         try:
             device = db.query(Device).filter(Device.id == device_id).first()
             if not device:
                 return False
-            client = ModbusTcpClient(host=device.host, port=device.port, timeout=3, retries=1)
-            if not client.connect():
-                return False
-            try:
-                if tag.function_code == FunctionCode.COIL:
-                    result = client.write_coil(tag.address, bool(value), slave=device.slave_id)
-                elif tag.function_code == FunctionCode.HOLDING_REGISTER:
-                    from pymodbus.payload import BinaryPayloadBuilder
-                    from pymodbus.constants import Endian
-                    if tag.data_type in ("int16", "uint16", "bcd", "bool"):
-                        result = client.write_register(tag.address, int(value), slave=device.slave_id)
-                    elif tag.data_type in ("int32", "uint32"):
-                        encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
-                        if tag.data_type == "int32":
-                            encoder.add_32bit_int(int(value))
-                        else:
-                            encoder.add_32bit_uint(int(value))
-                        result = client.write_registers(tag.address, encoder.to_registers(), slave=device.slave_id)
-                    elif tag.data_type == "float32":
-                        encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
-                        encoder.add_32bit_float(float(value))
-                        result = client.write_registers(tag.address, encoder.to_registers(), slave=device.slave_id)
-                    elif tag.data_type == "float64":
-                        encoder = BinaryPayloadBuilder(byteorder=Endian.BIG, wordorder=Endian.BIG)
-                        encoder.add_64bit_float(float(value))
-                        result = client.write_registers(tag.address, encoder.to_registers(), slave=device.slave_id)
-                    else:
-                        return False
-                else:
-                    return False
-                return not result.isError()
-            finally:
-                client.close()
-        except Exception as e:
-            logger.error(f"Write error: {e}")
-            return False
         finally:
             db.close()
+
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            # 引擎未运行：退回一次性同步连接（原行为）
+            return self._write_via_sync_client(device, tag, value)
+
+        try:
+            timeout = (device.timeout or 3) * ((device.retries or 1) + 2) + 5
+            fut = asyncio.run_coroutine_threadsafe(
+                self._write_via_shared_client(device, tag, value), loop
+            )
+            return fut.result(timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.error(f"[写] device {device_id} 写入超时（{timeout}s），连接可能被占用")
+            return False
+        except Exception as e:
+            logger.error(f"[写] device {device_id} 写入调度失败: {e}")
+            return False
 
     BACKOFF_MULTIPLIER = 2.0  # kept at class end for backward compat
 

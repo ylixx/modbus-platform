@@ -32,13 +32,13 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
-        self._register(websocket, user_id)
+        await self._register(websocket, user_id)
 
     async def register(self, websocket: WebSocket, user_id: int):
         """Register an already-accepted websocket (e.g., after message-based auth)."""
-        self._register(websocket, user_id)
+        await self._register(websocket, user_id)
 
-    def _register(self, websocket: WebSocket, user_id: int):
+    async def _register(self, websocket: WebSocket, user_id: int):
         async with self._lock:
             self._connections.setdefault(user_id, []).append(websocket)
             self._all.append(websocket)

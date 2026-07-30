@@ -297,9 +297,9 @@ def delete_device(device_id: int, request: Request, db: Session = Depends(get_db
 @router.post("/{device_id}/duplicate")
 def duplicate_device(
     device_id: int,
+    request: Request,
     new_name: str = Query(..., max_length=100, description="新设备名称"),
     copy_tags: bool = Query(True, description="是否复制点位"),
-    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("device.write")),
 ):

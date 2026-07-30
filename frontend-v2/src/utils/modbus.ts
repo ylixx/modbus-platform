@@ -34,6 +34,7 @@ export const saveBlob = (res: any, fallbackName: string) => {
 export const deviceStatusType = (s?: string) => {
   if (s === 'online') return 'success'
   if (s === 'error') return 'danger'
+  if (s === 'no-data') return 'warning'
   return 'info'
 }
 
@@ -41,6 +42,7 @@ export const deviceStatusType = (s?: string) => {
 export const deviceStatusText = (s?: string) => {
   if (s === 'online') return '在线'
   if (s === 'error') return '异常'
+  if (s === 'no-data') return '在线无数据'
   return '离线'
 }
 

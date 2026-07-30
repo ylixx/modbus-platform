@@ -19,6 +19,7 @@ class DeviceStatus(str, enum.Enum):
     OFFLINE = "offline"
     ERROR = "error"
     MAINTENANCE = "maintenance"
+    NO_DATA = "no-data"
 
 
 # ── Modbus specific ──

@@ -9,16 +9,16 @@ defineOptions({ name: 'Topology' })
 
 const router = useRouter()
 const devices = ref<any[]>([])
-const filter = ref<'all' | 'online' | 'offline' | 'error'>('all')
+const filter = ref<'all' | 'online' | 'offline' | 'error' | 'no-data'>('all')
 let timer: any = null
 
 // ── 状态相关 ──
 const statusText = (s?: string) =>
-  s === 'online' ? '在线' : s === 'error' ? '异常' : '离线'
+  s === 'online' ? '在线' : s === 'error' ? '异常' : s === 'no-data' ? '在线无数据' : '离线'
 const statusTagType = (s?: string): any =>
-  s === 'online' ? 'success' : s === 'error' ? 'danger' : 'info'
+  s === 'online' ? 'success' : s === 'error' ? 'danger' : s === 'no-data' ? 'warning' : 'info'
 const statusClass = (s?: string) =>
-  s === 'online' ? 'online' : s === 'error' ? 'error' : 'offline'
+  s === 'online' ? 'online' : s === 'error' ? 'error' : s === 'no-data' ? 'no-data' : 'offline'
 
 const protoLabel = (p?: string) =>
   p === 'modbus_tcp' ? 'Modbus TCP' : p === 'modbus_rtu' ? 'Modbus RTU' : p === 'mqtt' ? 'MQTT' : p === 'opc_ua' ? 'OPC-UA' : p || '—'
@@ -28,7 +28,8 @@ const filteredDevices = computed(() =>
 )
 
 const onlineCount = computed(() => devices.value.filter((d) => d.status === 'online').length)
-const offlineCount = computed(() => devices.value.filter((d) => d.status !== 'online' && d.status !== 'error').length)
+const noDataCount = computed(() => devices.value.filter((d) => d.status === 'no-data').length)
+const offlineCount = computed(() => devices.value.filter((d) => d.status === 'offline' || d.status === 'maintenance').length)
 const errorCount = computed(() => devices.value.filter((d) => d.status === 'error').length)
 
 // ── SVG 拓扑连线 ──
@@ -87,12 +88,14 @@ watch([devices, filter], updateLinks, { flush: 'post' })
     <div class="topo-bar">
       <div class="stats">
         <span class="stat"><i class="dot online"></i>在线 <b>{{ onlineCount }}</b></span>
+        <span class="stat"><i class="dot no-data"></i>在线无数据 <b>{{ noDataCount }}</b></span>
         <span class="stat"><i class="dot offline"></i>离线 <b>{{ offlineCount }}</b></span>
         <span class="stat"><i class="dot error"></i>异常 <b>{{ errorCount }}</b></span>
       </div>
       <div class="filters">
         <button :class="['fbtn', { active: filter === 'all' }]" @click="filter = 'all'">全部</button>
         <button :class="['fbtn', { active: filter === 'online' }]" @click="filter = 'online'">在线</button>
+        <button :class="['fbtn', { active: filter === 'no-data' }]" @click="filter = 'no-data'">在线无数据</button>
         <button :class="['fbtn', { active: filter === 'offline' }]" @click="filter = 'offline'">离线</button>
         <button :class="['fbtn', { active: filter === 'error' }]" @click="filter = 'error'">异常</button>
       </div>
@@ -163,6 +166,7 @@ watch([devices, filter], updateLinks, { flush: 'post' })
   vertical-align: middle;
 }
 .dot.online { background: #67c23a; }
+.dot.no-data { background: #e6a23c; }
 .dot.offline { background: #909399; }
 .dot.error { background: #f56c6c; }
 
@@ -269,6 +273,7 @@ watch([devices, filter], updateLinks, { flush: 'post' })
   border-radius: 50%;
 }
 .node-dot.online { background: #67c23a; }
+.node-dot.no-data { background: #e6a23c; }
 .node-dot.offline { background: #909399; }
 .node-dot.error { background: #f56c6c; }
 
