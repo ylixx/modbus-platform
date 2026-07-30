@@ -117,21 +117,32 @@ const toJSON = (): object => {
   return canvas?.toJSON(['_widgetType', '_bindable', '_bindTarget', '_bindProp', '_bindDeviceId', '_bindTagId', '_bindTagName']) || {}
 }
 
-/** 添加图元对象 */
+/** 添加图元对象（直接传入 Fabric 实例或 JSON 对象） */
 const addWidget = (fabricObj: any, left?: number, top?: number) => {
   if (!canvas) return
-  const obj = fabric.util.enlivenObjects([fabricObj])
-  // fabric.util.enlivenObjects returns a Promise in fabric v6
-  if (obj instanceof Promise) {
-    obj.then((objects) => {
-      objects.forEach((o: any) => {
-        if (left != null) o.set({ left })
-        if (top != null) o.set({ top })
-        canvas!.add(o)
-        canvas!.setActiveObject(o)
-        canvas!.renderAll()
+
+  // 如果已经是 Fabric 实例（有 constructor.name 含 Fabric），直接用
+  const isFabricInstance = fabricObj && typeof fabricObj.set === 'function' && fabricObj.canvas !== undefined
+
+  const doAdd = (obj: any) => {
+    if (left != null) obj.set({ left })
+    if (top != null) obj.set({ top })
+    canvas!.add(obj)
+    canvas!.setActiveObject(obj)
+    canvas!.renderAll()
+  }
+
+  if (isFabricInstance) {
+    doAdd(fabricObj)
+  } else {
+    // JSON 序列化对象：用 enlivenObjects 反序列化
+    const arr = Array.isArray(fabricObj) ? fabricObj : [fabricObj]
+    const result = fabric.util.enlivenObjects(arr)
+    if (result instanceof Promise) {
+      result.then((objects: any[]) => {
+        objects.forEach((o: any) => doAdd(o))
       })
-    })
+    }
   }
 }
 
