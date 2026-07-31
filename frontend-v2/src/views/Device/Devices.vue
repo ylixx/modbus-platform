@@ -9,7 +9,9 @@ import {
   ElTag,
   ElInput,
   ElPagination,
-  ElDialog,
+  ElDrawer,
+  ElTabs,
+  ElTabPane,
   ElForm,
   ElFormItem,
   ElSelect,
@@ -212,6 +214,7 @@ const protocolLabel = (p?: string) => protocols.find((pr) => pr.value === p)?.la
 // ── 表单 ──
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增设备')
+const formTab = ref('basic') // basic | connection | mqtt_publish | advanced
 const formRef = ref()
 const form = reactive<any>({
   id: null,
@@ -315,6 +318,7 @@ const openCreate = () => {
     description: ''
   })
   dialogVisible.value = true
+  formTab.value = 'basic'
 }
 const openEdit = (row: any) => {
   dialogTitle.value = '编辑设备'
@@ -353,6 +357,7 @@ const openEdit = (row: any) => {
     description: row.description || ''
   })
   dialogVisible.value = true
+  formTab.value = 'basic'
 }
 const submit = async () => {
   await formRef.value?.validate()
@@ -588,197 +593,201 @@ onMounted(() => {
       />
     </div>
 
-    <!-- 新增/编辑对话框 -->
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="660px" top="5vh" @close="formRef?.resetFields()">
+    <!-- 新增/编辑抽屉 -->
+    <ElDrawer v-model="dialogVisible" :title="dialogTitle" size="560px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="100px">
-        <!-- 基本信息 -->
-        <ElFormItem label="设备名称" prop="name">
-          <ElInput v-model="form.name" placeholder="请输入设备名称" />
-        </ElFormItem>
-        <ElFormItem label="协议" prop="protocol">
-          <ElSelect v-model="form.protocol" class="w-full" :disabled="!!form.id">
-            <ElOption
-              v-for="p in protocols"
-              :key="p.value"
-              :label="`${p.icon} ${p.label}`"
-              :value="p.value"
-            />
-          </ElSelect>
-        </ElFormItem>
-
-        <!-- Modbus TCP -->
-        <template v-if="isModbusTcp">
-          <ElDivider content-position="left">Modbus TCP 连接</ElDivider>
-          <ElFormItem label="主机地址" prop="host">
-            <ElInput v-model="form.host" placeholder="192.168.1.100" />
-          </ElFormItem>
-          <ElFormItem label="端口" prop="port">
-            <ElInputNumber v-model="form.port" :min="1" :max="65535" class="w-full" />
-          </ElFormItem>
-          <ElFormItem label="从站地址" prop="slave_id">
-            <ElInputNumber v-model="form.slave_id" :min="0" :max="255" class="w-full" />
-          </ElFormItem>
-        </template>
-
-        <!-- Modbus RTU -->
-        <template v-if="isModbusRtu">
-          <ElDivider content-position="left">Modbus RTU 连接</ElDivider>
-          <ElFormItem label="串口" prop="serial_port">
-            <ElInput v-model="form.serial_port" placeholder="/dev/ttyUSB0 或 COM3" />
-          </ElFormItem>
-          <ElFormItem label="波特率">
-            <ElSelect v-model="form.baudrate" class="w-full">
-              <ElOption :label="1200" :value="1200" />
-              <ElOption :label="2400" :value="2400" />
-              <ElOption :label="4800" :value="4800" />
-              <ElOption :label="9600" :value="9600" />
-              <ElOption :label="19200" :value="19200" />
-              <ElOption :label="38400" :value="38400" />
-              <ElOption :label="57600" :value="57600" />
-              <ElOption :label="115200" :value="115200" />
-            </ElSelect>
-          </ElFormItem>
-          <ElFormItem label="校验位">
-            <ElSelect v-model="form.parity" class="w-full">
-              <ElOption label="无 (None)" value="none" />
-              <ElOption label="偶校验 (Even)" value="even" />
-              <ElOption label="奇校验 (Odd)" value="odd" />
-            </ElSelect>
-          </ElFormItem>
-          <ElFormItem label="数据位">
-            <ElSelect v-model="form.data_bits" class="w-full">
-              <ElOption :label="7" :value="7" />
-              <ElOption :label="8" :value="8" />
-            </ElSelect>
-          </ElFormItem>
-          <ElFormItem label="停止位">
-            <ElSelect v-model="form.stop_bits" class="w-full">
-              <ElOption :label="1" :value="1" />
-              <ElOption :label="2" :value="2" />
-            </ElSelect>
-          </ElFormItem>
-          <ElFormItem label="从站地址" prop="slave_id">
-            <ElInputNumber v-model="form.slave_id" :min="0" :max="255" class="w-full" />
-          </ElFormItem>
-        </template>
-
-        <!-- MQTT -->
-        <template v-if="isMqtt">
-          <ElDivider content-position="left">MQTT 连接</ElDivider>
-          <ElFormItem label="Broker 地址" prop="mqtt_broker">
-            <ElInput v-model="form.mqtt_broker" placeholder="mqtt://192.168.1.100:1883" />
-          </ElFormItem>
-          <ElFormItem label="订阅 Topic">
-            <ElInput v-model="form.mqtt_topic_prefix" placeholder="devices/sensor/telemetry" />
-          </ElFormItem>
-          <ElFormItem label="Client ID">
-            <ElInput v-model="form.mqtt_client_id" placeholder="留空自动生成" />
-          </ElFormItem>
-          <div class="flex gap-8px">
-            <ElFormItem label="用户名" class="flex-grow">
-              <ElInput v-model="form.mqtt_username" placeholder="可选" />
+        <ElTabs v-model="formTab">
+          <!-- Tab 1: 基本信息 -->
+          <ElTabPane label="基本信息" name="basic">
+            <ElFormItem label="设备名称" prop="name">
+              <ElInput v-model="form.name" placeholder="请输入设备名称" />
             </ElFormItem>
-            <ElFormItem label="密码" class="flex-grow">
-              <ElInput v-model="form.mqtt_password" type="password" placeholder="可选" show-password />
-            </ElFormItem>
-          </div>
-          <div class="flex gap-8px">
-            <ElFormItem label="启用TLS">
-              <ElSwitch v-model="form.mqtt_use_tls" />
-            </ElFormItem>
-            <ElFormItem label="ThingsBoard网关">
-              <ElSwitch v-model="form.mqtt_is_gateway" />
-            </ElFormItem>
-          </div>
-
-          <ElDivider content-position="left">数据发布</ElDivider>
-          <ElFormItem label="启用发布">
-            <ElSwitch v-model="form.mqtt_publish_enabled" />
-            <div class="text-12px text-gray-400 ml-8px">开启后将采集到的数据定时发布到指定Topic</div>
-          </ElFormItem>
-          <template v-if="form.mqtt_publish_enabled">
-            <ElFormItem label="发布Topic">
-              <ElInput v-model="form.mqtt_publish_topic" placeholder="如：data/${device_name} 或 v1/devices/me/telemetry" />
-            </ElFormItem>
-            <div class="flex gap-8px">
-              <ElFormItem label="发布间隔(秒)">
-                <ElInputNumber v-model="form.mqtt_publish_interval" :min="1" :max="3600" :controls="false" style="width: 120px" />
-              </ElFormItem>
-              <ElFormItem label="QoS">
-                <ElSelect v-model="form.mqtt_publish_qos" style="width: 160px">
-                  <ElOption label="0 - 最多一次" :value="0" />
-                  <ElOption label="1 - 至少一次" :value="1" />
-                  <ElOption label="2 - 恰好一次" :value="2" />
-                </ElSelect>
-              </ElFormItem>
-            </div>
-            <ElFormItem label="格式">
-              <ElSelect v-model="form.mqtt_payload_format" style="width: 200px">
-                <ElOption label="JSON" value="json" />
-                <ElOption label="Plain" value="plain" />
-                <ElOption label="ThingsBoard" value="thingsboard" />
+            <ElFormItem label="协议" prop="protocol">
+              <ElSelect v-model="form.protocol" class="w-full" :disabled="!!form.id">
+                <ElOption
+                  v-for="p in protocols"
+                  :key="p.value"
+                  :label="`${p.icon} ${p.label}`"
+                  :value="p.value"
+                />
               </ElSelect>
             </ElFormItem>
-            <ElFormItem label="发布模板">
-              <ElInput
-                v-model="form.mqtt_payload_template"
-                type="textarea"
-                :rows="4"
-                placeholder="留空使用默认格式。支持占位符：${device_id} ${device_name} ${timestamp} ${values_json}"
-                class="font-mono"
+            <ElFormItem label="归属组织">
+              <ElTreeSelect
+                v-model="form.org_node_id"
+                :data="orgTree"
+                node-key="id"
+                :props="{ label: 'name', children: 'children' }"
+                check-strictly
+                clearable
+                placeholder="请选择设备所属组织节点"
+                class="w-full"
               />
             </ElFormItem>
-          </template>
-        </template>
+            <ElFormItem label="描述">
+              <ElInput v-model="form.description" type="textarea" :rows="2" />
+            </ElFormItem>
+          </ElTabPane>
 
-        <!-- OPC-UA -->
-        <template v-if="isOpcua">
-          <ElDivider content-position="left">OPC-UA 连接</ElDivider>
-          <ElFormItem label="Endpoint URL" prop="opc_endpoint">
-            <ElInput v-model="form.opc_endpoint" placeholder="opc.tcp://192.168.1.100:4840" />
-          </ElFormItem>
-          <ElFormItem label="Node ID">
-            <ElInput v-model="form.opc_namespace" placeholder="ns=2 (namespace number)" />
-          </ElFormItem>
-          <ElFormItem label="安全模式">
-            <ElSelect v-model="form.opc_security_mode" class="w-full">
-              <ElOption label="None" value="None" />
-              <ElOption label="Basic256" value="Basic256" />
-              <ElOption label="Basic256Sha256" value="Basic256Sha256" />
-            </ElSelect>
-          </ElFormItem>
-        </template>
+          <!-- Tab 2: 连接参数 -->
+          <ElTabPane label="连接参数" name="connection">
+            <!-- Modbus TCP -->
+            <template v-if="isModbusTcp">
+              <ElFormItem label="主机地址" prop="host">
+                <ElInput v-model="form.host" placeholder="192.168.1.100" />
+              </ElFormItem>
+              <ElFormItem label="端口" prop="port">
+                <ElInputNumber v-model="form.port" :min="1" :max="65535" class="w-full" />
+              </ElFormItem>
+              <ElFormItem label="从站地址" prop="slave_id">
+                <ElInputNumber v-model="form.slave_id" :min="0" :max="255" class="w-full" />
+              </ElFormItem>
+            </template>
 
-        <!-- 通用设置 -->
-        <ElDivider content-position="left">通用设置</ElDivider>
-        <ElFormItem label="采集间隔(秒)">
-          <ElInputNumber v-model="form.poll_interval" :min="1" :max="3600" class="w-full" />
-        </ElFormItem>
-        <ElFormItem label="化验对比">
-          <ElSwitch v-model="form.has_lab_data" />
-          <span class="text-12px text-gray-400 ml-8px">启用后可录入化验数据并与采集值对比</span>
-        </ElFormItem>
-        <ElFormItem label="归属组织">
-          <ElTreeSelect
-            v-model="form.org_node_id"
-            :data="orgTree"
-            node-key="id"
-            :props="{ label: 'name', children: 'children' }"
-            check-strictly
-            clearable
-            placeholder="请选择设备所属组织节点"
-            class="w-full"
-          />
-        </ElFormItem>
-        <ElFormItem label="描述">
-          <ElInput v-model="form.description" type="textarea" :rows="2" />
-        </ElFormItem>
+            <!-- Modbus RTU -->
+            <template v-if="isModbusRtu">
+              <ElFormItem label="串口" prop="serial_port">
+                <ElInput v-model="form.serial_port" placeholder="/dev/ttyUSB0 或 COM3" />
+              </ElFormItem>
+              <ElFormItem label="波特率">
+                <ElSelect v-model="form.baudrate" class="w-full">
+                  <ElOption v-for="b in [1200,2400,4800,9600,19200,38400,57600,115200]" :key="b" :label="b" :value="b" />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="校验位">
+                <ElSelect v-model="form.parity" class="w-full">
+                  <ElOption label="无 (None)" value="none" />
+                  <ElOption label="偶校验 (Even)" value="even" />
+                  <ElOption label="奇校验 (Odd)" value="odd" />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="数据位">
+                <ElSelect v-model="form.data_bits" class="w-full">
+                  <ElOption :label="7" :value="7" />
+                  <ElOption :label="8" :value="8" />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="停止位">
+                <ElSelect v-model="form.stop_bits" class="w-full">
+                  <ElOption :label="1" :value="1" />
+                  <ElOption :label="2" :value="2" />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="从站地址" prop="slave_id">
+                <ElInputNumber v-model="form.slave_id" :min="0" :max="255" class="w-full" />
+              </ElFormItem>
+            </template>
+
+            <!-- MQTT 连接 -->
+            <template v-if="isMqtt">
+              <ElFormItem label="Broker 地址" prop="mqtt_broker">
+                <ElInput v-model="form.mqtt_broker" placeholder="mqtt://192.168.1.100:1883" />
+              </ElFormItem>
+              <ElFormItem label="订阅 Topic">
+                <ElInput v-model="form.mqtt_topic_prefix" placeholder="devices/sensor/telemetry" />
+              </ElFormItem>
+              <ElFormItem label="Client ID">
+                <ElInput v-model="form.mqtt_client_id" placeholder="留空自动生成" />
+              </ElFormItem>
+              <div class="flex gap-8px">
+                <ElFormItem label="用户名" class="flex-grow">
+                  <ElInput v-model="form.mqtt_username" placeholder="可选" />
+                </ElFormItem>
+                <ElFormItem label="密码" class="flex-grow">
+                  <ElInput v-model="form.mqtt_password" type="password" placeholder="可选" show-password />
+                </ElFormItem>
+              </div>
+              <div class="flex gap-8px">
+                <ElFormItem label="启用TLS">
+                  <ElSwitch v-model="form.mqtt_use_tls" />
+                </ElFormItem>
+                <ElFormItem label="ThingsBoard网关">
+                  <ElSwitch v-model="form.mqtt_is_gateway" />
+                </ElFormItem>
+              </div>
+            </template>
+
+            <!-- OPC-UA 连接 -->
+            <template v-if="isOpcua">
+              <ElFormItem label="Endpoint URL" prop="opc_endpoint">
+                <ElInput v-model="form.opc_endpoint" placeholder="opc.tcp://192.168.1.100:4840" />
+              </ElFormItem>
+              <ElFormItem label="Node ID">
+                <ElInput v-model="form.opc_namespace" placeholder="ns=2 (namespace number)" />
+              </ElFormItem>
+              <ElFormItem label="安全模式">
+                <ElSelect v-model="form.opc_security_mode" class="w-full">
+                  <ElOption label="None" value="None" />
+                  <ElOption label="Basic256" value="Basic256" />
+                  <ElOption label="Basic256Sha256" value="Basic256Sha256" />
+                </ElSelect>
+              </ElFormItem>
+            </template>
+
+            <ElEmpty v-if="!isModbusTcp && !isModbusRtu && !isMqtt && !isOpcua" description="请先选择协议" :image-size="60" />
+          </ElTabPane>
+
+          <!-- Tab 3: MQTT发布（仅MQTT协议显示） -->
+          <ElTabPane v-if="isMqtt" label="数据发布" name="mqtt_publish">
+            <ElFormItem label="启用发布">
+              <ElSwitch v-model="form.mqtt_publish_enabled" />
+              <span class="text-12px text-gray-400 ml-8px">开启后将采集到的数据定时发布到指定Topic</span>
+            </ElFormItem>
+            <template v-if="form.mqtt_publish_enabled">
+              <ElFormItem label="发布Topic">
+                <ElInput v-model="form.mqtt_publish_topic" placeholder="如：data/${device_name} 或 v1/devices/me/telemetry" />
+              </ElFormItem>
+              <div class="flex gap-8px">
+                <ElFormItem label="发布间隔(秒)">
+                  <ElInputNumber v-model="form.mqtt_publish_interval" :min="1" :max="3600" :controls="false" style="width: 120px" />
+                </ElFormItem>
+                <ElFormItem label="QoS">
+                  <ElSelect v-model="form.mqtt_publish_qos" style="width: 160px">
+                    <ElOption label="0 - 最多一次" :value="0" />
+                    <ElOption label="1 - 至少一次" :value="1" />
+                    <ElOption label="2 - 恰好一次" :value="2" />
+                  </ElSelect>
+                </ElFormItem>
+              </div>
+              <ElFormItem label="格式">
+                <ElSelect v-model="form.mqtt_payload_format" style="width: 200px">
+                  <ElOption label="JSON" value="json" />
+                  <ElOption label="Plain" value="plain" />
+                  <ElOption label="ThingsBoard" value="thingsboard" />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="发布模板">
+                <ElInput
+                  v-model="form.mqtt_payload_template"
+                  type="textarea"
+                  :rows="4"
+                  placeholder="留空使用默认格式。支持占位符：${device_id} ${device_name} ${timestamp} ${values_json}"
+                  class="font-mono"
+                />
+              </ElFormItem>
+            </template>
+          </ElTabPane>
+
+          <!-- Tab 4: 高级选项 -->
+          <ElTabPane label="高级选项" name="advanced">
+            <ElFormItem label="采集间隔(秒)">
+              <ElInputNumber v-model="form.poll_interval" :min="1" :max="3600" class="w-full" />
+            </ElFormItem>
+            <ElFormItem label="化验对比">
+              <ElSwitch v-model="form.has_lab_data" />
+              <span class="text-12px text-gray-400 ml-8px">启用后可录入化验数据并与采集值对比</span>
+            </ElFormItem>
+            <ElFormItem v-if="isMqtt" label="CA证书">
+              <ElInput v-model="form.mqtt_ca_cert" type="textarea" :rows="3" placeholder="PEM格式CA证书（TLS启用时可选）" />
+            </ElFormItem>
+          </ElTabPane>
+        </ElTabs>
       </ElForm>
       <template #footer>
         <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">确定</ElButton>
       </template>
-    </ElDialog>
+    </ElDrawer>
 
     <!-- 设备导入对话框 -->
     <ElDialog v-model="importDialogVisible" title="批量导入设备" width="520px" @close="importFile = null, importResult = null">
