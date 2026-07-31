@@ -72,6 +72,7 @@ class TagCreate(BaseModel):
 
 
 class TagUpdate(BaseModel):
+    device_id: Optional[int] = None
     name: Optional[str] = None
     description: Optional[str] = None
     unit: Optional[str] = None
