@@ -395,6 +395,13 @@ def create_device(req: DeviceCreate, request: Request, db: Session = Depends(get
     except Exception as e:
         from loguru import logger
         logger.error(f"reload_device({device.id}) failed: {e}")
+    # Reload device-level MQTT publish if enabled
+    try:
+        from app.services.device_publish_service import device_publish_service
+        device_publish_service.reload_device(device.id)
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"device_publish_service.reload_device({device.id}) failed: {e}")
     return device
 
 
@@ -427,6 +434,13 @@ def update_device(device_id: int, req: DeviceUpdate, request: Request, db: Sessi
     except Exception as e:
         from loguru import logger
         logger.error(f"reload_device({device.id}) failed: {e}")
+    # Reload device-level MQTT publish (config may have changed)
+    try:
+        from app.services.device_publish_service import device_publish_service
+        device_publish_service.reload_device(device.id)
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"device_publish_service.reload_device({device.id}) failed: {e}")
     # 禁用后推送状态变化（前端列表刷新即可看到离线，WS 实时推送更快）
     if data.get('enabled') is False:
         try:
@@ -461,6 +475,12 @@ def delete_device(device_id: int, request: Request, db: Session = Depends(get_db
     try:
         from app.engine.protocol_router import protocol_router
         protocol_router.stop_device(device_id_val, device_protocol)
+    except Exception:
+        pass
+    # Stop device-level MQTT publish for deleted device
+    try:
+        from app.services.device_publish_service import device_publish_service
+        device_publish_service.remove_device(device_id_val)
     except Exception:
         pass
     return ResponseModel(message="删除成功")
