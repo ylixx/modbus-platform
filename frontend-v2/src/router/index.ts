@@ -304,6 +304,16 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         }
       },
       {
+        path: 'device-publish',
+        component: () => import('@/views/Data/DevicePublish.vue'),
+        name: 'DevicePublish',
+        meta: {
+          title: '设备发布',
+          icon: 'vi-ant-design:send-outlined',
+          permission: 'device.read'
+        }
+      },
+      {
         path: 'lab',
         component: () => import('@/views/Data/LabCompare.vue'),
         name: 'LabCompare',

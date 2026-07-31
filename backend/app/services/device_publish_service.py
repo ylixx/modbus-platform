@@ -15,6 +15,8 @@ Lifecycle:
 import json
 import threading
 import time
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
@@ -23,11 +25,35 @@ from app.engine.mqtt_connection_pool import mqtt_pool
 from app.engine.mqtt_preset_renderer import preset_renderer
 
 
+@dataclass
+class DevicePublishStatus:
+    """Per-device publish runtime status."""
+    device_id: int
+    device_name: str = ""
+    protocol: str = ""
+    broker: str = ""
+    port: int = 1883
+    topic: str = ""
+    mode: str = "standard"
+    interval: float = 5.0
+    running: bool = False
+    connected: bool = False
+    publish_count: int = 0
+    publish_fail_count: int = 0
+    last_publish_time: Optional[str] = None
+    last_publish_ok: Optional[bool] = None
+    last_error: Optional[str] = None
+    last_payload_preview: Optional[str] = None  # truncated preview
+
+
 class DevicePublishService:
     """Per-device MQTT publish — works for ALL protocols."""
 
+    MAX_PREVIEW_LEN = 500
+
     def __init__(self):
         self._devices: dict[int, dict] = {}  # device_id -> {pool_key, stop_event, thread, config}
+        self._status: dict[int, DevicePublishStatus] = {}
         self._lock = threading.Lock()
         self._started = False
 
@@ -58,6 +84,57 @@ class DevicePublishService:
     def remove_device(self, device_id: int):
         """Stop and remove a device (after deletion or publish disabled)."""
         self._stop_device(device_id)
+        with self._lock:
+            self._status.pop(device_id, None)
+
+    # ────────────── Status API ──────────────
+
+    def get_status(self) -> list[dict]:
+        """Return publish status for all known devices (including recently stopped)."""
+        with self._lock:
+            result = []
+            for did, s in self._status.items():
+                result.append({
+                    "device_id": s.device_id,
+                    "device_name": s.device_name,
+                    "protocol": s.protocol,
+                    "broker": s.broker,
+                    "port": s.port,
+                    "topic": s.topic,
+                    "mode": s.mode,
+                    "interval": s.interval,
+                    "running": s.running,
+                    "connected": s.connected,
+                    "publish_count": s.publish_count,
+                    "publish_fail_count": s.publish_fail_count,
+                    "last_publish_time": s.last_publish_time,
+                    "last_publish_ok": s.last_publish_ok,
+                    "last_error": s.last_error,
+                    "last_payload_preview": s.last_payload_preview,
+                })
+            return result
+
+    def trigger(self, device_id: int) -> bool:
+        """Manually trigger one publish cycle for a device. Returns True if published."""
+        with self._lock:
+            entry = self._devices.get(device_id)
+
+        if not entry:
+            return False
+
+        config = entry["config"]
+        pool_key = entry["pool_key"]
+        mode = entry["mode"]
+        try:
+            self._publish_one(device_id, config, pool_key, mode)
+            return True
+        except Exception as e:
+            logger.error(f"DevicePublish trigger error device={device_id}: {e}")
+            with self._lock:
+                s = self._status.get(device_id)
+                if s:
+                    s.last_error = str(e)
+            return False
 
     # ────────────── Internal ──────────────
 
@@ -134,6 +211,20 @@ class DevicePublishService:
 
         with self._lock:
             self._devices[device_id] = entry
+            # Init status
+            s = self._status.get(device_id)
+            if not s:
+                s = DevicePublishStatus(device_id=device_id)
+                self._status[device_id] = s
+            s.device_name = config.name
+            s.protocol = config.protocol
+            s.broker = broker
+            s.port = port
+            s.topic = config.mqtt_publish_topic or ""
+            s.mode = mode
+            s.interval = config.mqtt_publish_interval or 5.0
+            s.running = True
+            s.connected = False  # will be updated on first publish
 
         interval = config.mqtt_publish_interval or 5.0
 
@@ -154,6 +245,7 @@ class DevicePublishService:
     def _stop_device(self, device_id: int):
         with self._lock:
             entry = self._devices.pop(device_id, None)
+            s = self._status.get(device_id)
 
         if not entry:
             return
@@ -162,6 +254,11 @@ class DevicePublishService:
         pool_key = entry.get("pool_key")
         if pool_key:
             mqtt_pool.release(pool_key)
+
+        if s:
+            s.running = False
+            s.connected = False
+
         logger.info(f"DevicePublish: stopped device id={device_id}")
 
     # ────────────── Publish Loop ──────────────
@@ -183,6 +280,10 @@ class DevicePublishService:
                 self._publish_one(device_id, config, pool_key, mode)
             except Exception as e:
                 logger.error(f"DevicePublish: error device={device_id}: {e}")
+                with self._lock:
+                    s = self._status.get(device_id)
+                    if s:
+                        s.last_error = str(e)
             stop_event.wait(interval)
 
     def _publish_one(self, device_id: int, config, pool_key: str, mode: str):
@@ -192,6 +293,10 @@ class DevicePublishService:
         # Get live values from the appropriate engine
         live = protocol_router.get_live_values(device_id)
         if not live:
+            with self._lock:
+                s = self._status.get(device_id)
+                if s:
+                    s.last_error = "No live data available"
             return
 
         # Build {tag_name: value} map
@@ -209,6 +314,10 @@ class DevicePublishService:
             db.close()
 
         if not values:
+            with self._lock:
+                s = self._status.get(device_id)
+                if s:
+                    s.last_error = "All tag values are None"
             return
 
         # Build telemetry data
@@ -243,6 +352,26 @@ class DevicePublishService:
 
         # Publish
         ok = mqtt_pool.publish(pool_key, topic, payload, qos=config.mqtt_publish_qos or 0)
+
+        # Update status
+        now_str = now.isoformat()
+        preview = payload if len(payload) <= self.MAX_PREVIEW_LEN else payload[:self.MAX_PREVIEW_LEN] + "..."
+        with self._lock:
+            s = self._status.get(device_id)
+            if s:
+                s.last_publish_time = now_str
+                s.last_publish_ok = ok
+                s.topic = topic
+                if ok:
+                    s.publish_count += 1
+                    s.last_error = None
+                    s.connected = True
+                else:
+                    s.publish_fail_count += 1
+                    s.last_error = "Publish failed (broker may be disconnected)"
+                    s.connected = False
+                s.last_payload_preview = preview
+
         if not ok:
             logger.warning(f"DevicePublish: publish failed device={device_id} topic={topic}")
 
