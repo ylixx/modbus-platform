@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, triggerRef } from 'vue'
+import { ref, onMounted, onUnmounted, computed, triggerRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
@@ -18,7 +18,6 @@ import {
   ElCollapseItem,
   ElTooltip
 } from 'element-plus'
-import { Icon } from '@/components/Icon'
 import { getAllDevices, getDeviceLive, getDeviceTags, unwrap } from '@/api/modbus'
 import { useWsStore } from '@/store/modules/websocket'
 import { wsManager } from '@/utils/websocket'
