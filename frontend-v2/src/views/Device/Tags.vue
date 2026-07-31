@@ -150,16 +150,17 @@ const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(nul
 // ── 关键词搜索 ──
 const searchKeyword = ref('')
 
-// ── 对话框中归属设备远程搜索 ──
+// ── 对话框中归属设备选择 ──
 const dialogDeviceId = ref<number | undefined>(undefined)
-const dialogDeviceLoading = ref(false)
 const dialogDeviceOptions = ref<any[]>([])
 
 // 当前协议（用于对话框表单字段显示，由对话框中选中的设备决定）
 const currentProtocol = computed(() => {
   const targetId = dialogDeviceId.value
-  const d = dialogDeviceOptions.value.find((x: any) => x.id === targetId)
-    || devices.value.find((x) => x.id === targetId)
+  // 优先从对话框选项中查找
+  let d = dialogDeviceOptions.value.find((x: any) => x.id === targetId)
+  // 回退到全局设备列表
+  if (!d) d = devices.value.find((x: any) => x.id === targetId)
   return d?.protocol || 'modbus_tcp'
 })
 const isModbus = computed(() => ['modbus_tcp', 'modbus_rtu'].includes(currentProtocol.value))
@@ -245,18 +246,22 @@ const onKeywordClear = () => {
   fetchTags()
 }
 
-// ── 对话框：远程搜索设备 ──
+// ── 对话框：设备搜索（已改用本地 filterable，保留备用） ──
 const remoteSearchDialogDevices = async (query: string) => {
-  dialogDeviceLoading.value = true
   try {
     const params: any = { page: 1, page_size: 50 }
     if (query) params.search = query
     dialogDeviceOptions.value = unwrapList(await getDevices(params)).list
   } catch {
     dialogDeviceOptions.value = []
-  } finally {
-    dialogDeviceLoading.value = false
   }
+}
+
+// 对话框中选择设备变化时的显式处理
+const onDialogDeviceChange = (_deviceId: number) => {
+  // dialogDeviceId 已通过 v-model 自动更新
+  // currentProtocol 是 computed，依赖 dialogDeviceId，会自动更新
+  // 不再需要额外处理，本地 filterable 模式下选项始终完整
 }
 
 // ── 新增/编辑/删除 ──
@@ -298,12 +303,8 @@ const openCreate = () => {
   Object.assign(form, emptyForm())
   // 默认归属设备：筛选框选中的第一个设备
   dialogDeviceId.value = selectedIds.value.length ? selectedIds.value[0] : undefined
+  dialogDeviceOptions.value = [...devices.value]
   dialogVisible.value = true
-  if (devices.value.length) {
-    dialogDeviceOptions.value = devices.value
-  } else {
-    remoteSearchDialogDevices('')
-  }
 }
 const openEdit = (row: any) => {
   dialogTitle.value = '编辑点位'
@@ -324,12 +325,13 @@ const openEdit = (row: any) => {
     readback_tag_id: row.readback_tag_id ?? null
   })
   dialogDeviceId.value = row.device_id
-  dialogVisible.value = true
-  if (!devices.value.length) {
-    remoteSearchDialogDevices('')
-  } else {
-    dialogDeviceOptions.value = devices.value
+  dialogDeviceOptions.value = [...devices.value]
+  // 确保选中设备在选项中（devices 最多500条，编辑的设备可能不在分页结果中）
+  const hasSelected = dialogDeviceOptions.value.some((x: any) => x.id === row.device_id)
+  if (!hasSelected && row.device_name) {
+    dialogDeviceOptions.value.unshift({ id: row.device_id, name: row.device_name, protocol: row.protocol || 'modbus_tcp' })
   }
+  dialogVisible.value = true
 }
 
 const submit = async () => {
@@ -710,11 +712,9 @@ onUnmounted(() => {
           <ElSelect
             v-model="dialogDeviceId"
             class="w-full"
-            placeholder="输入设备名搜索"
+            placeholder="搜索设备名称"
             filterable
-            remote
-            :remote-method="remoteSearchDialogDevices"
-            :loading="dialogDeviceLoading"
+            @change="onDialogDeviceChange"
           >
             <ElOption v-for="d in dialogDeviceOptions" :key="d.id" :label="d.name" :value="d.id" />
           </ElSelect>
