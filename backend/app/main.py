@@ -64,6 +64,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"DataForwardService start error: {e}")
 
+    # Start per-device MQTT publish (works for ALL protocols)
+    try:
+        from app.services.device_publish_service import device_publish_service
+        device_publish_service.start()
+    except Exception as e:
+        logger.error(f"DevicePublishService start error: {e}")
+
     # Initialize WebSocket broadcast (Redis pub/sub for multi-worker)
     try:
         from app.engine.ws_broadcast import init_redis_broadcast, set_main_loop
@@ -81,6 +88,11 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    try:
+        from app.services.device_publish_service import device_publish_service
+        device_publish_service.stop()
+    except Exception as e:
+        logger.error(f"DevicePublishService stop error: {e}")
     try:
         from app.services.data_forward_service import data_forward_service
         data_forward_service.stop()

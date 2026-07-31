@@ -232,6 +232,7 @@ const form = reactive<any>({
   stop_bits: 1,
   // MQTT (field names match backend Device model: mqtt_broker, mqtt_topic_prefix, etc.)
   mqtt_broker: '',
+  mqtt_port: 1883,
   mqtt_topic_prefix: '',
   mqtt_username: '',
   mqtt_password: '',
@@ -296,6 +297,7 @@ const openCreate = () => {
     data_bits: 8,
     stop_bits: 1,
     mqtt_broker: '',
+    mqtt_port: 1883,
     mqtt_topic_prefix: '',
     mqtt_username: '',
     mqtt_password: '',
@@ -335,6 +337,7 @@ const openEdit = (row: any) => {
     data_bits: row.data_bits ?? 8,
     stop_bits: row.stop_bits ?? 1,
     mqtt_broker: row.mqtt_broker || '',
+    mqtt_port: row.mqtt_port ?? 1883,
     mqtt_topic_prefix: row.mqtt_topic_prefix || '',
     mqtt_username: row.mqtt_username || '',
     mqtt_password: row.mqtt_password || '',
@@ -388,19 +391,31 @@ const submit = async () => {
     payload.mqtt_username = form.mqtt_username
     payload.mqtt_password = form.mqtt_password
     payload.mqtt_client_id = form.mqtt_client_id
-    payload.mqtt_publish_qos = form.mqtt_publish_qos
-    payload.mqtt_payload_template = form.mqtt_payload_template
-    payload.mqtt_publish_enabled = form.mqtt_publish_enabled
-    payload.mqtt_publish_topic = form.mqtt_publish_topic
-    payload.mqtt_publish_interval = form.mqtt_publish_interval
-    payload.mqtt_payload_format = form.mqtt_payload_format
-    payload.mqtt_is_gateway = form.mqtt_is_gateway
     payload.mqtt_use_tls = form.mqtt_use_tls
+    payload.mqtt_is_gateway = form.mqtt_is_gateway
     payload.mqtt_ca_cert = form.mqtt_ca_cert
   } else if (isOpcua.value) {
     payload.opc_endpoint = form.opc_endpoint
     payload.opc_namespace = form.opc_namespace
     payload.opc_security_mode = form.opc_security_mode
+  }
+
+  // 所有协议都支持MQTT向外发布
+  payload.mqtt_publish_enabled = form.mqtt_publish_enabled
+  payload.mqtt_publish_topic = form.mqtt_publish_topic
+  payload.mqtt_publish_interval = form.mqtt_publish_interval
+  payload.mqtt_publish_qos = form.mqtt_publish_qos
+  payload.mqtt_payload_format = form.mqtt_payload_format
+  payload.mqtt_payload_template = form.mqtt_payload_template
+  // 非MQTT协议：发布Broker配置也发送
+  if (!isMqtt.value) {
+    payload.mqtt_broker = form.mqtt_broker
+    payload.mqtt_port = form.mqtt_port
+    payload.mqtt_username = form.mqtt_username
+    payload.mqtt_password = form.mqtt_password
+    payload.mqtt_use_tls = form.mqtt_use_tls
+    payload.mqtt_is_gateway = form.mqtt_is_gateway
+    payload.mqtt_ca_cert = form.mqtt_ca_cert
   }
 
   if (form.id) {
@@ -727,8 +742,47 @@ onMounted(() => {
             <ElEmpty v-if="!isModbusTcp && !isModbusRtu && !isMqtt && !isOpcua" description="请先选择协议" :image-size="60" />
           </ElTabPane>
 
-          <!-- Tab 3: MQTT发布（仅MQTT协议显示） -->
-          <ElTabPane v-if="isMqtt" label="数据发布" name="mqtt_publish">
+          <!-- Tab 3: 数据发布（所有协议可见） -->
+          <ElTabPane label="数据发布" name="mqtt_publish">
+            <!-- 非MQTT协议：需要配置发布用的Broker -->
+            <template v-if="!isMqtt">
+              <ElAlert
+                type="info"
+                :closable="false"
+                class="mb-12px"
+              >
+                <template #default>
+                  将采集到的数据通过MQTT发布到外部Broker（如ThingsBoard、EMQX等），
+                  需在此配置发布目标的Broker连接信息。
+                </template>
+              </ElAlert>
+              <ElFormItem label="发布Broker">
+                <ElInput v-model="form.mqtt_broker" placeholder="如 192.168.1.100 或 mqtt.thingsboard.io" />
+              </ElFormItem>
+              <ElFormItem label="Broker端口">
+                <ElInputNumber v-model="form.mqtt_port" :min="1" :max="65535" :controls="false" style="width: 160px" />
+              </ElFormItem>
+              <div class="flex gap-8px">
+                <ElFormItem label="用户名" class="flex-grow">
+                  <ElInput v-model="form.mqtt_username" placeholder="可选，ThingsBoard填AccessToken" />
+                </ElFormItem>
+                <ElFormItem label="密码" class="flex-grow">
+                  <ElInput v-model="form.mqtt_password" type="password" placeholder="可选" show-password />
+                </ElFormItem>
+              </div>
+              <div class="flex gap-8px">
+                <ElFormItem label="启用TLS">
+                  <ElSwitch v-model="form.mqtt_use_tls" />
+                </ElFormItem>
+                <ElFormItem label="ThingsBoard网关">
+                  <ElSwitch v-model="form.mqtt_is_gateway" />
+                </ElFormItem>
+              </div>
+              <ElFormItem label="CA证书">
+                <ElInput v-model="form.mqtt_ca_cert" type="textarea" :rows="2" placeholder="PEM格式CA证书（TLS启用时可选）" />
+              </ElFormItem>
+            </template>
+
             <ElFormItem label="启用发布">
               <ElSwitch v-model="form.mqtt_publish_enabled" />
               <span class="text-12px text-gray-400 ml-8px">开启后将采集到的数据定时发布到指定Topic</span>
@@ -776,9 +830,6 @@ onMounted(() => {
             <ElFormItem label="化验对比">
               <ElSwitch v-model="form.has_lab_data" />
               <span class="text-12px text-gray-400 ml-8px">启用后可录入化验数据并与采集值对比</span>
-            </ElFormItem>
-            <ElFormItem v-if="isMqtt" label="CA证书">
-              <ElInput v-model="form.mqtt_ca_cert" type="textarea" :rows="3" placeholder="PEM格式CA证书（TLS启用时可选）" />
             </ElFormItem>
           </ElTabPane>
         </ElTabs>
