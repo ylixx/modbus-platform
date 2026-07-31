@@ -235,6 +235,13 @@ const form = reactive<any>({
   mqtt_client_id: '',
   mqtt_publish_qos: 0,
   mqtt_payload_template: '',
+  mqtt_publish_enabled: false,
+  mqtt_publish_topic: '',
+  mqtt_publish_interval: 5,
+  mqtt_payload_format: 'json',
+  mqtt_is_gateway: false,
+  mqtt_use_tls: false,
+  mqtt_ca_cert: '',
   // OPC-UA (field names match backend Device model: opc_endpoint, etc.)
   opc_endpoint: '',
   opc_namespace: 2,
@@ -292,6 +299,13 @@ const openCreate = () => {
     mqtt_client_id: '',
     mqtt_publish_qos: 0,
     mqtt_payload_template: '',
+    mqtt_publish_enabled: false,
+    mqtt_publish_topic: '',
+    mqtt_publish_interval: 5,
+    mqtt_payload_format: 'json',
+    mqtt_is_gateway: false,
+    mqtt_use_tls: false,
+    mqtt_ca_cert: '',
     opc_endpoint: '',
     opc_namespace: 2,
     opc_security_mode: 'None',
@@ -323,6 +337,13 @@ const openEdit = (row: any) => {
     mqtt_client_id: row.mqtt_client_id || '',
     mqtt_publish_qos: row.mqtt_publish_qos ?? 0,
     mqtt_payload_template: row.mqtt_payload_template || '',
+    mqtt_publish_enabled: !!row.mqtt_publish_enabled,
+    mqtt_publish_topic: row.mqtt_publish_topic || '',
+    mqtt_publish_interval: row.mqtt_publish_interval ?? 5,
+    mqtt_payload_format: row.mqtt_payload_format || 'json',
+    mqtt_is_gateway: !!row.mqtt_is_gateway,
+    mqtt_use_tls: !!row.mqtt_use_tls,
+    mqtt_ca_cert: row.mqtt_ca_cert || '',
     opc_endpoint: row.opc_endpoint || '',
     opc_namespace: row.opc_namespace ?? 2,
     opc_security_mode: row.opc_security_mode || 'None',
@@ -364,6 +385,13 @@ const submit = async () => {
     payload.mqtt_client_id = form.mqtt_client_id
     payload.mqtt_publish_qos = form.mqtt_publish_qos
     payload.mqtt_payload_template = form.mqtt_payload_template
+    payload.mqtt_publish_enabled = form.mqtt_publish_enabled
+    payload.mqtt_publish_topic = form.mqtt_publish_topic
+    payload.mqtt_publish_interval = form.mqtt_publish_interval
+    payload.mqtt_payload_format = form.mqtt_payload_format
+    payload.mqtt_is_gateway = form.mqtt_is_gateway
+    payload.mqtt_use_tls = form.mqtt_use_tls
+    payload.mqtt_ca_cert = form.mqtt_ca_cert
   } else if (isOpcua.value) {
     payload.opc_endpoint = form.opc_endpoint
     payload.opc_namespace = form.opc_namespace
@@ -646,37 +674,61 @@ onMounted(() => {
           <ElFormItem label="Client ID">
             <ElInput v-model="form.mqtt_client_id" placeholder="留空自动生成" />
           </ElFormItem>
-          <ElFormItem label="用户名">
-            <ElInput v-model="form.mqtt_username" placeholder="可选" />
+          <div class="flex gap-8px">
+            <ElFormItem label="用户名" class="flex-grow">
+              <ElInput v-model="form.mqtt_username" placeholder="可选" />
+            </ElFormItem>
+            <ElFormItem label="密码" class="flex-grow">
+              <ElInput v-model="form.mqtt_password" type="password" placeholder="可选" show-password />
+            </ElFormItem>
+          </div>
+          <div class="flex gap-8px">
+            <ElFormItem label="启用TLS">
+              <ElSwitch v-model="form.mqtt_use_tls" />
+            </ElFormItem>
+            <ElFormItem label="ThingsBoard网关">
+              <ElSwitch v-model="form.mqtt_is_gateway" />
+            </ElFormItem>
+          </div>
+
+          <ElDivider content-position="left">数据发布</ElDivider>
+          <ElFormItem label="启用发布">
+            <ElSwitch v-model="form.mqtt_publish_enabled" />
+            <div class="text-12px text-gray-400 ml-8px">开启后将采集到的数据定时发布到指定Topic</div>
           </ElFormItem>
-          <ElFormItem label="密码">
-            <ElInput
-              v-model="form.mqtt_password"
-              type="password"
-              placeholder="可选"
-              show-password
-            />
-          </ElFormItem>
-          <ElFormItem label="QoS">
-            <ElSelect v-model="form.mqtt_publish_qos" class="w-full">
-              <ElOption label="0 - 最多一次" :value="0" />
-              <ElOption label="1 - 至少一次" :value="1" />
-              <ElOption label="2 - 恰好一次" :value="2" />
-            </ElSelect>
-          </ElFormItem>
-          <ElFormItem label="发布模板">
-            <ElInput
-              v-model="form.mqtt_payload_template"
-              type="textarea"
-              :rows="6"
-              placeholder="留空使用默认格式。支持占位符：${device_id} ${device_name} ${timestamp} ${timestamp_ms} ${values_json} ${values_detail} ${value} ${tag_name}"
-              class="font-mono"
-            />
-            <div class="text-12px text-gray-400 mt-4px">
-              占位符：${device_id} ${device_name} ${timestamp} ${timestamp_ms} ${values_json}
-              ${values_detail}
+          <template v-if="form.mqtt_publish_enabled">
+            <ElFormItem label="发布Topic">
+              <ElInput v-model="form.mqtt_publish_topic" placeholder="如：data/${device_name} 或 v1/devices/me/telemetry" />
+            </ElFormItem>
+            <div class="flex gap-8px">
+              <ElFormItem label="发布间隔(秒)">
+                <ElInputNumber v-model="form.mqtt_publish_interval" :min="1" :max="3600" :controls="false" style="width: 120px" />
+              </ElFormItem>
+              <ElFormItem label="QoS">
+                <ElSelect v-model="form.mqtt_publish_qos" style="width: 160px">
+                  <ElOption label="0 - 最多一次" :value="0" />
+                  <ElOption label="1 - 至少一次" :value="1" />
+                  <ElOption label="2 - 恰好一次" :value="2" />
+                </ElSelect>
+              </ElFormItem>
             </div>
-          </ElFormItem>
+            <ElFormItem label="格式">
+              <ElSelect v-model="form.mqtt_payload_format" style="width: 200px">
+                <ElOption label="JSON" value="json" />
+                <ElOption label="Plain" value="plain" />
+                <ElOption label="ThingsBoard" value="thingsboard" />
+              </ElSelect>
+            </ElFormItem>
+            <ElFormItem label="发布模板">
+              <ElInput
+                v-model="form.mqtt_payload_template"
+                type="textarea"
+                :rows="4"
+                placeholder="留空使用默认格式。支持占位符：${device_id} ${device_name} ${timestamp} ${values_json}"
+                class="font-mono"
+              />
+            </ElFormItem>
+          </template>
         </template>
 
         <!-- OPC-UA -->

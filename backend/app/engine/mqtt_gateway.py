@@ -1,30 +1,34 @@
-"""MQTT ThingsBoard gateway session — one connection manages multiple devices."""
+"""MQTT ThingsBoard gateway session — uses shared connection pool.
+
+One gateway connection manages multiple sub-devices via a shared
+paho.Client from MqttConnectionPool.
+"""
 import json
-import ssl
 import threading
 from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
-import paho.mqtt.client as mqtt
 
 from app.core.database import SessionLocal
 from app.models.device import Device, DeviceTag
+from app.engine.mqtt_connection_pool import mqtt_pool
+from app.engine.mqtt_preset_renderer import preset_renderer
 from app.engine.mqtt_utils import (
     process_tag_value, update_device_status, ts_to_datetime,
 )
 
 
 class MqttGatewaySession:
-    """Single MQTT connection acting as a ThingsBoard gateway."""
+    """Single MQTT connection acting as a ThingsBoard gateway, via the shared pool."""
 
     def __init__(self, gateway_device: Device, managed_devices: list[Device]):
         self._gateway_id = gateway_device.id
         self._gateway_name = gateway_device.name
         self._broker = gateway_device.mqtt_broker
         self._port = gateway_device.mqtt_port
-        self._username = gateway_device.mqtt_username or None
-        self._password = gateway_device.mqtt_password or None
-        self._client_id = gateway_device.mqtt_client_id or f"tb_gateway_{gateway_device.id}"
+        self._username = gateway_device.mqtt_username or ""
+        self._password = gateway_device.mqtt_password or ""
+        self._client_id = gateway_device.mqtt_client_id or ""
         self._use_tls = gateway_device.mqtt_use_tls
         self._ca_cert = gateway_device.mqtt_ca_cert
 
@@ -49,65 +53,48 @@ class MqttGatewaySession:
                 "live_values": {},
             }
 
-        self._client: Optional[mqtt.Client] = None
         self._stop_event = threading.Event()
         self._connected = False
         self._publish_thread: Optional[threading.Thread] = None
+        self._pool_key: Optional[str] = None
 
     def start(self):
-        self._client = mqtt.Client(
-            client_id=self._client_id, protocol=mqtt.MQTTv311,
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        # Acquire a shared connection from the pool
+        self._pool_key, entry = mqtt_pool.acquire(
+            broker=self._broker,
+            port=self._port,
+            username=self._username,
+            password=self._password,
+            client_id=self._client_id or f"tb_gw_{self._gateway_id}",
+            use_tls=self._use_tls,
+            ca_cert=self._ca_cert or "",
+            on_connect=self._on_connect,
+            on_disconnect=self._on_disconnect,
         )
-        if self._username:
-            self._client.username_pw_set(self._username, self._password)
-        if self._use_tls:
-            ctx = ssl.create_default_context()
-            if self._ca_cert:
-                import tempfile, os
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-                tmp.write(self._ca_cert.encode())
-                tmp.close()
-                ctx.load_verify_locations(tmp.name)
-                os.unlink(tmp.name)
-            else:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-            self._client.tls_set_context(ctx)
 
-        self._client.on_connect = self._on_connect
-        self._client.on_message = self._on_message
-        self._client.on_disconnect = self._on_disconnect
-
-        try:
-            self._client.connect(self._broker, self._port, keepalive=60)
-            self._client.loop_start()
-            logger.info(f"TB Gateway '{self._gateway_name}' connecting to {self._broker}:{self._port}, managing {len(self._managed)} devices")
-        except Exception as e:
-            logger.error(f"TB Gateway connect error: {e}")
-            update_device_status(self._gateway_id, "error", str(e))
+        # Subscribe the gateway topic through the pool
+        mqtt_pool.subscribe(self._pool_key, self._subscribe_topic, callback=self._on_message, qos=1)
 
         if self._publish_enabled and self._publish_topic:
-            self._publish_thread = threading.Thread(target=self._publish_loop, daemon=True, name=f"tb-gw-pub-{self._gateway_id}")
+            self._publish_thread = threading.Thread(
+                target=self._publish_loop, daemon=True, name=f"tb-gw-pub-{self._gateway_id}"
+            )
             self._publish_thread.start()
 
     def stop(self):
         self._stop_event.set()
-        if self._client:
-            try:
-                self._client.loop_stop()
-                self._client.disconnect()
-            except Exception:
-                pass
+        if self._pool_key:
+            mqtt_pool.unsubscribe(self._pool_key, self._subscribe_topic, callback=self._on_message)
+            mqtt_pool.release(self._pool_key)
+            self._pool_key = None
         self._connected = False
 
     def write_value(self, device_id: int, tag: DeviceTag, value) -> bool:
-        if not self._client or not self._connected:
+        if not self._pool_key:
             return False
         topic = tag.mqtt_publish_topic or self._publish_topic or "v1/gateway/telemetry"
         msg = {tag.name: value}
-        info = self._client.publish(topic, json.dumps(msg), qos=self._publish_qos, retain=tag.mqtt_retain)
-        return info.rc == mqtt.MQTT_ERR_SUCCESS
+        return mqtt_pool.publish(self._pool_key, topic, json.dumps(msg), qos=self._publish_qos, retain=tag.mqtt_retain)
 
     def get_live_values(self, device_id: int) -> dict:
         for entry in self._managed.values():
@@ -117,25 +104,27 @@ class MqttGatewaySession:
 
     # ── internals ──
 
-    def _on_connect(self, client, userdata, flags, rc, properties=None):
+    def _on_connect(self, client, rc):
+        """Called via pool's on_connect callback."""
         if rc == 0:
             self._connected = True
             update_device_status(self._gateway_id, "online", None)
-            client.subscribe(self._subscribe_topic, qos=1)
-            logger.info(f"TB Gateway connected, subscribed to '{self._subscribe_topic}'")
+            logger.info(f"TB Gateway '{self._gateway_name}' connected via pool")
             for entry in self._managed.values():
                 update_device_status(entry["device"].id, "online", None)
         else:
             logger.error(f"TB Gateway connect failed: rc={rc}")
             update_device_status(self._gateway_id, "error", f"rc={rc}")
 
-    def _on_disconnect(self, client, userdata, flags, rc, properties=None):
+    def _on_disconnect(self, client, rc):
+        """Called via pool's on_disconnect callback."""
         self._connected = False
         if rc != 0:
             logger.warning(f"TB Gateway disconnected: rc={rc}")
             update_device_status(self._gateway_id, "offline", "connection lost")
 
-    def _on_message(self, client, userdata, msg):
+    def _on_message(self, client, msg):
+        """Called by the pool when a message arrives on the gateway topic."""
         try:
             payload_str = msg.payload.decode("utf-8", errors="replace")
             json_obj = json.loads(payload_str)
@@ -191,6 +180,12 @@ class MqttGatewaySession:
                     finally:
                         db.close()
                     if values:
-                        msg = {entry["device"].name: [{"values": values}]}
-                        self._client.publish(self._publish_topic, json.dumps(msg), qos=self._publish_qos)
+                        data = preset_renderer.build_telemetry_data(
+                            entry["device"].id, entry["device"].name, values
+                        )
+                        payload = preset_renderer.render_payload(
+                            preset_mode="thingsboard_gateway",
+                            data=data,
+                        )
+                        mqtt_pool.publish(self._pool_key, self._publish_topic, payload, qos=self._publish_qos)
             self._stop_event.wait(self._publish_interval)

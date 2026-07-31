@@ -274,6 +274,26 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         }
       },
       {
+        path: 'forward',
+        component: () => import('@/views/Data/DataForward.vue'),
+        name: 'DataForward',
+        meta: {
+          title: '数据转发',
+          icon: 'vi-ant-design:cloud-outlined',
+          permission: 'device.read'
+        }
+      },
+      {
+        path: 'mqtt-status',
+        component: () => import('@/views/Data/MqttStatus.vue'),
+        name: 'MqttStatus',
+        meta: {
+          title: 'MQTT状态',
+          icon: 'vi-ant-design:wifi-outlined',
+          permission: 'device.read'
+        }
+      },
+      {
         path: 'lab',
         component: () => import('@/views/Data/LabCompare.vue'),
         name: 'LabCompare',
@@ -334,6 +354,16 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
           title: t('router.sms'),
           icon: 'vi-ant-design:message-outlined',
           permission: 'sms.read'
+        }
+      },
+      {
+        path: 'mqtt',
+        component: () => import('@/views/Alarm/AlarmMqtt.vue'),
+        name: 'AlarmMqtt',
+        meta: {
+          title: 'MQTT推送',
+          icon: 'vi-ant-design:send-outlined',
+          permission: 'alarm.read'
         }
       }
     ]

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, triggerRef } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
@@ -17,13 +17,15 @@ import {
   ElMessage,
   ElMessageBox,
   ElEmpty,
-  ElPagination
+  ElPagination,
+  ElTooltip
 } from 'element-plus'
 import {
   getDevices,
   getAllDevices,
   getAllTags,
   getDeviceTags,
+  getDeviceLive,
   createTag,
   updateTag,
   deleteTag,
@@ -32,6 +34,8 @@ import {
   unwrap,
   unwrapList
 } from '@/api/modbus'
+import { wsManager } from '@/utils/websocket'
+import type { WsLiveValue } from '@/utils/websocket'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
 defineOptions({ name: 'Tags' })
@@ -39,6 +43,89 @@ defineOptions({ name: 'Tags' })
 const devices = ref<any[]>([])
 const loading = ref(false)
 const list = ref<any[]>([])
+
+// ── 实时数据 ──
+const liveData = ref<Record<number, { value: any; quality: string; time: string }>>({})
+const liveLoading = ref(false)
+
+// ── 自动刷新 ──
+const REFRESH_OPTIONS = [
+  { label: '10秒', value: 10 },
+  { label: '30秒', value: 30 },
+  { label: '1分钟', value: 60 },
+  { label: '5分钟', value: 300 },
+  { label: '关闭', value: 0 }
+]
+const refreshInterval = ref(60) // 默认1分钟
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+
+const QUALITY_MAP: Record<string, { text: string; type: string }> = {
+  good: { text: '正常', type: 'success' },
+  unknown: { text: '未知', type: 'warning' },
+  stale: { text: '过期', type: 'danger' },
+  bad: { text: '异常', type: 'danger' }
+}
+
+const fetchLiveData = async (showLoading = false) => {
+  if (!list.value.length) return
+  if (showLoading) liveLoading.value = true
+  try {
+    // 按设备分组，批量取每台设备的实时值
+    const deviceIds = [...new Set(list.value.map((t: any) => t.device_id))]
+    // 并发请求，最多8个
+    const concurrency = 8
+    let idx = 0
+    const fetchNext = async (): Promise<void> => {
+      const i = idx++
+      if (i >= deviceIds.length) return
+      try {
+        const res = await getDeviceLive(deviceIds[i])
+        const body = unwrap(res)
+        const values = body?.values || {}
+        // 逐条精准更新，避免整表重渲染闪屏
+        for (const [tagId, info] of Object.entries(values)) {
+          const v = info as any
+          liveData.value[Number(tagId)] = {
+            value: v.value,
+            quality: v.quality || 'unknown',
+            time: v.time || ''
+          }
+        }
+        // 显式触发 ref 依赖更新，确保模板重渲染
+        triggerRef(liveData)
+      } catch { /* ignore */ }
+      await fetchNext()
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, deviceIds.length) }, () => fetchNext()))
+  } finally {
+    if (showLoading) liveLoading.value = false
+  }
+}
+
+const setupAutoRefresh = () => {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+  if (refreshInterval.value > 0) {
+    refreshTimer = setInterval(() => fetchLiveData(false), refreshInterval.value * 1000)
+  }
+}
+
+const onRefreshIntervalChange = () => {
+  setupAutoRefresh()
+}
+
+// WebSocket 实时推送（精准更新单个tag，避免闪屏）
+const onLiveValue = (msg: any) => {
+  const d = msg.data as WsLiveValue
+  if (!d) return
+  liveData.value[d.tag_id] = { value: d.value, quality: d.quality, time: new Date().toISOString() }
+  triggerRef(liveData)
+}
+
+const onBatchLive = (msg: any) => {
+  const items = msg.data as WsLiveValue[]
+  if (!Array.isArray(items)) return
+  for (const d of items) onLiveValue({ data: d } as any)
+}
 
 // ── 分页 ──
 const page = ref(1)
@@ -105,6 +192,8 @@ const fetchTags = async () => {
     const { list: l, total: t } = unwrapList(res)
     list.value = l
     total.value = t
+    // 加载完点位后立刻刷新实时数据（首次加loading）
+    fetchLiveData(true)
   } catch (e: any) {
     ElMessage.error(e?.message || '获取点位列表失败')
   } finally {
@@ -337,6 +426,15 @@ watch(dialogDeviceId, (newId) => {
 onMounted(() => {
   fetchDevices()
   fetchTags()
+  // 订阅 WebSocket 实时推送
+  wsManager.on('live_value', onLiveValue)
+  wsManager.on('batch_live', onBatchLive)
+  // 启动自动刷新定时器
+  setupAutoRefresh()
+})
+
+onUnmounted(() => {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
 })
 </script>
 
@@ -359,6 +457,19 @@ onMounted(() => {
       />
       <ElButton type="primary" @click="onKeywordSearch">搜索</ElButton>
       <span class="flex-grow" />
+      <!-- 自动刷新间隔选择 -->
+      <div class="flex items-center gap-4px mr-8px">
+        <span class="text-14px text-gray-500">数据刷新</span>
+        <ElSelect v-model="refreshInterval" style="width: 100px" @change="onRefreshIntervalChange">
+          <ElOption v-for="opt in REFRESH_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </ElSelect>
+        <ElButton link :loading="liveLoading" @click="fetchLiveData(true)">
+          <ElTooltip content="立即刷新数据" placement="top">
+            <span style="font-size: 16px">↻</span>
+          </ElTooltip>
+        </ElButton>
+
+      </div>
       <ElButton v-hasPermi="['import.write']" @click="openImport">导入点位</ElButton>
       <ElButton
         v-hasPermi="['export.download']"
@@ -380,6 +491,39 @@ onMounted(() => {
       <ElTableColumn sortable prop="id" label="ID" width="70" />
       <ElTableColumn sortable prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
       <ElTableColumn sortable prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
+      <ElTableColumn label="当前值" width="160" align="center">
+        <template #default="{ row }">
+          <template v-if="liveData[row.id]">
+            <div class="flex items-center justify-center gap-4px">
+              <span class="text-right tabular-nums" style="min-width: 60px" :class="liveData[row.id].quality === 'good' ? 'text-green-600 font-bold' : liveData[row.id].quality === 'bad' ? 'text-red-500' : 'text-yellow-600'">
+                {{ liveData[row.id].value != null ? liveData[row.id].value : '—' }}
+              </span>
+              <span class="text-12px text-gray-400 text-left" style="min-width: 36px">{{ row.unit || '&emsp;' }}</span>
+            </div>
+          </template>
+          <span v-else class="text-gray-300">—</span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="数据质量" width="90" align="center">
+        <template #default="{ row }">
+          <ElTag
+            v-if="liveData[row.id]"
+            :type="(QUALITY_MAP[liveData[row.id].quality]?.type || 'info') as any"
+            size="small"
+          >
+            {{ QUALITY_MAP[liveData[row.id].quality]?.text || liveData[row.id].quality }}
+          </ElTag>
+          <span v-else class="text-gray-300 text-12px">—</span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="更新时间" width="160">
+        <template #default="{ row }">
+          <template v-if="liveData[row.id]?.time">
+            <span class="text-12px text-gray-500">{{ new Date(liveData[row.id].time).toLocaleString() }}</span>
+          </template>
+          <span v-else class="text-gray-300 text-12px">—</span>
+        </template>
+      </ElTableColumn>
       <ElTableColumn sortable prop="address" label="地址" width="80" />
       <ElTableColumn label="功能码" width="130">
         <template #default="{ row }">
@@ -397,9 +541,6 @@ onMounted(() => {
         </template>
       </ElTableColumn>
       <ElTableColumn sortable prop="data_type" label="数据类型" width="100" />
-      <ElTableColumn label="单位" width="80">
-        <template #default="{ row }">{{ row.unit || '—' }}</template>
-      </ElTableColumn>
       <ElTableColumn label="可写" width="70">
         <template #default="{ row }">
           <ElTag :type="row.writable ? 'success' : 'info'" size="small">{{ row.writable ? '是' : '否' }}</ElTag>

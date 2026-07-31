@@ -244,6 +244,9 @@ class AlarmService:
         self._handle_sms(db, rule, record)
         self._handle_notification(record)
 
+        # MQTT publish
+        self._handle_mqtt_publish("triggered", record, db)
+
         # Real-time push to WebSocket clients.
         try:
             from app.engine.ws_broadcast import broadcast_alarm_event
@@ -280,6 +283,8 @@ class AlarmService:
                 broadcast_alarm_event("cleared", self._record_to_dict(record))
             except Exception:
                 pass
+            # MQTT publish
+            self._handle_mqtt_publish("cleared", record, db)
 
     def _handle_sms(self, db: Session, rule: AlarmRule, record: AlarmRecord):
         if not rule.sms_enabled:
@@ -370,6 +375,20 @@ class AlarmService:
             notification_service.send_alarm(record.alarm_message, record.alarm_level, device_name)
         except Exception as e:
             logger.error(f"Notification error: {e}")
+
+    def _handle_mqtt_publish(self, event: str, record: AlarmRecord, db: Session):
+        """Publish alarm event to external MQTT brokers (async, non-blocking)."""
+        try:
+            from app.services.alarm_mqtt_publisher import alarm_mqtt_publisher
+            # Enrich alarm data with device/tag names for template rendering
+            device = db.query(Device).filter(Device.id == record.device_id).first()
+            tag = db.query(DeviceTag).filter(DeviceTag.id == record.tag_id).first() if record.tag_id else None
+            alarm_data = self._record_to_dict(record)
+            alarm_data["device_name"] = device.name if device else f"Device#{record.device_id}"
+            alarm_data["tag_name"] = tag.name if tag else ""
+            alarm_mqtt_publisher.publish_alarm(event, alarm_data)
+        except Exception as e:
+            logger.error(f"Alarm MQTT publish error: {e}")
 
 
 # Global instance
