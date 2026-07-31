@@ -18,7 +18,10 @@ import {
   ElMessageBox,
   ElEmpty,
   ElPagination,
-  ElTooltip
+  ElTooltip,
+  ElTabs,
+  ElTabPane,
+  ElCheckbox
 } from 'element-plus'
 import {
   getDevices,
@@ -40,9 +43,17 @@ import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
 defineOptions({ name: 'Tags' })
 
+const activeTab = ref('config') // config | monitor
 const devices = ref<any[]>([])
 const loading = ref(false)
 const list = ref<any[]>([])
+
+// ── 批量选择 ──
+const selectedRows = ref<any[]>([])
+const batchUnit = ref('')
+const batchWritable = ref<boolean | null>(null)
+const batchLoading = ref(false)
+const onSelectionChange = (rows: any[]) => { selectedRows.value = rows }
 
 // ── 实时数据 ──
 const liveData = ref<Record<number, { value: any; quality: string; time: string }>>({})
@@ -423,6 +434,72 @@ watch(dialogDeviceId, (newId) => {
   }
 })
 
+// ── 批量修改 ──
+const batchModify = async () => {
+  if (!selectedRows.value.length) {
+    ElMessage.warning('请先勾选要修改的点位')
+    return
+  }
+  const hasChange = batchUnit.value !== '' || batchWritable.value !== null
+  if (!hasChange) {
+    ElMessage.warning('请至少设置一项要修改的字段')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认批量修改 ${selectedRows.value.length} 个点位？`,
+      '批量修改',
+      { type: 'warning' }
+    )
+  } catch { return }
+
+  batchLoading.value = true
+  try {
+    const promises = selectedRows.value.map((row) => {
+      const payload: any = { ...row }
+      if (batchUnit.value !== '') payload.unit = batchUnit.value
+      if (batchWritable.value !== null) payload.writable = batchWritable.value
+      delete payload.id
+      return updateTag(row.id, payload)
+    })
+    await Promise.all(promises)
+    ElMessage.success(`批量修改 ${selectedRows.value.length} 个点位成功`)
+    batchUnit.value = ''
+    batchWritable.value = null
+    fetchTags()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '批量修改失败')
+  } finally {
+    batchLoading.value = false
+  }
+}
+
+// ── 批量删除 ──
+const batchRemove = async () => {
+  if (!selectedRows.value.length) {
+    ElMessage.warning('请先勾选要删除的点位')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认删除选中的 ${selectedRows.value.length} 个点位？此操作不可恢复。`,
+      '批量删除',
+      { type: 'warning' }
+    )
+  } catch { return }
+
+  batchLoading.value = true
+  try {
+    await Promise.all(selectedRows.value.map((row) => deleteTag(row.id)))
+    ElMessage.success(`批量删除 ${selectedRows.value.length} 个点位成功`)
+    fetchTags()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '批量删除失败')
+  } finally {
+    batchLoading.value = false
+  }
+}
+
 onMounted(() => {
   fetchDevices()
   fetchTags()
@@ -440,6 +517,12 @@ onUnmounted(() => {
 
 <template>
   <ContentWrap title="采集点位">
+    <!-- Tab 切换：配置视图 / 监控视图 -->
+    <ElTabs v-model="activeTab" class="mb-4px">
+      <ElTabPane label="配置管理" name="config" />
+      <ElTabPane label="实时监控" name="monitor" />
+    </ElTabs>
+
     <!-- 组织架构级联筛选 -->
     <div class="mb-16px">
       <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="onCascadeSearch" />
@@ -457,117 +540,167 @@ onUnmounted(() => {
       />
       <ElButton type="primary" @click="onKeywordSearch">搜索</ElButton>
       <span class="flex-grow" />
-      <!-- 自动刷新间隔选择 -->
-      <div class="flex items-center gap-4px mr-8px">
-        <span class="text-14px text-gray-500">数据刷新</span>
-        <ElSelect v-model="refreshInterval" style="width: 100px" @change="onRefreshIntervalChange">
-          <ElOption v-for="opt in REFRESH_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
-        </ElSelect>
-        <ElButton link :loading="liveLoading" @click="fetchLiveData(true)">
-          <ElTooltip content="立即刷新数据" placement="top">
-            <span style="font-size: 16px">↻</span>
-          </ElTooltip>
+
+      <!-- 配置视图工具栏 -->
+      <template v-if="activeTab === 'config'">
+        <!-- 批量操作区（选中行后出现） -->
+        <template v-if="selectedRows.length">
+          <span class="text-12px text-gray-500">已选 {{ selectedRows.length }} 项</span>
+          <ElInput v-model="batchUnit" placeholder="批量改单位" style="width: 110px" size="small" />
+          <ElSelect v-model="batchWritable" placeholder="批量改可写" style="width: 100px" size="small" clearable>
+            <ElOption label="可写" :value="true" />
+            <ElOption label="只读" :value="false" />
+          </ElSelect>
+          <ElButton size="small" type="warning" :loading="batchLoading" @click="batchModify">批量修改</ElButton>
+          <ElButton size="small" type="danger" :loading="batchLoading" @click="batchRemove">批量删除</ElButton>
+          <span class="text-gray-300 mx-4px">|</span>
+        </template>
+        <ElButton v-hasPermi="['import.write']" @click="openImport">导入点位</ElButton>
+        <ElButton
+          v-hasPermi="['export.download']"
+          :loading="exportLoading"
+          @click="doExport"
+        >
+          导出点位
         </ElButton>
+        <ElButton
+          v-hasPermi="['tag.write']"
+          type="success"
+          @click="openCreate"
+        >
+          新增点位
+        </ElButton>
+      </template>
 
+      <!-- 监控视图工具栏 -->
+      <template v-else>
+        <div class="flex items-center gap-4px mr-8px">
+          <span class="text-14px text-gray-500">数据刷新</span>
+          <ElSelect v-model="refreshInterval" style="width: 100px" @change="onRefreshIntervalChange">
+            <ElOption v-for="opt in REFRESH_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </ElSelect>
+          <ElButton link :loading="liveLoading" @click="fetchLiveData(true)">
+            <ElTooltip content="立即刷新数据" placement="top">
+              <span style="font-size: 16px">↻</span>
+            </ElTooltip>
+          </ElButton>
+        </div>
+      </template>
+    </div>
+
+    <!-- ═══ 配置视图：纯配置表格 ═══ -->
+    <template v-if="activeTab === 'config'">
+      <ElTable v-loading="loading" :data="list" border stripe @selection-change="onSelectionChange">
+        <ElTableColumn type="selection" width="45" />
+        <ElTableColumn sortable prop="id" label="ID" width="70" />
+        <ElTableColumn sortable prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
+        <ElTableColumn sortable prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
+        <ElTableColumn sortable prop="address" label="地址" width="80" />
+        <ElTableColumn label="功能码" width="130">
+          <template #default="{ row }">
+            <ElTag v-if="row.function_code" size="small">{{
+              (
+                {
+                  coil: '线圈 FC01',
+                  discrete_input: '离散输入 FC02',
+                  input_register: '输入寄存器 FC04',
+                  holding_register: '保持寄存器 FC03'
+                } as any
+              )[row.function_code] || row.function_code
+            }}</ElTag>
+            <ElTag v-else type="info" size="small">{{ row.data_type || '—' }}</ElTag>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn sortable prop="data_type" label="数据类型" width="100" />
+        <ElTableColumn prop="unit" label="单位" width="70" />
+        <ElTableColumn label="可写" width="70">
+          <template #default="{ row }">
+            <ElTag :type="row.writable ? 'success' : 'info'" size="small">{{ row.writable ? '是' : '否' }}</ElTag>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="缩放系数" width="80">
+          <template #default="{ row }">
+            <span class="text-12px">{{ row.scale_factor ?? 1 }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <ElButton v-hasPermi="['tag.write']" link type="primary" @click="openEdit(row)"
+              >编辑</ElButton
+            >
+            <ElButton v-hasPermi="['tag.write']" link type="danger" @click="remove(row)"
+              >删除</ElButton
+            >
+          </template>
+        </ElTableColumn>
+      </ElTable>
+      <div class="flex justify-end mt-12px">
+        <ElPagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[20, 50, 100, 200]"
+          @current-change="onPageChange"
+          @size-change="onSizeChange"
+        />
       </div>
-      <ElButton v-hasPermi="['import.write']" @click="openImport">导入点位</ElButton>
-      <ElButton
-        v-hasPermi="['export.download']"
-        :loading="exportLoading"
-        @click="doExport"
-      >
-        导出点位
-      </ElButton>
-      <ElButton
-        v-hasPermi="['tag.write']"
-        type="success"
-        @click="openCreate"
-      >
-        新增点位
-      </ElButton>
-    </div>
+    </template>
 
-    <ElTable v-loading="loading" :data="list" border stripe>
-      <ElTableColumn sortable prop="id" label="ID" width="70" />
-      <ElTableColumn sortable prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
-      <ElTableColumn sortable prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
-      <ElTableColumn label="当前值" width="160" align="center">
-        <template #default="{ row }">
-          <template v-if="liveData[row.id]">
-            <div class="flex items-center justify-center gap-4px">
-              <span class="text-right tabular-nums" style="min-width: 60px" :class="liveData[row.id].quality === 'good' ? 'text-green-600 font-bold' : liveData[row.id].quality === 'bad' ? 'text-red-500' : 'text-yellow-600'">
-                {{ liveData[row.id].value != null ? liveData[row.id].value : '—' }}
-              </span>
-              <span class="text-12px text-gray-400 text-left" style="min-width: 36px">{{ row.unit || '&emsp;' }}</span>
-            </div>
+    <!-- ═══ 监控视图：实时数据表格 ═══ -->
+    <template v-else>
+      <ElTable v-loading="loading" :data="list" border stripe>
+        <ElTableColumn sortable prop="id" label="ID" width="70" />
+        <ElTableColumn sortable prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
+        <ElTableColumn sortable prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
+        <ElTableColumn label="当前值" width="160" align="center">
+          <template #default="{ row }">
+            <template v-if="liveData[row.id]">
+              <div class="flex items-center justify-center gap-4px">
+                <span class="text-right tabular-nums" style="min-width: 60px" :class="liveData[row.id].quality === 'good' ? 'text-green-600 font-bold' : liveData[row.id].quality === 'bad' ? 'text-red-500' : 'text-yellow-600'">
+                  {{ liveData[row.id].value != null ? liveData[row.id].value : '—' }}
+                </span>
+                <span class="text-12px text-gray-400 text-left" style="min-width: 36px">{{ row.unit || '&emsp;' }}</span>
+              </div>
+            </template>
+            <span v-else class="text-gray-300">—</span>
           </template>
-          <span v-else class="text-gray-300">—</span>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn label="数据质量" width="90" align="center">
-        <template #default="{ row }">
-          <ElTag
-            v-if="liveData[row.id]"
-            :type="(QUALITY_MAP[liveData[row.id].quality]?.type || 'info') as any"
-            size="small"
-          >
-            {{ QUALITY_MAP[liveData[row.id].quality]?.text || liveData[row.id].quality }}
-          </ElTag>
-          <span v-else class="text-gray-300 text-12px">—</span>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn label="更新时间" width="160">
-        <template #default="{ row }">
-          <template v-if="liveData[row.id]?.time">
-            <span class="text-12px text-gray-500">{{ new Date(liveData[row.id].time).toLocaleString() }}</span>
+        </ElTableColumn>
+        <ElTableColumn label="数据质量" width="90" align="center">
+          <template #default="{ row }">
+            <ElTag
+              v-if="liveData[row.id]"
+              :type="(QUALITY_MAP[liveData[row.id].quality]?.type || 'info') as any"
+              size="small"
+            >
+              {{ QUALITY_MAP[liveData[row.id].quality]?.text || liveData[row.id].quality }}
+            </ElTag>
+            <span v-else class="text-gray-300 text-12px">—</span>
           </template>
-          <span v-else class="text-gray-300 text-12px">—</span>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn sortable prop="address" label="地址" width="80" />
-      <ElTableColumn label="功能码" width="130">
-        <template #default="{ row }">
-          <ElTag v-if="row.function_code" size="small">{{
-            (
-              {
-                coil: '线圈 FC01',
-                discrete_input: '离散输入 FC02',
-                input_register: '输入寄存器 FC04',
-                holding_register: '保持寄存器 FC03'
-              } as any
-            )[row.function_code] || row.function_code
-          }}</ElTag>
-          <ElTag v-else type="info" size="small">{{ row.data_type || '—' }}</ElTag>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn sortable prop="data_type" label="数据类型" width="100" />
-      <ElTableColumn label="可写" width="70">
-        <template #default="{ row }">
-          <ElTag :type="row.writable ? 'success' : 'info'" size="small">{{ row.writable ? '是' : '否' }}</ElTag>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn label="操作" width="150" fixed="right">
-        <template #default="{ row }">
-          <ElButton v-hasPermi="['tag.write']" link type="primary" @click="openEdit(row)"
-            >编辑</ElButton
-          >
-          <ElButton v-hasPermi="['tag.write']" link type="danger" @click="remove(row)"
-            >删除</ElButton
-          >
-        </template>
-      </ElTableColumn>
-    </ElTable>
-    <div class="flex justify-end mt-12px">
-      <ElPagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        :total="total"
-        layout="total, sizes, prev, pager, next, jumper"
-        :page-sizes="[20, 50, 100, 200]"
-        @current-change="onPageChange"
-        @size-change="onSizeChange"
-      />
-    </div>
+        </ElTableColumn>
+        <ElTableColumn label="更新时间" width="160">
+          <template #default="{ row }">
+            <template v-if="liveData[row.id]?.time">
+              <span class="text-12px text-gray-500">{{ new Date(liveData[row.id].time).toLocaleString() }}</span>
+            </template>
+            <span v-else class="text-gray-300 text-12px">—</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn sortable prop="address" label="地址" width="80" />
+        <ElTableColumn sortable prop="data_type" label="数据类型" width="100" />
+      </ElTable>
+      <div class="flex justify-end mt-12px">
+        <ElPagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[20, 50, 100, 200]"
+          @current-change="onPageChange"
+          @size-change="onSizeChange"
+        />
+      </div>
+    </template>
 
     <ElEmpty v-if="!loading && !list.length" description="当前筛选条件下没有点位" />
 
