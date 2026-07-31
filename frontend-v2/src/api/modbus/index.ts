@@ -79,6 +79,25 @@ export const getEscalationConfig = () => request.get({ url: '/alarms/escalation-
 export const updateEscalationConfig = (data: any) =>
   request.put({ url: '/alarms/escalation-config', data })
 
+// ============ Alarm MQTT Push ============
+export const getAlarmMqttConfigs = () => request.get({ url: '/alarms/mqtt' })
+export const createAlarmMqttConfig = (data: any) => request.post({ url: '/alarms/mqtt', data })
+export const updateAlarmMqttConfig = (id: number, data: any) =>
+  request.put({ url: `/alarms/mqtt/${id}`, data })
+export const deleteAlarmMqttConfig = (id: number) => request.delete({ url: `/alarms/mqtt/${id}` })
+export const testAlarmMqttConfig = (id: number) => request.post({ url: `/alarms/mqtt/${id}/test` })
+
+// ============ Data Forward ============
+export const getDataForwardRules = () => request.get({ url: '/data-forward' })
+export const createDataForwardRule = (data: any) => request.post({ url: '/data-forward', data })
+export const updateDataForwardRule = (id: number, data: any) =>
+  request.put({ url: `/data-forward/${id}`, data })
+export const deleteDataForwardRule = (id: number) => request.delete({ url: `/data-forward/${id}` })
+export const testDataForwardRule = (id: number) => request.post({ url: `/data-forward/${id}/test` })
+
+// ============ MQTT Health ============
+export const getMqttHealth = () => request.get({ url: '/mqtt-health' })
+
 // ============ Control ============ (reuse writeDevice)
 
 // ============ SMS ============

@@ -204,6 +204,162 @@ def list_all_devices(db: Session = Depends(get_db), current_user: User = Depends
     return [_device_out(i, pmap) for i in q.order_by(Device.id).limit(500).all()]
 
 
+# ============ Tags（必须在 /{device_id} 之前注册，否则 /tags/all 会被路径参数吞掉） ============
+
+VALID_FUNCTION_CODES = {"coil", "discrete_input", "input_register", "holding_register"}
+
+
+def _validate_tag_required(device: Device, function_code: str, mqtt_topic: str, opc_node_id: str, tag_name: str = ""):
+    """按设备协议校验点位必填字段（Modbus 功能码 / MQTT 订阅主题 / OPC 节点ID）。"""
+    prefix = f"点位「{tag_name}」" if tag_name else "点位"
+    protocol = device.protocol
+    if protocol in ("modbus_tcp", "modbus_rtu"):
+        if not function_code:
+            raise HTTPException(status_code=400, detail=f"{prefix}：功能码为必选项，请选择 线圈/离散输入/输入寄存器/保持寄存器")
+        if function_code not in VALID_FUNCTION_CODES:
+            raise HTTPException(status_code=400, detail=f"{prefix}：功能码 '{function_code}' 无效，可选值：{'/'.join(sorted(VALID_FUNCTION_CODES))}")
+    elif protocol == "mqtt":
+        # 点位 topic 可留空回退到 设备Topic前缀/点位名，两者都空才拒绝
+        if not (mqtt_topic or "").strip() and not (getattr(device, "mqtt_topic_prefix", "") or "").strip():
+            raise HTTPException(status_code=400, detail=f"{prefix}：MQTT 设备必须填写订阅主题 (mqtt_topic)，或先在设备上配置 Topic 前缀")
+    elif protocol == "opc_ua":
+        if not (opc_node_id or "").strip():
+            raise HTTPException(status_code=400, detail=f"{prefix}：OPC UA 设备必须填写节点ID (opc_node_id)，如 ns=2;s=Temperature")
+
+
+@router.get("/tags/all", response_model=PageResponse)
+def list_all_tags(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    org_node_id: int = Query(None),
+    device_ids: str = Query(""),
+    search: str = Query(""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("tag.read")),
+):
+    """全局点位列表（跨设备，用于实时数据页扁平分页展示）。"""
+    q = db.query(DeviceTag).join(Device, DeviceTag.device_id == Device.id)
+    # 组织架构范围过滤
+    if org_node_id:
+        from app.services.org_service import get_descendant_ids
+        ids = get_descendant_ids(db, org_node_id)
+        q = q.filter(Device.org_node_id.in_(ids))
+    # 指定设备 ID 列表过滤（逗号分隔）
+    if device_ids and device_ids.strip():
+        try:
+            did_list = [int(x) for x in device_ids.split(",") if x.strip()]
+            if did_list:
+                q = q.filter(DeviceTag.device_id.in_(did_list))
+        except ValueError:
+            pass
+    # 关键词搜索（设备名 or 点位名）
+    if search and search.strip():
+        kw = f"%{search.strip()}%"
+        q = q.filter((Device.name.ilike(kw)) | (DeviceTag.name.ilike(kw)))
+    total = q.count()
+    items = q.order_by(DeviceTag.device_id, DeviceTag.sort_order, DeviceTag.id) \
+             .offset((page - 1) * page_size).limit(page_size).all()
+    # 构建 device_id → name 映射
+    dids = list({t.device_id for t in items})
+    dmap = {}
+    if dids:
+        for d in db.query(Device.id, Device.name).filter(Device.id.in_(dids)).all():
+            dmap[d.id] = d.name
+    out = []
+    for t in items:
+        o = TagListOut.model_validate(t)
+        o.device_name = dmap.get(t.device_id, "")
+        out.append(o)
+    return PageResponse(total=total, page=page, page_size=page_size, data=out)
+
+
+@router.get("/{device_id}/tags", response_model=PageResponse)
+def list_tags(device_id: int, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=500), db: Session = Depends(get_db), current_user: User = Depends(require_permission("tag.read"))):
+    _ensure_device_visible(db, current_user, device_id)
+    q = db.query(DeviceTag).filter(DeviceTag.device_id == device_id)
+    total = q.count()
+    items = q.order_by(DeviceTag.sort_order, DeviceTag.id).offset((page - 1) * page_size).limit(page_size).all()
+    return PageResponse(total=total, page=page, page_size=page_size, data=[TagOut.model_validate(i) for i in items])
+
+
+@router.post("/tags", response_model=TagOut)
+def create_tag(req: TagCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
+    device = db.query(Device).filter(Device.id == req.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    _validate_tag_required(device, req.function_code, req.mqtt_topic, req.opc_node_id, req.name)
+    tag = DeviceTag(**req.model_dump())
+    db.add(tag)
+    try:
+        db.commit()
+        db.refresh(tag)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+    return tag
+
+
+@router.put("/tags/{tag_id}", response_model=TagOut)
+def update_tag(tag_id: int, req: TagUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
+    tag = db.query(DeviceTag).filter(DeviceTag.id == tag_id).first()
+    if not tag:
+        raise HTTPException(status_code=404, detail="Tag不存在")
+    for k, v in req.model_dump(exclude_unset=True).items():
+        setattr(tag, k, v)
+    device = db.query(Device).filter(Device.id == tag.device_id).first()
+    if device:
+        _validate_tag_required(device, tag.function_code, tag.mqtt_topic, tag.opc_node_id, tag.name)
+    try:
+        db.commit()
+        db.refresh(tag)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
+    return tag
+
+
+@router.delete("/tags/{tag_id}")
+def delete_tag(tag_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
+    tag = db.query(DeviceTag).filter(DeviceTag.id == tag_id).first()
+    if not tag:
+        raise HTTPException(status_code=404, detail="Tag不存在")
+    db.delete(tag)
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
+    return ResponseModel(message="删除成功")
+
+
+@router.post("/tags/batch", response_model=List[TagOut])
+def batch_create_tags(tags: List[TagCreate], db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
+    if len(tags) > 100:
+        raise HTTPException(status_code=400, detail="批量创建点位最多支持 100 条")
+    result = []
+    device_cache: dict = {}
+    for req in tags:
+        if req.device_id not in device_cache:
+            device_cache[req.device_id] = db.query(Device).filter(Device.id == req.device_id).first()
+        device = device_cache[req.device_id]
+        if not device:
+            raise HTTPException(status_code=404, detail=f"点位「{req.name}」：设备 {req.device_id} 不存在")
+        _validate_tag_required(device, req.function_code, req.mqtt_topic, req.opc_node_id, req.name)
+        tag = DeviceTag(**req.model_dump())
+        db.add(tag)
+        result.append(tag)
+    try:
+        db.commit()
+        for t in result:
+            db.refresh(t)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"批量创建失败: {e}")
+    return result
+
+
+# ============ Devices (路径参数路由，放在固定路径之后) ============
+
 @router.get("/{device_id}", response_model=DeviceDetailOut)
 def get_device(device_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.read"))):
     device = db.query(Device).filter(Device.id == device_id).first()
@@ -447,160 +603,6 @@ def duplicate_device(
             "tag_count": tag_count,
         },
     )
-
-
-# ============ Tags ============
-
-@router.get("/tags/all", response_model=PageResponse)
-def list_all_tags(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=500),
-    org_node_id: int = Query(None),
-    device_ids: str = Query(""),
-    search: str = Query(""),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("tag.read")),
-):
-    """全局点位列表（跨设备，用于实时数据页扁平分页展示）。"""
-    q = db.query(DeviceTag).join(Device, DeviceTag.device_id == Device.id)
-    # 组织架构范围过滤
-    if org_node_id:
-        from app.services.org_service import get_descendant_ids
-        ids = get_descendant_ids(db, org_node_id)
-        q = q.filter(Device.org_node_id.in_(ids))
-    # 指定设备 ID 列表过滤（逗号分隔）
-    if device_ids and device_ids.strip():
-        try:
-            did_list = [int(x) for x in device_ids.split(",") if x.strip()]
-            if did_list:
-                q = q.filter(DeviceTag.device_id.in_(did_list))
-        except ValueError:
-            pass
-    # 关键词搜索（设备名 or 点位名）
-    if search and search.strip():
-        kw = f"%{search.strip()}%"
-        q = q.filter((Device.name.ilike(kw)) | (DeviceTag.name.ilike(kw)))
-    total = q.count()
-    items = q.order_by(DeviceTag.device_id, DeviceTag.sort_order, DeviceTag.id) \
-             .offset((page - 1) * page_size).limit(page_size).all()
-    # 构建 device_id → name 映射
-    dids = list({t.device_id for t in items})
-    dmap = {}
-    if dids:
-        for d in db.query(Device.id, Device.name).filter(Device.id.in_(dids)).all():
-            dmap[d.id] = d.name
-    out = []
-    for t in items:
-        o = TagListOut.model_validate(t)
-        o.device_name = dmap.get(t.device_id, "")
-        out.append(o)
-    return PageResponse(total=total, page=page, page_size=page_size, data=out)
-
-
-@router.get("/{device_id}/tags", response_model=PageResponse)
-def list_tags(device_id: int, page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=500), db: Session = Depends(get_db), current_user: User = Depends(require_permission("tag.read"))):
-    _ensure_device_visible(db, current_user, device_id)
-    q = db.query(DeviceTag).filter(DeviceTag.device_id == device_id)
-    total = q.count()
-    items = q.order_by(DeviceTag.sort_order, DeviceTag.id).offset((page - 1) * page_size).limit(page_size).all()
-    return PageResponse(total=total, page=page, page_size=page_size, data=[TagOut.model_validate(i) for i in items])
-
-
-VALID_FUNCTION_CODES = {"coil", "discrete_input", "input_register", "holding_register"}
-
-
-def _validate_tag_required(device: Device, function_code: str, mqtt_topic: str, opc_node_id: str, tag_name: str = ""):
-    """按设备协议校验点位必填字段（Modbus 功能码 / MQTT 订阅主题 / OPC 节点ID）。"""
-    prefix = f"点位「{tag_name}」" if tag_name else "点位"
-    protocol = device.protocol
-    if protocol in ("modbus_tcp", "modbus_rtu"):
-        if not function_code:
-            raise HTTPException(status_code=400, detail=f"{prefix}：功能码为必选项，请选择 线圈/离散输入/输入寄存器/保持寄存器")
-        if function_code not in VALID_FUNCTION_CODES:
-            raise HTTPException(status_code=400, detail=f"{prefix}：功能码 '{function_code}' 无效，可选值：{'/'.join(sorted(VALID_FUNCTION_CODES))}")
-    elif protocol == "mqtt":
-        # 点位 topic 可留空回退到 设备Topic前缀/点位名，两者都空才拒绝
-        if not (mqtt_topic or "").strip() and not (getattr(device, "mqtt_topic_prefix", "") or "").strip():
-            raise HTTPException(status_code=400, detail=f"{prefix}：MQTT 设备必须填写订阅主题 (mqtt_topic)，或先在设备上配置 Topic 前缀")
-    elif protocol == "opc_ua":
-        if not (opc_node_id or "").strip():
-            raise HTTPException(status_code=400, detail=f"{prefix}：OPC UA 设备必须填写节点ID (opc_node_id)，如 ns=2;s=Temperature")
-
-
-@router.post("/tags", response_model=TagOut)
-def create_tag(req: TagCreate, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
-    device = db.query(Device).filter(Device.id == req.device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="设备不存在")
-    _validate_tag_required(device, req.function_code, req.mqtt_topic, req.opc_node_id, req.name)
-    tag = DeviceTag(**req.model_dump())
-    db.add(tag)
-    try:
-        db.commit()
-        db.refresh(tag)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"创建失败: {e}")
-    return tag
-
-
-@router.put("/tags/{tag_id}", response_model=TagOut)
-def update_tag(tag_id: int, req: TagUpdate, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
-    tag = db.query(DeviceTag).filter(DeviceTag.id == tag_id).first()
-    if not tag:
-        raise HTTPException(status_code=404, detail="Tag不存在")
-    for k, v in req.model_dump(exclude_unset=True).items():
-        setattr(tag, k, v)
-    device = db.query(Device).filter(Device.id == tag.device_id).first()
-    if device:
-        _validate_tag_required(device, tag.function_code, tag.mqtt_topic, tag.opc_node_id, tag.name)
-    try:
-        db.commit()
-        db.refresh(tag)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"更新失败: {e}")
-    return tag
-
-
-@router.delete("/tags/{tag_id}")
-def delete_tag(tag_id: int, db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
-    tag = db.query(DeviceTag).filter(DeviceTag.id == tag_id).first()
-    if not tag:
-        raise HTTPException(status_code=404, detail="Tag不存在")
-    db.delete(tag)
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
-    return ResponseModel(message="删除成功")
-
-
-@router.post("/tags/batch", response_model=List[TagOut])
-def batch_create_tags(tags: List[TagCreate], db: Session = Depends(get_db), _: User = Depends(require_permission("tag.write"))):
-    if len(tags) > 100:
-        raise HTTPException(status_code=400, detail="批量创建点位最多支持 100 条")
-    result = []
-    device_cache: dict = {}
-    for req in tags:
-        if req.device_id not in device_cache:
-            device_cache[req.device_id] = db.query(Device).filter(Device.id == req.device_id).first()
-        device = device_cache[req.device_id]
-        if not device:
-            raise HTTPException(status_code=404, detail=f"点位「{req.name}」：设备 {req.device_id} 不存在")
-        _validate_tag_required(device, req.function_code, req.mqtt_topic, req.opc_node_id, req.name)
-        tag = DeviceTag(**req.model_dump())
-        db.add(tag)
-        result.append(tag)
-    try:
-        db.commit()
-        for t in result:
-            db.refresh(t)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"批量创建失败: {e}")
-    return result
 
 
 # ============ Write (remote control) ============

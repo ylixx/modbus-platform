@@ -8,10 +8,10 @@ from app.core.config import settings
 from app.core.database import engine, Base
 from app.core.exception_handler import register_exception_handlers
 from app.api import (
-    auth, users, devices, alarms, sms, history, dashboard,
+    auth, users, devices, alarms, alarm_mqtt, sms, history, dashboard,
     audit, exports, websocket, hierarchy, permissions, scada,
     archive, imports, templates, scripts, config_export, orgs,
-    lab_data,
+    lab_data, data_forward, mqtt_health,
 )
 
 
@@ -57,6 +57,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Protocol engines start error: {e}")
 
+    # Start data forward service
+    try:
+        from app.services.data_forward_service import data_forward_service
+        data_forward_service.start()
+    except Exception as e:
+        logger.error(f"DataForwardService start error: {e}")
+
     # Initialize WebSocket broadcast (Redis pub/sub for multi-worker)
     try:
         from app.engine.ws_broadcast import init_redis_broadcast, set_main_loop
@@ -75,9 +82,24 @@ async def lifespan(app: FastAPI):
     yield
 
     try:
+        from app.services.data_forward_service import data_forward_service
+        data_forward_service.stop()
+    except Exception as e:
+        logger.error(f"DataForwardService stop error: {e}")
+    try:
         protocol_router.stop_all()
     except Exception as e:
         logger.error(f"Protocol engines stop error: {e}")
+    try:
+        from app.services.alarm_mqtt_publisher import alarm_mqtt_publisher
+        alarm_mqtt_publisher.shutdown()
+    except Exception as e:
+        logger.error(f"AlarmMqttPublisher shutdown error: {e}")
+    try:
+        from app.engine.mqtt_connection_pool import mqtt_pool
+        mqtt_pool.shutdown()
+    except Exception as e:
+        logger.error(f"MqttPool shutdown error: {e}")
     try:
         write_buffer.stop()
     except Exception as e:
@@ -304,6 +326,7 @@ app.include_router(auth.router, prefix=prefix)
 app.include_router(users.router, prefix=prefix)
 app.include_router(devices.router, prefix=prefix)
 app.include_router(alarms.router, prefix=prefix)
+app.include_router(alarm_mqtt.router, prefix=prefix)
 app.include_router(sms.router, prefix=prefix)
 app.include_router(history.router, prefix=prefix)
 app.include_router(dashboard.router, prefix=prefix)
@@ -319,6 +342,8 @@ app.include_router(templates.router, prefix=prefix)
 app.include_router(scripts.router, prefix=prefix)
 app.include_router(config_export.router, prefix=prefix)
 app.include_router(lab_data.router, prefix=prefix)
+app.include_router(data_forward.router, prefix=prefix)
+app.include_router(mqtt_health.router, prefix=prefix)
 app.include_router(websocket.router)          # 兼容 v1 前端: /ws
 app.include_router(websocket.router, prefix=prefix)  # v2 前端: /api/v1/ws
 
