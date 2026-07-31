@@ -28,6 +28,7 @@ import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 import { useWsStore } from '@/store/modules/websocket'
 import { wsManager } from '@/utils/websocket'
 import type { WsLiveValue } from '@/utils/websocket'
+import type { WsDeviceStatus } from '@/utils/websocket'
 import { saveBlob } from '@/utils/modbus'
 
 defineOptions({ name: 'Realtime' })
@@ -278,6 +279,15 @@ const onBatchLive = (msg: any) => {
   for (const d of items) onLiveValue({ data: d } as any)
 }
 
+const onDeviceStatus = (msg: any) => {
+  const d = msg.data as WsDeviceStatus
+  if (!d) return
+  const row = deviceRows.value.find((r) => r.id === d.device_id)
+  if (row) {
+    row.status = d.status
+  }
+}
+
 // ── 轮询兜底：WS 未连接或用户关闭 WS 时，按时刷新实时值 ──
 const setupPolling = () => {
   if (pollTimer) clearInterval(pollTimer)
@@ -290,6 +300,7 @@ onMounted(() => {
   fetchDevices()
   unsubFns.push(wsManager.on('live_value', onLiveValue))
   unsubFns.push(wsManager.on('batch_live', onBatchLive))
+  unsubFns.push(wsManager.on('device_status', onDeviceStatus))
   setupPolling()
 })
 

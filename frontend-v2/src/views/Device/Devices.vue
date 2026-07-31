@@ -40,6 +40,7 @@ import {
 } from '@/api/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 import { saveBlob, deviceStatusType, deviceStatusText, concurrentRun } from '@/utils/modbus'
+import { wsManager } from '@/utils/websocket'
 
 defineOptions({ name: 'Devices' })
 
@@ -482,15 +483,28 @@ const fetchPublishStatus = async () => {
   }
 }
 
+// ── WebSocket 设备状态实时推送 ──
+const onDeviceStatus = (msg: any) => {
+  const d = msg.data
+  if (!d) return
+  const row = list.value.find((r: any) => r.id === d.device_id)
+  if (row) {
+    row.status = d.status
+    if (d.error) row.last_error = d.error
+  }
+}
+
 onMounted(() => {
   fetchList()
   fetchOrgTree()
   fetchPublishStatus()
   publishTimer = setInterval(fetchPublishStatus, 15000)
+  wsManager.on('device_status', onDeviceStatus)
 })
 
 onUnmounted(() => {
   if (publishTimer) clearInterval(publishTimer)
+  wsManager.off('device_status', onDeviceStatus)
 })
 </script>
 
