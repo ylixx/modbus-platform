@@ -11,7 +11,7 @@ from app.api import (
     auth, users, devices, alarms, alarm_mqtt, sms, history, dashboard,
     audit, exports, websocket, hierarchy, permissions, scada,
     archive, imports, templates, scripts, config_export, orgs,
-    lab_data, data_forward, mqtt_health,
+    lab_data, data_forward, mqtt_health, device_publish,
 )
 
 
@@ -356,6 +356,7 @@ app.include_router(config_export.router, prefix=prefix)
 app.include_router(lab_data.router, prefix=prefix)
 app.include_router(data_forward.router, prefix=prefix)
 app.include_router(mqtt_health.router, prefix=prefix)
+app.include_router(device_publish.router, prefix=prefix)
 app.include_router(websocket.router)          # 兼容 v1 前端: /ws
 app.include_router(websocket.router, prefix=prefix)  # v2 前端: /api/v1/ws
 

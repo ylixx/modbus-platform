@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
@@ -22,7 +22,8 @@ import {
   ElMessageBox,
   ElDivider,
   ElSwitch,
-  ElAlert
+  ElAlert,
+  ElTooltip
 } from 'element-plus'
 import {
   getDevices,
@@ -34,7 +35,8 @@ import {
   unwrapList,
   exportDevicesCsv,
   getImportTemplateDevices,
-  importDevices
+  importDevices,
+  getDevicePublishStatus
 } from '@/api/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 import { saveBlob, deviceStatusType, deviceStatusText, concurrentRun } from '@/utils/modbus'
@@ -462,9 +464,33 @@ const doDuplicate = async () => {
   }
 }
 
+// ── 设备发布状态 ──
+const publishMap = ref<Record<number, any>>({})
+let publishTimer: any = null
+
+const fetchPublishStatus = async () => {
+  try {
+    const res: any = await getDevicePublishStatus()
+    const items: any[] = res?.data || res || []
+    const map: Record<number, any> = {}
+    for (const item of items) {
+      map[item.device_id] = item
+    }
+    publishMap.value = map
+  } catch {
+    // silent
+  }
+}
+
 onMounted(() => {
   fetchList()
   fetchOrgTree()
+  fetchPublishStatus()
+  publishTimer = setInterval(fetchPublishStatus, 15000)
+})
+
+onUnmounted(() => {
+  if (publishTimer) clearInterval(publishTimer)
 })
 </script>
 
@@ -575,6 +601,21 @@ onMounted(() => {
       <ElTableColumn label="状态" width="90">
         <template #default="{ row }">
           <ElTag :type="statusType(row.status)">{{ statusText(row.status) }}</ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="MQTT发布" width="100">
+        <template #default="{ row }">
+          <template v-if="publishMap[row.id]?.running">
+            <ElTooltip :content="`成功 ${publishMap[row.id].publish_count} / 失败 ${publishMap[row.id].publish_fail_count}\n最后发布: ${publishMap[row.id].last_publish_time || '-'}${publishMap[row.id].last_error ? '\n错误: ' + publishMap[row.id].last_error : ''}`" placement="top">
+              <ElTag :type="publishMap[row.id]?.connected ? 'success' : 'warning'" size="small">
+                {{ publishMap[row.id]?.connected ? '正常' : '断开' }}
+              </ElTag>
+            </ElTooltip>
+          </template>
+          <template v-else-if="row.mqtt_publish_enabled">
+            <ElTag type="info" size="small">未启动</ElTag>
+          </template>
+          <span v-else class="text-gray-400 text-12px">—</span>
         </template>
       </ElTableColumn>
       <ElTableColumn sortable prop="description" label="描述" min-width="160" show-overflow-tooltip />

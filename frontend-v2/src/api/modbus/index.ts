@@ -98,6 +98,11 @@ export const testDataForwardRule = (id: number) => request.post({ url: `/data-fo
 // ============ MQTT Health ============
 export const getMqttHealth = () => request.get({ url: '/mqtt-health' })
 
+// ============ Device Publish ============
+export const getDevicePublishStatus = () => request.get({ url: '/device-publish/status' })
+export const triggerDevicePublish = (deviceId: number) =>
+  request.post({ url: `/device-publish/${deviceId}/trigger` })
+
 // ============ Control ============ (reuse writeDevice)
 
 // ============ SMS ============
