@@ -18,7 +18,7 @@ import {
   ElUpload
 } from 'element-plus'
 import { getScadaWidgets, deleteScadaWidget, uploadScadaWidget, unwrapList } from '@/api/modbus'
-import { widgetCategories, getWidgetsByCategory } from './widgets/builtin'
+import { svgWidgetCategories, getSvgWidgetsByCategory } from './widgets/svg-widgets'
 
 defineOptions({ name: 'ScadaWidgets' })
 
@@ -100,26 +100,27 @@ onMounted(fetchList)
       </div>
     </template>
 
-    <!-- 内置图元 -->
+    <!-- 内置图元（SVG 缩略图） -->
     <div class="text-16px font-700 mb-12px">内置工业图元</div>
     <ElRow :gutter="16" class="mb-24px">
-      <template v-for="cat in widgetCategories()" :key="cat">
+      <template v-for="cat in svgWidgetCategories()" :key="cat">
         <ElCol :span="24" class="mb-8px">
           <div class="text-14px font-600 text-gray-500">{{ cat }}</div>
         </ElCol>
         <ElCol
-          v-for="w in getWidgetsByCategory(cat)"
-          :key="w.type"
+          v-for="w in getSvgWidgetsByCategory(cat)"
+          :key="w.name"
           :xs="12"
           :sm="8"
           :md="6"
           :lg="4"
           class="mb-16px"
         >
-          <ElCard shadow="hover" class="h-full text-center">
-            <div class="text-36px mb-8px">{{ w.icon }}</div>
+          <ElCard shadow="hover" class="h-full text-center widget-preview-card">
+            <div class="svg-thumb-wrap mb-8px" v-html="w.thumbnail"></div>
             <div class="text-14px font-600 mb-4px">{{ w.name }}</div>
             <div class="text-12px text-gray-400">{{ w.defaultWidth }}×{{ w.defaultHeight }}</div>
+            <div class="text-10px text-gray-500 mt-2px">{{ w.typeTag }}</div>
           </ElCard>
         </ElCol>
       </template>
@@ -188,3 +189,24 @@ onMounted(fetchList)
     </ElDialog>
   </ContentWrap>
 </template>
+
+<style scoped>
+.svg-thumb-wrap {
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  background: #0d1117;
+  border-radius: 4px;
+  padding: 4px;
+}
+.svg-thumb-wrap :deep(svg) {
+  max-width: 70px;
+  max-height: 70px;
+}
+.widget-preview-card {
+  min-height: 140px;
+}
+</style>
