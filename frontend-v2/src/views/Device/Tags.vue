@@ -8,7 +8,7 @@ import {
   ElSelect,
   ElOption,
   ElTag,
-  ElDialog,
+  ElDrawer,
   ElForm,
   ElFormItem,
   ElInput,
@@ -704,7 +704,7 @@ onUnmounted(() => {
 
     <ElEmpty v-if="!loading && !list.length" description="当前筛选条件下没有点位" />
 
-    <ElDialog v-model="dialogVisible" :title="dialogTitle" width="500px" @close="formRef?.resetFields()">
+    <ElDrawer v-model="dialogVisible" :title="dialogTitle" size="500px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="90px">
         <ElFormItem label="归属设备" prop="device_id">
           <ElSelect
@@ -806,7 +806,7 @@ onUnmounted(() => {
         <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">确定</ElButton>
       </template>
-    </ElDialog>
+    </ElDrawer>
 
     <!-- 导入点位对话框 -->
     <ElDialog v-model="importDialogVisible" title="导入点位" width="500px" @close="resetImportState">
