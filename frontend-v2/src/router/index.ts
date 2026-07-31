@@ -112,6 +112,16 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         }
       },
       {
+        path: 'live-dashboard',
+        component: () => import('@/views/Monitor/LiveDashboard.vue'),
+        name: 'LiveDashboard',
+        meta: {
+          title: '监控看板',
+          icon: 'vi-ant-design:appstore-outlined',
+          permission: 'dashboard.read'
+        }
+      },
+      {
         path: 'screen',
         component: () => import('@/views/Monitor/Screen.vue'),
         name: 'Screen',
