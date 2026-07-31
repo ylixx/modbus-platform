@@ -1,15 +1,16 @@
 <script setup lang="ts">
 /**
- * SCADA 运行查看器
- * - 加载画布配置并渲染
+ * SCADA 运行查看器 - FUXA 风格 SVG 画布
+ * - 加载 SVG 画布配置并渲染
  * - 通过 WebSocket 接收实时数据并更新绑定图元
  * - 全屏模式
+ * - 管道流动动画 + 旋转动画
  */
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElButton, ElBadge } from 'element-plus'
 import { getScadaPage, unwrap } from '@/api/modbus'
-import ScadaCanvas from './ScadaCanvas.vue'
+import SvgCanvas from './SvgCanvas.vue'
 import { useWsStore } from '@/store/modules/websocket'
 import { wsManager } from '@/utils/websocket'
 import type { WsLiveValue } from '@/utils/websocket'
@@ -20,52 +21,26 @@ const route = useRoute()
 const router = useRouter()
 const wsStore = useWsStore()
 const id = route.params.id as string
-const page = ref<any>({ name: '', config_json: '[]' })
-const canvasRef = ref<InstanceType<typeof ScadaCanvas>>()
+const page = ref<any>({ name: '', config_json: '{}' })
+const canvasRef = ref<InstanceType<typeof SvgCanvas>>()
 const isFullscreen = ref(false)
 let unsubFns: (() => void)[] = []
 
 const wsConnected = computed(() => wsStore.connected)
 
-// 解析配置中的绑定关系
+// ── 绑定信息缓存 ──
 interface BindingInfo {
+  elementId: string
   bindTarget: string
   deviceId: number
+  tagId: number
   tagName: string
   prop: string
-  fabricId: string // fabric 对象的唯一标识
 }
-const bindings: BindingInfo[] = []
 
-const parseBindings = (configJson: string) => {
-  bindings.length = 0
-  try {
-    const objects = typeof configJson === 'string' ? JSON.parse(configJson) : configJson
-    if (!Array.isArray(objects)) return
-
-    const tryPush = (child: any) => {
-      if (child._bindTarget && child._bindDeviceId) {
-        bindings.push({
-          bindTarget: child._bindTarget,
-          deviceId: child._bindDeviceId,
-          tagName: child._bindTagName || '',
-          prop: child._bindProp || 'text',
-          fabricId: child.name || child.id || ''
-        })
-      }
-    }
-
-    for (const obj of objects) {
-      // 顶层非 group 对象也可能有绑定
-      tryPush(obj)
-      // group 内的子对象
-      if (obj.type === 'group' && obj.objects) {
-        for (const child of obj.objects) {
-          tryPush(child)
-        }
-      }
-    }
-  } catch {}
+const parseBindingsFromCanvas = (): BindingInfo[] => {
+  if (!canvasRef.value) return []
+  return canvasRef.value.getAllBindings()
 }
 
 const fetchPage = async () => {
@@ -74,44 +49,52 @@ const fetchPage = async () => {
   await nextTick()
 
   const config = body?.config_json
-  if (config && config !== '[]') {
+  if (config) {
     try {
       const json = typeof config === 'string' ? JSON.parse(config) : config
       await canvasRef.value?.loadFromJSON(json)
-      parseBindings(config)
     } catch (e) {
       console.warn('Failed to load SCADA config:', e)
     }
   }
 }
 
-// WebSocket 实时数据更新
+// ── WebSocket 实时数据更新 ──
 const onLiveValue = (msg: any) => {
   const d = msg.data as WsLiveValue
   if (!d) return
 
-  // 查找匹配的绑定
+  const bindings = parseBindingsFromCanvas()
+
   for (const binding of bindings) {
     if (binding.deviceId === d.device_id && binding.tagName === d.tag_name) {
       let updateValue: any = d.value
 
-      // 根据绑定目标决定更新方式
+      // 根据绑定目标决定更新方式（FUXA processValue 风格）
       if (binding.bindTarget === 'state') {
         // 状态绑定：根据值映射颜色
         updateValue = d.value > 0 ? '#00ff00' : '#ff0000'
-        canvasRef.value?.updateBoundValue(binding.fabricId, 'state', updateValue, 'fill')
-      } else if (binding.bindTarget === 'fill') {
-        // 填充色绑定
-        canvasRef.value?.updateBoundValue(binding.fabricId, 'fill', updateValue, 'fill')
-      } else {
-        // 值绑定（value, level, temperature 等）
+        canvasRef.value?.updateBoundValue(binding.elementId, 'state', updateValue, 'fill')
+      } else if (['fill', 'stroke'].includes(binding.prop)) {
+        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, updateValue, binding.prop)
+      } else if (binding.bindTarget === 'level') {
+        // 液位绑定
+        canvasRef.value?.updateBoundValue(binding.elementId, 'level', d.value, 'height')
+        // 同时更新数值文本
+        canvasRef.value?.updateBoundValue(binding.elementId, 'level', d.value.toFixed(1), 'text')
+      } else if (binding.bindTarget === 'value') {
         const displayValue = typeof d.value === 'number' ? d.value.toFixed(1) : String(d.value)
-        canvasRef.value?.updateBoundValue(binding.fabricId, binding.bindTarget, displayValue, 'text')
-
-        // 特殊绑定：level 控制高度/宽度
-        if (binding.bindTarget === 'level') {
-          canvasRef.value?.updateBoundValue(binding.fabricId, 'level', d.value, 'height')
-        }
+        canvasRef.value?.updateBoundValue(binding.elementId, 'value', displayValue, 'text')
+      } else if (['red', 'yellow', 'green'].includes(binding.bindTarget)) {
+        // 信号灯颜色绑定
+        updateValue = d.value > 0 ? '#00ff00' : '#003a00'
+        if (binding.bindTarget === 'red') updateValue = d.value > 0 ? '#ff0000' : '#3a0000'
+        if (binding.bindTarget === 'yellow') updateValue = d.value > 0 ? '#ffff00' : '#3a3a00'
+        if (binding.bindTarget === 'green') updateValue = d.value > 0 ? '#00ff00' : '#003a00'
+        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, updateValue, 'fill')
+      } else {
+        const displayValue = typeof d.value === 'number' ? d.value.toFixed(1) : String(d.value)
+        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, displayValue, 'text')
       }
     }
   }
@@ -140,7 +123,7 @@ const onFullscreenChange = () => {
 
 onMounted(() => {
   fetchPage().then(() => {
-    // 加载完成后启动蚂蚁线流动动画
+    // 加载完成后启动动画
     canvasRef.value?.startFlowAnimation()
   })
   unsubFns.push(wsManager.on('live_value', onLiveValue))
@@ -150,6 +133,7 @@ onMounted(() => {
 onUnmounted(() => {
   unsubFns.forEach((fn) => fn())
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  canvasRef.value?.stopFlowAnimation()
 })
 </script>
 
@@ -180,7 +164,7 @@ onUnmounted(() => {
     </div>
 
     <div class="viewer-canvas">
-      <ScadaCanvas
+      <SvgCanvas
         ref="canvasRef"
         :width="page.width || 1920"
         :height="page.height || 1080"

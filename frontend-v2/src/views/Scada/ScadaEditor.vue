@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /**
- * SCADA 可视化编辑器
+ * SCADA 可视化编辑器 - FUXA 风格 SVG 画布
  *
- * 布局：左侧图元面板 | 中间画布 | 右侧属性面板
+ * 布局：左侧图元面板（SVG缩略图） | 中间SVG画布 | 右侧属性面板
+ * 画布引擎：原生 SVG DOM（参照 FUXA 架构）
  */
-import { ref, reactive, onMounted, nextTick, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, nextTick, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton,
@@ -36,8 +37,9 @@ import {
   unwrap,
   unwrapList
 } from '@/api/modbus'
-import ScadaCanvas from './ScadaCanvas.vue'
-import { builtinWidgets, widgetCategories, getWidgetsByCategory } from './widgets/builtin'
+import SvgCanvas from './SvgCanvas.vue'
+import { svgWidgets, svgWidgetCategories, getSvgWidgetsByCategory, genId } from './widgets/svg-widgets'
+import type { SvgWidgetDef } from './widgets/svg-widgets'
 
 defineOptions({ name: 'ScadaEditor' })
 
@@ -46,15 +48,15 @@ const router = useRouter()
 const id = route.params.id as string
 
 // ── 画布数据 ──
-const page = ref<any>({ name: '', config_json: '[]', width: 1920, height: 1080, background: '#1a1a2e' })
+const page = ref<any>({ name: '', config_json: '{}', width: 1920, height: 1080, background: '#1a1a2e' })
 const saving = ref(false)
-const canvasRef = ref<InstanceType<typeof ScadaCanvas>>()
+const canvasRef = ref<InstanceType<typeof SvgCanvas>>()
 
 // ── 缩放状态 ──
-const zoomLevel = ref(100) // 百分比
+const zoomLevel = ref(100)
 
 // ── 网格状态 ──
-const gridSize = ref(0) // 0 = 不显示
+const gridSize = ref(0)
 
 // ── 撤销/重做状态 ──
 const canUndoState = ref(false)
@@ -94,24 +96,32 @@ const devices = ref<any[]>([])
 const deviceTags = ref<any[]>([])
 
 // ── 右侧属性面板 ──
-const selectedObj = ref<any>(null)
+const selectedObj = ref<SVGElement | null>(null)
 const selectedProps = reactive<any>({
   left: 0,
   top: 0,
-  scaleX: 1,
-  scaleY: 1,
-  angle: 0,
   opacity: 1
+})
+
+// ── 选中图元的类型信息 ──
+const selectedWidgetType = computed(() => {
+  if (!selectedObj.value) return ''
+  return selectedObj.value.getAttribute('type') || ''
+})
+
+const selectedWidgetId = computed(() => {
+  if (!selectedObj.value) return ''
+  return selectedObj.value.getAttribute('id') || ''
 })
 
 // ── 绑定配置 ──
 const bindDialogVisible = ref(false)
 const bindForm = reactive({
-  target: '', // bindTarget (如 'value', 'state', 'level')
+  target: '',
   deviceId: undefined as number | undefined,
   tagId: undefined as number | undefined,
   tagName: '',
-  prop: 'text' // 绑定到哪个属性
+  prop: 'text'
 })
 
 // ── 加载页面数据 ──
@@ -122,7 +132,7 @@ const fetchPage = async () => {
     await nextTick()
     // 加载画布配置
     const config = body?.config_json
-    if (config && config !== '[]') {
+    if (config) {
       try {
         const json = typeof config === 'string' ? JSON.parse(config) : config
         canvasRef.value?.loadFromJSON(json)
@@ -172,7 +182,7 @@ const save = async () => {
       width: page.value.width,
       height: page.value.height,
       background: page.value.background,
-      config_json: JSON.stringify(json || [])
+      config_json: JSON.stringify(json || {})
     })
     ElMessage.success('保存成功')
     hasUnsavedChanges.value = false
@@ -185,9 +195,24 @@ const save = async () => {
 
 // ── 图元拖放 ──
 
-/** 拖拽开始 — 只传 type 标识，避免 JSON 序列化丢失函数引用 */
-const dragStart = (e: DragEvent, widget: any) => {
-  e.dataTransfer?.setData('application/json', JSON.stringify({ type: widget.type, _isBuiltin: true }))
+/** 拖拽开始 — 传递图元定义的 typeTag 和名称 */
+const dragStart = (e: DragEvent, widget: SvgWidgetDef) => {
+  e.dataTransfer?.setData('application/json', JSON.stringify({
+    typeTag: widget.typeTag,
+    name: widget.name,
+    _isSvgWidget: true
+  }))
+}
+
+/** 自定义图元放置 */
+const dragStartCustom = (e: DragEvent, widget: any) => {
+  e.dataTransfer?.setData('application/json', JSON.stringify({
+    _isCustomWidget: true,
+    id: widget.id,
+    name: widget.name,
+    source_type: widget.source_type,
+    source_data: widget.source_data
+  }))
 }
 
 /** 画布放置 */
@@ -197,27 +222,29 @@ const onCanvasDrop = (e: DragEvent) => {
   if (!data) return
   try {
     const widgetInfo = JSON.parse(data)
-    let fabricObj: any = null
 
-    if (widgetInfo._isBuiltin) {
-      // 内置图元：通过 type 查找定义并调用 createFabric
-      const builtin = builtinWidgets.find((w) => w.type === widgetInfo.type)
-      if (builtin) {
-        fabricObj = builtin.createFabric()
+    // 计算放置位置（相对于画布容器）
+    const canvasWrapper = (e.target as HTMLElement).closest('.editor-canvas')
+      || document.querySelector('.editor-canvas')
+    const rect = canvasWrapper?.getBoundingClientRect()
+    const left = rect ? e.clientX - rect.left - 16 : 100  // -16 补偿 padding
+    const top = rect ? e.clientY - rect.top - 16 : 100
+
+    if (widgetInfo._isSvgWidget) {
+      // 内置 SVG 图元
+      const widgetDef = svgWidgets.find(w => w.typeTag === widgetInfo.typeTag && w.name === widgetInfo.name)
+      if (widgetDef) {
+        const uid = genId('w')
+        const svgFragment = widgetDef.createSvg(uid, left, top, widgetDef.defaultWidth, widgetDef.defaultHeight)
+        canvasRef.value?.addWidgetSVG(svgFragment, left, top)
+        markDirty()
       }
-    } else if (widgetInfo.fabric_json) {
-      fabricObj = JSON.parse(widgetInfo.fabric_json)
-    }
-
-    if (fabricObj) {
-      // 计算放置位置（相对于画布容器）
-      // 从 drop 事件目标向上查找画布包裹元素
-      const canvasWrapper = (e.target as HTMLElement).closest('.scada-canvas-wrapper')
-        || document.querySelector('.scada-canvas-wrapper')
-      const rect = canvasWrapper?.getBoundingClientRect()
-      const left = rect ? e.clientX - rect.left : 100
-      const top = rect ? e.clientY - rect.top : 100
-      canvasRef.value?.addWidget(fabricObj, left, top)
+    } else if (widgetInfo._isCustomWidget) {
+      // 自定义图元：如果 source_data 是 SVG 字符串
+      if (widgetInfo.source_type === 'svg' && widgetInfo.source_data) {
+        canvasRef.value?.addWidgetSVG(widgetInfo.source_data, left, top)
+        markDirty()
+      }
     }
   } catch (err) {
     console.warn('Drop failed:', err)
@@ -228,28 +255,26 @@ const onCanvasDragOver = (e: DragEvent) => {
   e.preventDefault()
 }
 
-/** 自定义图元放置 */
+/** 自定义图元点击放置 */
 const addCustomWidget = (widget: any) => {
-  if (widget.source_type === 'svg') {
-    canvasRef.value?.addSVG(widget.source_data, 200, 200)
-  } else if (widget.source_type === 'png') {
-    canvasRef.value?.addImage(widget.source_data, 200, 200, widget.default_width, widget.default_height)
-  } else if (widget.fabric_json) {
-    canvasRef.value?.addWidget(JSON.parse(widget.fabric_json), 200, 200)
+  if (widget.source_type === 'svg' && widget.source_data) {
+    canvasRef.value?.addWidgetSVG(widget.source_data, 200, 200)
+    markDirty()
   }
 }
 
 // ── 选中/属性 ──
 
-const onObjectSelected = (obj: any) => {
-  selectedObj.value = obj
-  if (obj) {
-    selectedProps.left = Math.round(obj.left || 0)
-    selectedProps.top = Math.round(obj.top || 0)
-    selectedProps.scaleX = obj.scaleX || 1
-    selectedProps.scaleY = obj.scaleY || 1
-    selectedProps.angle = Math.round(obj.angle || 0)
-    selectedProps.opacity = obj.opacity ?? 1
+const onObjectSelected = (el: SVGElement | null) => {
+  selectedObj.value = el
+  if (el) {
+    const transform = canvasRef.value?.getSelectedTransform()
+    if (transform) {
+      selectedProps.left = Math.round(transform.x)
+      selectedProps.top = Math.round(transform.y)
+      selectedProps.opacity = transform.opacity
+    }
+    isLockedState.value = canvasRef.value?.isLocked() ?? false
   }
 }
 
@@ -259,8 +284,7 @@ const onObjectDeselected = () => {
 
 const updateProp = (prop: string, value: any) => {
   if (!selectedObj.value) return
-  selectedObj.value.set({ [prop]: value })
-  canvasRef.value?.getCanvas()?.renderAll()
+  canvasRef.value?.setSelectedTransform(prop, value)
 }
 
 // ── 数据绑定 ──
@@ -291,16 +315,9 @@ const confirmBind = () => {
     ElMessage.warning('请选择绑定目标和点位')
     return
   }
-  // 在选中对象上设置绑定信息
-  const obj = selectedObj.value
-  obj.set({
-    _bindTarget: bindForm.target,
-    _bindDeviceId: bindForm.deviceId,
-    _bindTagId: bindForm.tagId,
-    _bindTagName: bindForm.tagName,
-    _bindProp: bindForm.prop
-  })
-  canvasRef.value?.getCanvas()?.renderAll()
+
+  const elementId = selectedObj.value.getAttribute('id') || ''
+  canvasRef.value?.setBinding(elementId, bindForm.target, bindForm.deviceId!, bindForm.tagId!, bindForm.tagName, bindForm.prop)
   bindDialogVisible.value = false
   ElMessage.success(`已绑定到 ${bindForm.tagName} → ${bindForm.target}`)
 }
@@ -387,9 +404,10 @@ const onKeyDown = (e: KeyboardEvent) => {
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (selectedObj.value && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
       canvasRef.value?.deleteSelected()
+      markDirty()
     }
   }
-    if (e.ctrlKey && e.key === 's') {
+  if (e.ctrlKey && e.key === 's') {
     e.preventDefault()
     save()
     hasUnsavedChanges.value = false
@@ -436,6 +454,7 @@ onUnmounted(() => {
         <ElButton @click="router.push('/scada/pages')" size="small">← 返回</ElButton>
         <ElDivider direction="vertical" />
         <span class="text-14px font-600">{{ page.name || 'SCADA 编辑器' }}</span>
+        <ElTag size="small" type="info" class="ml-8px">SVG</ElTag>
       </div>
       <div class="toolbar-center">
         <!-- 撤销/重做 -->
@@ -478,42 +497,6 @@ onUnmounted(() => {
 
         <ElDivider direction="vertical" />
 
-        <!-- 对齐/分布 -->
-        <ElButtonGroup size="small">
-          <ElTooltip content="左对齐" placement="bottom">
-            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignLeft()">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 6v12l-5-6 5-6zm-8 0v12H3V6h2z"/></svg>
-            </ElButton>
-          </ElTooltip>
-          <ElTooltip content="右对齐" placement="bottom">
-            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignRight()">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M11 6v12l5-6-5-6zm8 0v12h-2V6h2z"/></svg>
-            </ElButton>
-          </ElTooltip>
-          <ElTooltip content="顶对齐" placement="bottom">
-            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignTop()">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 13h12l-6 5-6-5zm0-8v2h12V5H6z"/></svg>
-            </ElButton>
-          </ElTooltip>
-          <ElTooltip content="底对齐" placement="bottom">
-            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignBottom()">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 11h12l-6-5-6 5zm0 8v-2h12v2H6z"/></svg>
-            </ElButton>
-          </ElTooltip>
-          <ElTooltip content="水平居中" placement="bottom">
-            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignCenterH()">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 5v14l5-4.5L17 19V5l-5 4.5L7 5z"/></svg>
-            </ElButton>
-          </ElTooltip>
-          <ElTooltip content="垂直居中" placement="bottom">
-            <ElButton :disabled="!selectedObj" @click="canvasRef?.alignCenterV()">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5 7h14l-4.5 5L19 17H5l4.5-5L5 7z"/></svg>
-            </ElButton>
-          </ElTooltip>
-        </ElButtonGroup>
-
-        <ElDivider direction="vertical" />
-
         <!-- 层级 -->
         <ElButtonGroup size="small">
           <ElTooltip content="上移一层" placement="bottom">
@@ -542,7 +525,8 @@ onUnmounted(() => {
         <!-- 锁定/解锁 -->
         <ElTooltip :content="isLockedState ? '解锁' : '锁定'" placement="bottom">
           <ElButton size="small" :disabled="!selectedObj" @click="isLockedState ? handleUnlock() : handleLock()">
-            {{ isLockedState ? '🔓' : '🔒' }}
+            <svg v-if="isLockedState" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM9 8V6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9z"/></svg>
+            <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 17c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm6-9h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h1.9c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10z"/></svg>
           </ElButton>
         </ElTooltip>
         <!-- 复制 -->
@@ -563,7 +547,6 @@ onUnmounted(() => {
         <ElButton size="small" @click="canvasRef?.deleteSelected()" :disabled="!selectedObj">
           删除
         </ElButton>
-        <ElButton size="small" @click="canvasRef?.selectAll()">全选</ElButton>
         <ElButton size="small" type="warning" @click="handleClear">清空</ElButton>
         <ElDivider direction="vertical" />
         <ElButton size="small" type="primary" :loading="saving" @click="save">
@@ -574,27 +557,28 @@ onUnmounted(() => {
     </div>
 
     <div class="editor-body">
-      <!-- 左侧：图元面板 -->
+      <!-- 左侧：图元面板（SVG 缩略图） -->
       <div class="editor-sidebar">
         <ElTabs v-model="leftTab" class="h-full">
           <ElTabPane label="内置图元" name="builtin">
             <div class="widget-list">
               <ElCollapse>
                 <ElCollapseItem
-                  v-for="cat in widgetCategories()"
+                  v-for="cat in svgWidgetCategories()"
                   :key="cat"
                   :title="cat"
                   :name="cat"
                 >
                   <div
-                    v-for="w in getWidgetsByCategory(cat)"
-                    :key="w.type"
+                    v-for="w in getSvgWidgetsByCategory(cat)"
+                    :key="w.name"
                     class="widget-item"
                     draggable="true"
                     @dragstart="dragStart($event, w)"
                   >
-                    <span class="widget-icon">{{ w.icon }}</span>
+                    <span class="widget-thumb" v-html="w.thumbnail" />
                     <span class="widget-name">{{ w.name }}</span>
+                    <span class="widget-type-tag text-10px text-gray-400">{{ w.typeTag }}</span>
                   </div>
                 </ElCollapseItem>
               </ElCollapse>
@@ -606,6 +590,8 @@ onUnmounted(() => {
                 v-for="w in customWidgets"
                 :key="w.id"
                 class="widget-item"
+                draggable="true"
+                @dragstart="dragStartCustom($event, w)"
                 @click="addCustomWidget(w)"
               >
                 <img
@@ -626,18 +612,19 @@ onUnmounted(() => {
         </ElTabs>
       </div>
 
-      <!-- 中间：画布 -->
+      <!-- 中间：SVG 画布 -->
       <div class="editor-canvas">
-        <ScadaCanvas
+        <SvgCanvas
           ref="canvasRef"
           :width="page.width || 1920"
           :height="page.height || 1080"
           :background="page.background || '#1a1a2e'"
+          :runtime="false"
+          :grid-size="gridSize"
           @object:selected="onObjectSelected"
           @object:deselected="onObjectDeselected"
           @canvas:changed="markDirty"
           @zoom:changed="onZoomChange"
-          :grid-size="gridSize"
         />
       </div>
 
@@ -646,6 +633,15 @@ onUnmounted(() => {
         <div class="text-14px font-600 mb-12px">属性面板</div>
 
         <template v-if="selectedObj">
+          <div class="mb-8px">
+            <span class="text-12px text-gray-400">ID:</span>
+            <span class="text-12px ml-4px">{{ selectedWidgetId }}</span>
+          </div>
+          <div class="mb-8px">
+            <span class="text-12px text-gray-400">类型:</span>
+            <ElTag size="small" class="ml-4px">{{ selectedWidgetType }}</ElTag>
+          </div>
+
           <ElForm label-width="70px" size="small">
             <ElFormItem label="X">
               <ElInputNumber
@@ -661,33 +657,6 @@ onUnmounted(() => {
                 :step="1"
                 @change="updateProp('top', $event)"
                 class="w-full"
-              />
-            </ElFormItem>
-            <ElFormItem label="缩放X">
-              <ElSlider
-                v-model="selectedProps.scaleX"
-                :min="0.1"
-                :max="3"
-                :step="0.1"
-                @change="updateProp('scaleX', $event)"
-              />
-            </ElFormItem>
-            <ElFormItem label="缩放Y">
-              <ElSlider
-                v-model="selectedProps.scaleY"
-                :min="0.1"
-                :max="3"
-                :step="0.1"
-                @change="updateProp('scaleY', $event)"
-              />
-            </ElFormItem>
-            <ElFormItem label="旋转">
-              <ElSlider
-                v-model="selectedProps.angle"
-                :min="0"
-                :max="360"
-                :step="1"
-                @change="updateProp('angle', $event)"
               />
             </ElFormItem>
             <ElFormItem label="透明度">
@@ -707,12 +676,14 @@ onUnmounted(() => {
             <span class="text-13px font-600">数据绑定</span>
             <ElButton size="small" type="primary" @click="openBindDialog">绑定点位</ElButton>
           </div>
-          <div class="text-12px text-gray-400">
-            图元类型: {{ selectedObj._widgetType || selectedObj.type || '未知' }}
-          </div>
-          <div v-if="selectedObj._bindTarget" class="text-12px mt-4px">
-            <span class="text-green-400">已绑定:</span>
-            {{ selectedObj._bindTagName || '' }} → {{ selectedObj._bindTarget }}
+
+          <!-- 显示当前图元的绑定信息 -->
+          <div class="binding-info" v-if="selectedObj">
+            <div v-for="child in Array.from(selectedObj.querySelectorAll('[data-bind-target]') as NodeListOf<Element>)" :key="child.id || child.getAttribute('data-bind-target')" class="text-12px mb-4px">
+              <span class="text-green-400">{{ child.getAttribute('data-bind-target') }}</span>
+              <span class="text-gray-400 ml-4px">→ {{ child.getAttribute('data-bind-tag-name') || '未绑定' }}</span>
+              <span class="text-gray-500 ml-4px">({{ child.getAttribute('data-bind-prop') }})</span>
+            </div>
           </div>
         </template>
 
@@ -751,6 +722,20 @@ onUnmounted(() => {
             <ElOption label="温度 (temperature)" value="temperature" />
             <ElOption label="文本 (text)" value="text" />
             <ElOption label="填充色 (fill)" value="fill" />
+            <ElOption label="红色灯 (red)" value="red" />
+            <ElOption label="黄色灯 (yellow)" value="yellow" />
+            <ElOption label="绿色灯 (green)" value="green" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem label="绑定属性">
+          <ElSelect v-model="bindForm.prop" class="w-full" placeholder="选择更新方式">
+            <ElOption label="文本内容" value="text" />
+            <ElOption label="填充色" value="fill" />
+            <ElOption label="描边色" value="stroke" />
+            <ElOption label="宽度" value="width" />
+            <ElOption label="高度" value="height" />
+            <ElOption label="旋转" value="rotate" />
+            <ElOption label="透明度" value="opacity" />
           </ElSelect>
         </ElFormItem>
         <ElFormItem label="设备">
@@ -861,8 +846,8 @@ onUnmounted(() => {
 .widget-item {
   display: flex;
   align-items: center;
-  padding: 8px 10px;
-  margin-bottom: 4px;
+  padding: 6px 10px;
+  margin-bottom: 2px;
   border-radius: 6px;
   cursor: grab;
   transition: background 0.15s;
@@ -874,14 +859,31 @@ onUnmounted(() => {
 .widget-item:active {
   cursor: grabbing;
 }
-.widget-icon {
+.widget-thumb {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-right: 8px;
-  font-size: 18px;
+  flex-shrink: 0;
+}
+.widget-thumb :deep(svg) {
+  max-width: 36px;
+  max-height: 36px;
 }
 .widget-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.widget-type-tag {
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.binding-info {
+  max-height: 200px;
+  overflow-y: auto;
 }
 </style>
