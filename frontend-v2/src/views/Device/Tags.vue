@@ -545,6 +545,19 @@ onUnmounted(() => {
 
       <!-- 配置视图工具栏 -->
       <template v-if="activeTab === 'config'">
+        <!-- 数据刷新控件 -->
+        <div class="flex items-center gap-4px mr-8px">
+          <span class="text-14px text-gray-500">数据刷新</span>
+          <ElSelect v-model="refreshInterval" style="width: 100px" @change="onRefreshIntervalChange">
+            <ElOption v-for="opt in REFRESH_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </ElSelect>
+          <ElButton link :loading="liveLoading" @click="fetchLiveData(true)">
+            <ElTooltip content="立即刷新数据" placement="top">
+              <span style="font-size: 16px">↻</span>
+            </ElTooltip>
+          </ElButton>
+        </div>
+        <span class="text-gray-300 mx-4px">|</span>
         <!-- 批量操作区（选中行后出现） -->
         <template v-if="selectedRows.length">
           <span class="text-12px text-gray-500">已选 {{ selectedRows.length }} 项</span>
@@ -590,13 +603,46 @@ onUnmounted(() => {
       </template>
     </div>
 
-    <!-- ═══ 配置视图：纯配置表格 ═══ -->
+    <!-- ═══ 配置视图：配置列 + 实时数据列 ═══ -->
     <template v-if="activeTab === 'config'">
       <ElTable v-loading="loading" :data="list" border stripe @selection-change="onSelectionChange">
         <ElTableColumn type="selection" width="45" />
         <ElTableColumn sortable prop="id" label="ID" width="70" />
         <ElTableColumn sortable prop="device_name" label="归属设备" min-width="120" show-overflow-tooltip />
         <ElTableColumn sortable prop="name" label="点位名称" min-width="120" show-overflow-tooltip />
+        <ElTableColumn label="当前值" width="160" align="center">
+          <template #default="{ row }">
+            <template v-if="liveData[row.id]">
+              <div class="flex items-center justify-center gap-4px">
+                <span class="text-right tabular-nums" style="min-width: 60px" :class="liveData[row.id].quality === 'good' ? 'text-green-600 font-bold' : liveData[row.id].quality === 'bad' ? 'text-red-500' : 'text-yellow-600'">
+                  {{ liveData[row.id].value != null ? liveData[row.id].value : '—' }}
+                </span>
+                <span class="text-12px text-gray-400 text-left" style="min-width: 36px">{{ row.unit || '&emsp;' }}</span>
+              </div>
+            </template>
+            <span v-else class="text-gray-300">—</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="数据质量" width="90" align="center">
+          <template #default="{ row }">
+            <ElTag
+              v-if="liveData[row.id]"
+              :type="(QUALITY_MAP[liveData[row.id].quality]?.type || 'info') as any"
+              size="small"
+            >
+              {{ QUALITY_MAP[liveData[row.id].quality]?.text || liveData[row.id].quality }}
+            </ElTag>
+            <span v-else class="text-gray-300 text-12px">—</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="更新时间" width="160">
+          <template #default="{ row }">
+            <template v-if="liveData[row.id]?.time">
+              <span class="text-12px text-gray-500">{{ new Date(liveData[row.id].time).toLocaleString() }}</span>
+            </template>
+            <span v-else class="text-gray-300 text-12px">—</span>
+          </template>
+        </ElTableColumn>
         <ElTableColumn sortable prop="address" label="地址" width="80" />
         <ElTableColumn label="功能码" width="130">
           <template #default="{ row }">
