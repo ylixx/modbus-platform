@@ -124,6 +124,72 @@ const bindForm = reactive({
   prop: 'text'
 })
 
+// ── FUXA 风格值处理配置 ──
+const valueProcessDialogVisible = ref(false)
+const valueProcessForm = reactive({
+  bitMask: 0,
+  ranges: [] as Array<{ min: number; max: number; color: string; label: string }>,
+  actions: [] as Array<{ condition: string; value: string; actionType: string; targetId: string }>
+})
+
+const openValueProcessDialog = () => {
+  // 从当前选中图元读取已有的值处理配置
+  if (selectedObj.value) {
+    const vpStr = selectedObj.value.getAttribute('data-value-process')
+    if (vpStr) {
+      try {
+        const vp = JSON.parse(vpStr)
+        valueProcessForm.bitMask = vp.bitMask ?? 0
+        valueProcessForm.ranges = vp.ranges ?? []
+        valueProcessForm.actions = vp.actions ?? []
+      } catch {
+        valueProcessForm.bitMask = 0
+        valueProcessForm.ranges = []
+        valueProcessForm.actions = []
+      }
+    } else {
+      valueProcessForm.bitMask = 0
+      valueProcessForm.ranges = []
+      valueProcessForm.actions = []
+    }
+  }
+  valueProcessDialogVisible.value = true
+}
+
+const addRange = () => {
+  valueProcessForm.ranges.push({ min: 0, max: 100, color: '#4ac080', label: '' })
+}
+
+const removeRange = (index: number) => {
+  valueProcessForm.ranges.splice(index, 1)
+}
+
+const addAction = () => {
+  valueProcessForm.actions.push({ condition: 'eq', value: '1', actionType: 'show', targetId: '' })
+}
+
+const removeAction = (index: number) => {
+  valueProcessForm.actions.splice(index, 1)
+}
+
+const confirmValueProcess = () => {
+  if (!selectedObj.value) return
+  const vp = {
+    bitMask: valueProcessForm.bitMask || undefined,
+    ranges: valueProcessForm.ranges.length ? valueProcessForm.ranges : undefined,
+    actions: valueProcessForm.actions.length ? valueProcessForm.actions : undefined
+  }
+  // 清理空值
+  if (!vp.bitMask) delete vp.bitMask
+  if (!vp.ranges?.length) delete vp.ranges
+  if (!vp.actions?.length) delete vp.actions
+
+  selectedObj.value.setAttribute('data-value-process', JSON.stringify(vp))
+  valueProcessDialogVisible.value = false
+  markDirty()
+  ElMessage.success('值处理配置已保存')
+}
+
 // ── 加载页面数据 ──
 const fetchPage = async () => {
   try {
@@ -679,12 +745,36 @@ onUnmounted(() => {
 
           <!-- 显示当前图元的绑定信息 -->
           <div class="binding-info" v-if="selectedObj">
-            <div v-for="child in Array.from(selectedObj.querySelectorAll('[data-bind-target]') as NodeListOf<Element>)" :key="child.id || child.getAttribute('data-bind-target')" class="text-12px mb-4px">
+            <div v-for="child in Array.from(selectedObj.querySelectorAll('[data-bind-target]') as NodeListOf<Element>)" :key="child.id || child.getAttribute('data-bind-target') || ''" class="text-12px mb-4px">
               <span class="text-green-400">{{ child.getAttribute('data-bind-target') }}</span>
               <span class="text-gray-400 ml-4px">→ {{ child.getAttribute('data-bind-tag-name') || '未绑定' }}</span>
               <span class="text-gray-500 ml-4px">({{ child.getAttribute('data-bind-prop') }})</span>
             </div>
           </div>
+
+          <ElDivider />
+
+          <div class="flex justify-between items-center mb-8px">
+            <span class="text-13px font-600">值处理</span>
+            <ElButton size="small" type="warning" @click="openValueProcessDialog">配置</ElButton>
+          </div>
+
+          <!-- 显示当前值处理配置摘要 -->
+          <div class="value-process-summary" v-if="selectedObj?.getAttribute('data-value-process')">
+            <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').bitMask" class="text-12px mb-4px">
+              <span class="text-gray-400">位掩码:</span>
+              <span class="text-yellow-400 ml-4px">0x{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').bitMask.toString(16) }}</span>
+            </div>
+            <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').ranges?.length" class="text-12px mb-4px">
+              <span class="text-gray-400">颜色映射:</span>
+              <span class="text-blue-400 ml-4px">{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').ranges.length }} 条规则</span>
+            </div>
+            <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').actions?.length" class="text-12px mb-4px">
+              <span class="text-gray-400">动作:</span>
+              <span class="text-orange-400 ml-4px">{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').actions.length }} 条规则</span>
+            </div>
+          </div>
+          <div v-else class="text-11px text-gray-500">未配置值处理</div>
         </template>
 
         <div v-else class="text-13px text-gray-400 text-center py-40px">
@@ -773,6 +863,70 @@ onUnmounted(() => {
       <template #footer>
         <ElButton @click="bindDialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="confirmBind">确认绑定</ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- FUXA 风格值处理配置对话框 -->
+    <ElDialog v-model="valueProcessDialogVisible" title="值处理配置" width="600px">
+      <ElCollapse>
+        <!-- 位掩码 -->
+        <ElCollapseItem title="位掩码 (Bit Mask)" name="bitmask">
+          <div class="text-12px text-gray-400 mb-8px">
+            对采集值进行位与运算（value &amp; bitMask），用于提取特定位的状态
+          </div>
+          <ElFormItem label="掩码值" label-width="70px" size="small">
+            <ElInputNumber v-model="valueProcessForm.bitMask" :min="0" :max="65535" :step="1" class="w-full" />
+          </ElFormItem>
+        </ElCollapseItem>
+
+        <!-- 范围颜色映射 -->
+        <ElCollapseItem title="范围颜色映射 (Ranges)" name="ranges">
+          <div class="text-12px text-gray-400 mb-8px">
+            根据数值范围设置颜色，FUXA 风格的 ranges 配置
+          </div>
+          <div v-for="(range, idx) in valueProcessForm.ranges" :key="idx" class="flex items-center gap-4px mb-8px">
+            <ElInputNumber v-model="range.min" :step="1" size="small" controls-position="right" style="width:80px" />
+            <span class="text-gray-400">~</span>
+            <ElInputNumber v-model="range.max" :step="1" size="small" controls-position="right" style="width:80px" />
+            <ElColorPicker v-model="range.color" size="small" />
+            <ElInput v-model="range.label" placeholder="标签" size="small" style="width:80px" />
+            <ElButton size="small" type="danger" circle @click="removeRange(idx)">×</ElButton>
+          </div>
+          <ElButton size="small" @click="addRange">+ 添加范围</ElButton>
+        </ElCollapseItem>
+
+        <!-- 动作执行 -->
+        <ElCollapseItem title="动作执行 (Actions)" name="actions">
+          <div class="text-12px text-gray-400 mb-8px">
+            根据值触发动作：显示/隐藏/闪烁/旋转/移动目标图元
+          </div>
+          <div v-for="(act, idx) in valueProcessForm.actions" :key="idx" class="flex items-center gap-4px mb-8px">
+            <ElSelect v-model="act.condition" size="small" style="width:70px">
+              <ElOption label="=" value="eq" />
+              <ElOption label="!=" value="ne" />
+              <ElOption label=">" value="gt" />
+              <ElOption label="<" value="lt" />
+              <ElOption label=">=" value="ge" />
+              <ElOption label="<=" value="le" />
+            </ElSelect>
+            <ElInput v-model="act.value" size="small" placeholder="值" style="width:60px" />
+            <ElSelect v-model="act.actionType" size="small" style="width:70px">
+              <ElOption label="显示" value="show" />
+              <ElOption label="隐藏" value="hide" />
+              <ElOption label="闪烁" value="blink" />
+              <ElOption label="旋转" value="rotate" />
+              <ElOption label="移动" value="move" />
+            </ElSelect>
+            <ElInput v-model="act.targetId" size="small" placeholder="目标ID" style="width:100px" />
+            <ElButton size="small" type="danger" circle @click="removeAction(idx)">×</ElButton>
+          </div>
+          <ElButton size="small" @click="addAction">+ 添加动作</ElButton>
+        </ElCollapseItem>
+      </ElCollapse>
+
+      <template #footer>
+        <ElButton @click="valueProcessDialogVisible = false">取消</ElButton>
+        <ElButton type="primary" @click="confirmValueProcess">保存配置</ElButton>
       </template>
     </ElDialog>
   </div>

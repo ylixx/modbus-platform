@@ -22,6 +22,7 @@
  */
 
 import { ref, onMounted, onUnmounted } from 'vue'
+import { convertFabricToSvg, isFabricJson } from './fabric-to-svg'
 
 const props = withDefaults(
   defineProps<{
@@ -70,14 +71,7 @@ let isDragging = false
 let dragStart = { x: 0, y: 0 }
 let dragElementStart = { x: 0, y: 0 }
 
-// ── 缩放拖拽 ──
-// isResizing / resizeHandle / resizeStart reserved for future resize-handle feature
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-let _isResizing = false
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-let _resizeHandle: SVGElement | null = null
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-let _resizeStart = { x: 0, y: 0 }
+// ── 缩放拖拽（预留，resize-handle 功能待实现） ──
 
 // ── 撤销/重做 ──
 let undoStack: string[] = []
@@ -874,12 +868,11 @@ const loadFromJSON = async (json: any): Promise<void> => {
     return loadFromSVG(json.svgContent)
   }
 
-  // 兼容旧版：如果是数组，忽略（旧版 Fabric 格式无法直接转换）
-  if (json && typeof json === 'object' && !json.svgContent) {
-    // 旧版 Fabric JSON → 画布空白，用户需重新绘制
-    svgMainGroup.innerHTML = ''
-    snapshot()
-    return
+  // 兼容旧版：自动将 Fabric JSON 转换为 SVG
+  if (isFabricJson(json)) {
+    console.log('[SvgCanvas] 检测到旧版 Fabric JSON，正在自动转换为 SVG...')
+    const svgString = convertFabricToSvg(json, props.width, props.height, props.background)
+    return loadFromSVG(svgString)
   }
 
   // 字符串

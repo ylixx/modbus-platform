@@ -388,3 +388,75 @@ export const handleSignalChange = (
     }
   }
 }
+
+// ── 从 SVG DOM 自动扫描绑定 ──
+
+/**
+ * 从 SVG DOM 中的 data-* 属性自动构建 GaugeSettings
+ * 扫描所有带 data-bind-target 的元素，自动注册信号映射
+ *
+ * @param svgRootElement SVG 主组元素
+ * @returns 注册的图元数量
+ */
+export const scanAndBindFromDOM = (svgRootElement: SVGGElement): number => {
+  let count = 0
+  const elements = svgRootElement.querySelectorAll('[data-bind-target]')
+  elements.forEach((el) => {
+    const svgEl = el as SVGElement
+    const id = svgEl.getAttribute('id')
+    if (!id) return
+
+    const target = svgEl.getAttribute('data-bind-target') || ''
+    const tagName = svgEl.getAttribute('data-bind-tag-name') || ''
+    const deviceId = svgEl.getAttribute('data-bind-device-id') || ''
+    const tagId = svgEl.getAttribute('data-bind-tag-id') || ''
+    const gaugeType = svgEl.getAttribute('type') || ''
+
+    // 解析 data-value-process 属性
+    let property: GaugeProperty = {
+      variableId: `${deviceId}:${tagId}`,
+      variableValue: '',
+      bitmask: 0,
+      ranges: [],
+      events: [],
+      actions: [],
+      readonly: false
+    }
+
+    const vpStr = svgEl.getAttribute('data-value-process')
+    if (vpStr) {
+      try {
+        const vp = JSON.parse(vpStr)
+        property.bitmask = vp.bitMask ?? 0
+        property.ranges = (vp.ranges || []).map((r: any) => ({
+          min: r.min ?? 0,
+          max: r.max ?? 100,
+          fillColor: r.color ?? '#4ac080',
+          strokeColor: r.color ?? '#4ac080'
+        }))
+        property.actions = (vp.actions || []).map((a: any) => ({
+          type: a.actionType || 'show',
+          targetId: a.targetId || ''
+        }))
+      } catch {
+        // 忽略解析错误
+      }
+    }
+
+    const gauge: GaugeSettings = {
+      id,
+      type: gaugeType,
+      name: target,
+      label: tagName,
+      property,
+      hide: false,
+      lock: false
+    }
+
+    // 注册信号映射
+    const signalId = `${deviceId}:${tagName}`
+    bindSignalToGauge(signalId, gauge)
+    count++
+  })
+  return count
+}
