@@ -160,11 +160,19 @@ class WebSocketManager {
   private emit(msg: WsMessage): void {
     // 类型特定监听器
     this.listeners.get(msg.type)?.forEach((fn) => {
-      try { fn(msg) } catch (e) { console.error('[WS] Listener error:', e) }
+      try {
+        fn(msg)
+      } catch (e) {
+        console.error('[WS] Listener error:', e)
+      }
     })
     // 全局监听器
     this.globalListeners.forEach((fn) => {
-      try { fn(msg) } catch (e) { console.error('[WS] Global listener error:', e) }
+      try {
+        fn(msg)
+      } catch (e) {
+        console.error('[WS] Global listener error:', e)
+      }
     })
   }
 
