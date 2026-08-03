@@ -1,0 +1,53 @@
+﻿src/views/Alarm/AlarmMqtt.vue(22,3): error TS6133: 'ElTooltip' is declared but its value is never read.
+src/views/Alarm/AlarmMqtt.vue(398,41): error TS2551: Property 'value' does not exist on type 'boolean'. Did you mean 'valueOf'?
+src/views/Data/DataForward.vue(7,46): error TS6133: 'ElTooltip' is declared but its value is never read.
+src/views/Data/DataForward.vue(358,41): error TS2551: Property 'value' does not exist on type 'boolean'. Did you mean 'valueOf'?
+src/views/Data/DevicePublish.vue(13,3): error TS6133: 'ElBadge' is declared but its value is never read.
+src/views/Data/DevicePublish.vue(137,32): error TS2322: Type '"" | "info"' is not assignable to type 'EpPropMergeType<StringConstructor, "success" | "warning" | "info" | "primary" | "danger", unknown> | undefined'.
+  Type '""' is not assignable to type 'EpPropMergeType<StringConstructor, "success" | "warning" | "info" | "primary" | "danger", unknown> | undefined'.
+src/views/Data/MqttStatus.vue(186,36): error TS2322: Type '"" | "info"' is not assignable to type 'EpPropMergeType<StringConstructor, "success" | "warning" | "info" | "primary" | "danger", unknown> | undefined'.
+  Type '""' is not assignable to type 'EpPropMergeType<StringConstructor, "success" | "warning" | "info" | "primary" | "danger", unknown> | undefined'.
+src/views/Device/Devices.vue(23,3): error TS6133: 'ElDivider' is declared but its value is never read.
+src/views/Device/Tags.vue(24,3): error TS6133: 'ElCheckbox' is declared but its value is never read.
+src/views/Device/Tags.vue(250,7): error TS6133: 'remoteSearchDialogDevices' is declared but its value is never read.
+src/views/Device/Tags.vue(565,21): error TS2322: Type 'boolean | null' is not assignable to type 'EpPropMergeType<(ObjectConstructor | ArrayConstructor | NumberConstructor | BooleanConstructor | StringConstructor)[], unknown, unknown> | undefined'.
+  Type 'null' is not assignable to type 'EpPropMergeType<(ObjectConstructor | ArrayConstructor | NumberConstructor | BooleanConstructor | StringConstructor)[], unknown, unknown> | undefined'.
+src/views/Monitor/LiveDashboard.vue(19,3): error TS6133: 'ElTooltip' is declared but its value is never read.
+src/views/Monitor/LiveDashboard.vue(55,7): error TS6133: 'groupBy' is declared but its value is never read.
+src/views/Scada/ScadaCanvas.vue(55,5): error TS6133: 'skipNextSnapshot' is declared but its value is never read.
+src/views/Scada/ScadaCanvas.vue(59,45): error TS2554: Expected 0 arguments, but got 1.
+src/views/Scada/ScadaCanvas.vue(235,25): error TS2554: Expected 0 arguments, but got 1.
+src/views/Scada/ScadaCanvas.vue(278,48): error TS2345: Argument of type '(FabricObject<Partial<FabricObjectProps>, SerializedObjectProps, ObjectEvents> | null)[]' is not assignable to parameter of type 'FabricObject<Partial<FabricObjectProps>, SerializedObjectProps, ObjectEvents>[]'.
+  Type 'FabricObject<Partial<FabricObjectProps>, SerializedObjectProps, ObjectEvents> | null' is not assignable to type 'FabricObject<Partial<FabricObjectProps>, SerializedObjectProps, ObjectEvents>'.
+    Type 'null' is not assignable to type 'FabricObject<Partial<FabricObjectProps>, SerializedObjectProps, ObjectEvents>'.
+src/views/Scada/ScadaCanvas.vue(321,11): error TS2551: Property 'setBackgroundColor' does not exist on type 'Canvas'. Did you mean 'backgroundColor'?
+src/views/Scada/ScadaCanvas.vue(328,7): error TS6133: 'getActiveObjects' is declared but its value is never read.
+src/views/Scada/ScadaCanvas.vue(631,28): error TS2339: Property 'name' does not exist on type 'FabricObject<Partial<FabricObjectProps>, SerializedObjectProps, ObjectEvents>'.
+src/views/Scada/ScadaCanvas.vue(631,53): error TS2339: Property 'id' does not exist on type 'FabricObject<Partial<FabricObjectProps>, SerializedObjectProps, ObjectEvents>'.
+src/views/Scada/ScadaEditor.vue(682,98): error TS2339: Property 'id' does not exist on type 'number | Element | ((callbackfn: (value: Element, key: number, parent: NodeListOf<Element>) => void, thisArg?: any) => void) | ((index: number) => Element)'.
+  Property 'id' does not exist on type 'number'.
+src/views/Scada/ScadaEditor.vue(682,110): error TS2339: Property 'getAttribute' does not exist on type 'number | Element | ((callbackfn: (value: Element, key: number, parent: NodeListOf<Element>) => void, thisArg?: any) => void) | ((index: number) => Element)'.
+  Property 'getAttribute' does not exist on type 'number'.
+src/views/Scada/ScadaEditor.vue(683,53): error TS2339: Property 'getAttribute' does not exist on type 'number | Element | ((callbackfn: (value: Element, key: number, parent: NodeListOf<Element>) => void, thisArg?: any) => void) | ((index: number) => Element)'.
+  Property 'getAttribute' does not exist on type 'number'.
+src/views/Scada/ScadaEditor.vue(684,61): error TS2339: Property 'getAttribute' does not exist on type 'number | Element | ((callbackfn: (value: Element, key: number, parent: NodeListOf<Element>) => void, thisArg?: any) => void) | ((index: number) => Element)'.
+  Property 'getAttribute' does not exist on type 'number'.
+src/views/Scada/ScadaEditor.vue(685,60): error TS2339: Property 'getAttribute' does not exist on type 'number | Element | ((callbackfn: (value: Element, key: number, parent: NodeListOf<Element>) => void, thisArg?: any) => void) | ((index: number) => Element)'.
+  Property 'getAttribute' does not exist on type 'number'.
+src/views/Scada/SvgCanvas.vue(24,39): error TS6133: 'nextTick' is declared but its value is never read.
+src/views/Scada/SvgCanvas.vue(74,5): error TS6133: 'isResizing' is declared but its value is never read.
+src/views/Scada/SvgCanvas.vue(75,5): error TS6133: 'resizeHandle' is declared but its value is never read.
+src/views/Scada/SvgCanvas.vue(76,5): error TS6133: 'resizeStart' is declared but its value is never read.
+src/views/Scada/SvgCanvas.vue(199,40): error TS6133: 'e' is declared but its value is never read.
+src/views/Scada/SvgCanvas.vue(503,3): error TS2588: Cannot assign to 'panOffset' because it is a constant.
+src/views/Scada/SvgCanvas.vue(510,3): error TS2588: Cannot assign to 'panOffset' because it is a constant.
+src/views/Scada/SvgCanvas.vue(686,25): error TS2352: Conversion of type 'HTMLElement' to type 'SVGGElement' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'HTMLElement' is missing the following properties from type 'SVGGElement': transform, getBBox, getCTM, getScreenCTM, and 4 more.
+src/views/Scada/SvgCanvas.vue(701,25): error TS2352: Conversion of type 'HTMLElement' to type 'SVGGElement' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'HTMLElement' is missing the following properties from type 'SVGGElement': transform, getBBox, getCTM, getScreenCTM, and 4 more.
+src/views/Scada/SvgCanvas.vue(749,25): error TS2352: Conversion of type 'HTMLElement' to type 'SVGGElement' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'HTMLElement' is missing the following properties from type 'SVGGElement': transform, getBBox, getCTM, getScreenCTM, and 4 more.
+src/views/Scada/widgets/builtin.ts(499,51): error TS2322: Type 'number' is not assignable to type 'undefined'.
+src/views/Scada/widgets/builtin.ts(499,54): error TS2322: Type 'number' is not assignable to type 'undefined'.
+src/views/Scada/widgets/builtin.ts(499,58): error TS2322: Type 'number' is not assignable to type 'undefined'.
+src/views/Scada/widgets/builtin.ts(499,61): error TS2322: Type 'number' is not assignable to type 'undefined'.

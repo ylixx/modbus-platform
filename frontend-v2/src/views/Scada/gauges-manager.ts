@@ -1,462 +1,449 @@
 /**
- * GaugesManager - FUXA 风格图元引擎
+ * GaugesManager — 照搬 FUXA 架构的图元引擎
  *
- * 核心职责（参照 FUXA gauges.component.ts）：
- * 1. 图元类型注册与识别（通过 SVG 元素的 type 属性）
- * 2. 信号绑定（Signal → GaugeSettings 映射）
- * 3. 值处理路由（processValue：位掩码 → 范围颜色 → 动作执行）
- * 4. DOM 操作（walkTreeNode 设置 fill/stroke/transform 等）
+ * 核心职责：
+ * 1. 信号-Gauge 映射管理（哪个信号绑定到哪些图元）
+ * 2. processValue 分发（信号到达 → 查找图元 → 按类型分发处理）
+ * 3. 运行时事件绑定（click → openPage / setValue 等）
+ * 4. Actions 执行（blink / rotate / move / hide / show / color）
  */
 
-// (SvgWidgetProperty/SvgWidgetRange/SvgWidgetAction are type-only used by svg-widgets.ts, not imported here)
+import { SVG } from '@svgdotjs/svg.js'
+import type { GaugeSettings, GaugeRangeProperty, GaugeAction, DictionaryGaugeSettings } from './hmi'
 
-// ── 类型定义 ──
+// ── 信号变量 ──
 
-export interface GaugeSettings {
+export interface Variable {
   id: string
-  type: string
-  name: string
-  label: string
-  property: GaugeProperty
-  hide: boolean
-  lock: boolean
+  value: any
 }
 
-export interface GaugeProperty {
-  variableId: string
-  variableValue: string
-  bitmask: number
-  ranges: GaugeRangeProperty[]
-  events: GaugeEvent[]
-  actions: GaugeAction[]
-  readonly: boolean
+// ── 图元运行状态 ──
+
+export interface GaugeStatus {
+  variablesValue: Record<string, any>
+  blinkTimer: ReturnType<typeof setInterval> | null
+  rotationAngle: number
+  isVisible: boolean
 }
 
-export interface GaugeRangeProperty {
-  min: number
-  max: number
-  fillColor: string
-  strokeColor: string
+function createGaugeStatus(): GaugeStatus {
+  return { variablesValue: {}, blinkTimer: null, rotationAngle: 0, isVisible: true }
 }
 
-export interface GaugeEvent {
-  type: 'click' | 'dblclick' | 'change'
-  action: string
-  param?: any
-}
+// ── 信号-Gauge 映射 ──
 
-export interface GaugeAction {
-  type: 'hide' | 'show' | 'blink' | 'clockwise' | 'anticlockwise' | 'rotate' | 'move' | 'stop'
-  targetId?: string
-  min?: number
-  max?: number
-  angle?: number
-  toX?: number
-  toY?: number
-}
+// { [signalId]: GaugeSettings[] }
+const signalGaugeMap: Record<string, GaugeSettings[]> = {}
 
-export interface SignalValue {
-  id: string
-  value: number | string | boolean
-  timestamp: number
-}
+// { [gaugeId]: GaugeStatus }
+const gaugeStatusMap: Record<string, GaugeStatus> = {}
 
-// ── 图元类型注册表 ──
+// ── 映射管理 ──
 
-const GAUGE_TYPE_PREFIX = 'svg-ext-'
-
-/**
- * 检查元素是否为图元
- * FUXA: GaugesManager.isGauge(type) → type.startsWith('svg-ext-')
- */
-export const isGauge = (element: SVGElement): boolean => {
-  const type = element.getAttribute('type') || ''
-  return type.startsWith(GAUGE_TYPE_PREFIX)
-}
-
-/**
- * 获取图元类型标签
- */
-export const getGaugeType = (element: SVGElement): string => {
-  return element.getAttribute('type') || ''
-}
-
-// ── 位掩码处理 ──
-
-/**
- * 检查位掩码（FUXA: GaugeBaseComponent.checkBitmask）
- * @param bitmask 位掩码值（0 表示不使用掩码）
- * @param value 原始值
- * @returns 处理后的值
- */
-export const checkBitmask = (bitmask: number, value: number): number => {
-  if (!bitmask || bitmask === 0) return value
-  // 提取指定位的值
-  const bitPosition = Math.log2(bitmask)
-  if (Number.isInteger(bitPosition)) {
-    return (value >> bitPosition) & 1
+export function bindSignalToGauge(signalId: string, gauge: GaugeSettings): void {
+  if (!signalGaugeMap[signalId]) signalGaugeMap[signalId] = []
+  if (!signalGaugeMap[signalId].find((g) => g.id === gauge.id)) {
+    signalGaugeMap[signalId].push(gauge)
   }
-  return (value & bitmask) !== 0 ? 1 : 0
+  if (!gaugeStatusMap[gauge.id]) gaugeStatusMap[gauge.id] = createGaugeStatus()
 }
 
-// ── 范围颜色映射 ──
+export function unbindSignalFromGauge(signalId: string, gaugeId: string): void {
+  if (signalGaugeMap[signalId]) {
+    signalGaugeMap[signalId] = signalGaugeMap[signalId].filter((g) => g.id !== gaugeId)
+  }
+}
 
-/**
- * 计算范围颜色映射（FUXA: ShapesComponent.processValue → ranges loop）
- * @param value 当前值
- * @param ranges 范围定义
- * @returns 匹配的填充色和描边色，null 表示无匹配
- */
-export const evaluateRanges = (
-  value: number,
-  ranges: GaugeRangeProperty[]
-): { fillColor: string; strokeColor: string } | null => {
-  if (!ranges || ranges.length === 0) return null
+export function clearAllSignalMappings(): void {
+  for (const key of Object.keys(signalGaugeMap)) {
+    delete signalGaugeMap[key]
+  }
+  for (const key of Object.keys(gaugeStatusMap)) {
+    const st = gaugeStatusMap[key]
+    if (st.blinkTimer) clearInterval(st.blinkTimer)
+    delete gaugeStatusMap[key]
+  }
+}
 
-  for (const range of ranges) {
-    if (value >= range.min && value <= range.max) {
-      return {
-        fillColor: range.fillColor,
-        strokeColor: range.strokeColor
-      }
+export function getGaugesBySignal(signalId: string): GaugeSettings[] {
+  return signalGaugeMap[signalId] || []
+}
+
+// ── DOM 扫描绑定 ──
+// 照搬 FUXA loadWatch 逻辑：从 items 字典 + SVG DOM 扫描绑定
+
+export function scanAndBindFromDOM(
+  svgRootElement: SVGGElement,
+  items: DictionaryGaugeSettings
+): number {
+  let count = 0
+  for (const key in items) {
+    const ga = items[key]
+    if (!ga.property?.variableId) continue
+    const el = svgRootElement.querySelector(`#${CSS.escape(key)}`)
+    if (el) {
+      bindSignalToGauge(ga.property.variableId, ga)
+      count++
+    }
+  }
+  return count
+}
+
+// ── SVG 元素查找 ──
+// 照搬 FUXA getSvgElements：用 SVG.adopt 包装 DOM
+
+export function getSvgElement(svgId: string): any | null {
+  const el = document.getElementById(svgId)
+  if (el && el instanceof SVGElement) {
+    try {
+      return (SVG as any).adopt(el)
+    } catch {
+      return null
     }
   }
   return null
 }
 
-// ── DOM 树遍历设置属性 ──
+// ── 位掩码检查 ──
 
-/**
- * 遍历 SVG DOM 树设置属性（FUXA: GaugeBaseComponent.walkTreeNodeToSetAttribute）
- * @param node SVG 元素节点
- * @param attributeName 属性名（如 fill、stroke）
- * @param value 属性值
- * @param stopId 停止遍历的元素 ID（可选）
- */
-export const walkTreeNodeToSetAttribute = (
-  node: SVGElement,
-  attributeName: string,
-  value: string,
-  stopId?: string
-) => {
-  // 跳过有 data-bind-target 的子元素（避免覆盖绑定值）
-  if (node.getAttribute('data-bind-target') && node !== node) {
-    return
+export function checkBitmask(bitmask: number, value: number): number {
+  if (bitmask > 0) {
+    return (value >> (bitmask - 1)) & 1
   }
+  return value
+}
 
-  // 不覆盖 currentColor 等特殊值
-  const currentVal = node.getAttribute(attributeName)
-  if (currentVal && currentVal !== 'none' && currentVal !== 'transparent') {
-    node.setAttribute(attributeName, value)
+// ── 范围匹配 ──
+
+export function evaluateRanges(
+  value: number,
+  ranges: GaugeRangeProperty[]
+): { color?: string; stroke?: string; text?: string } | null {
+  if (!ranges || ranges.length === 0) return null
+  for (const range of ranges) {
+    if (value >= range.min && value <= range.max) {
+      return { color: range.color, stroke: range.stroke, text: range.text }
+    }
   }
+  return null
+}
 
-  // 递归子节点
-  const children = node.children
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i] as SVGElement
-    if (stopId && child.getAttribute('id') === stopId) continue
-    walkTreeNodeToSetAttribute(child, attributeName, value, stopId)
+// ── DOM 属性遍历设置 ──
+
+export function walkTreeNodeToSetAttribute(el: SVGElement, attr: string, value: string): void {
+  const current = el.getAttribute(attr)
+  if (current && current !== 'none' && current !== 'inherit') {
+    el.setAttribute(attr, value)
+  }
+  for (let i = 0; i < el.children.length; i++) {
+    const child = el.children[i]
+    if (child instanceof SVGElement) {
+      walkTreeNodeToSetAttribute(child, attr, value)
+    }
   }
 }
 
-// ── 动作执行 ──
+// ── processValue 核心分发 ──
+// 照搬 FUXA GaugesManager.processValue
 
-/** 活跃的动画/闪烁定时器 */
-const activeTimers = new Map<string, ReturnType<typeof setInterval>>()
+export function processValue(
+  ga: GaugeSettings,
+  svgele: any,
+  sig: Variable,
+  gaugeStatus: GaugeStatus
+): void {
+  gaugeStatus.variablesValue[sig.id] = sig.value
+  const pro = ga.property
+  let value = checkBitmask(pro.bitmask, Number(sig.value))
 
-/**
- * 执行图元动作（FUXA: processAction）
- * @param action 动作定义
- * @param svgElement SVG 图元元素
- * @param value 当前信号值
- */
-export const processAction = (
-  action: GaugeAction,
-  svgElement: SVGElement,
-  value: number
-) => {
-  const gaugeId = svgElement.getAttribute('id') || ''
-  const timerKey = `${gaugeId}_${action.type}`
+  // 1. 基于图元类型分发
+  const type = ga.type
 
-  switch (action.type) {
-    case 'hide': {
-      svgElement.setAttribute('visibility', 'hidden')
-      break
+  if (type.startsWith('svg-ext-value') || type.startsWith('svg-ext-shapes-text')) {
+    // Value / Text → 更新文本
+    const displayValue = typeof value === 'number' ? value.toFixed(1) : String(sig.value)
+    const textNodes = svgele.node?.querySelectorAll('text, tspan') || []
+    if (textNodes.length > 0) {
+      textNodes.forEach((t: SVGElement) => {
+        t.textContent = displayValue
+      })
+    } else if (svgele.node) {
+      const txt = svgele.node.querySelector('text') || svgele.node
+      txt.textContent = displayValue
     }
-    case 'show': {
-      svgElement.setAttribute('visibility', 'visible')
-      break
+  } else if (type.startsWith('svg-ext-led') || type.startsWith('svg-ext-semaphore')) {
+    // LED / Semaphore → 更新颜色
+    processRanges(svgele, value, pro.ranges)
+  } else if (type.startsWith('svg-ext-gauge')) {
+    // Gauge → 更新仪表盘数值
+    const displayValue = typeof value === 'number' ? value.toFixed(1) : String(sig.value)
+    const textNode = svgele.node?.querySelector('text')
+    if (textNode) textNode.textContent = displayValue
+  } else if (type.startsWith('svg-ext-progress')) {
+    // Progress → 更新进度宽度
+    processRanges(svgele, value, pro.ranges)
+    const pct = Math.max(0, Math.min(100, Number(sig.value)))
+    const bar = svgele.node?.querySelector('rect:nth-child(2)')
+    if (bar) {
+      const totalW = parseFloat(
+        bar.parentElement?.getAttribute('width') || bar.getAttribute('width') || '200'
+      )
+      bar.setAttribute('width', String((totalW * pct) / 100))
     }
-    case 'blink': {
-      // 闪烁：在原始颜色和警告色之间交替
-      let isOriginal = true
-      const originalFill = svgElement.getAttribute('fill') || '#2a5a8a'
-      const blinkFill = '#ffff00'
+  } else if (type.startsWith('svg-ext-pipe')) {
+    // Pipe → 流动动画控制
+    const pipeEl = svgele.node?.querySelector('.pipe-flow')
+    if (pipeEl) {
+      pipeEl.setAttribute('stroke', value > 0 ? '#3b82f6' : '#4b5563')
+    }
+  } else if (type.startsWith('svg-ext-switch')) {
+    // Switch → 切换状态
+    const knob = svgele.node?.querySelector('circle')
+    if (knob) {
+      const w = parseFloat(svgele.node?.getAttribute('width') || '60')
+      knob.setAttribute('cx', value > 0 ? String(w * 0.75) : String(w * 0.25))
+      const bg = svgele.node?.querySelector('rect')
+      if (bg) bg.setAttribute('fill', value > 0 ? '#3b82f6' : '#374151')
+    }
+  } else {
+    // 默认：Shapes 通用图元 → 处理 ranges + actions
+    processRanges(svgele, value, pro.ranges)
+  }
 
-      // 清除已有定时器
-      if (activeTimers.has(timerKey)) {
-        clearInterval(activeTimers.get(timerKey)!)
-      }
+  // 2. 处理 actions（数据驱动动作）
+  if (pro.actions && pro.actions.length > 0) {
+    processActions(ga, svgele, sig, gaugeStatus)
+  }
+}
 
-      const timer = setInterval(() => {
-        if (isOriginal) {
-          walkTreeNodeToSetAttribute(svgElement, 'fill', blinkFill)
-        } else {
-          walkTreeNodeToSetAttribute(svgElement, 'fill', originalFill)
+// ── 范围颜色/文本映射 ──
+
+function processRanges(svgele: any, value: number, ranges: GaugeRangeProperty[]): void {
+  if (!ranges || ranges.length === 0) return
+  const match = evaluateRanges(value, ranges)
+  if (match) {
+    if (match.color) {
+      walkTreeNodeToSetAttribute(svgele.node || svgele, 'fill', match.color)
+    }
+    if (match.stroke) {
+      svgele.node?.setAttribute('stroke', match.stroke)
+    }
+    if (match.text) {
+      const textNode = svgele.node?.querySelector('text') || svgele.node
+      if (textNode) textNode.textContent = match.text
+    }
+  }
+}
+
+// ── Actions 处理 ──
+
+function processActions(
+  ga: GaugeSettings,
+  svgele: any,
+  sig: Variable,
+  gaugeStatus: GaugeStatus
+): void {
+  const pro = ga.property
+  for (const act of pro.actions) {
+    const actValue = checkBitmask(act.bitmask || 0, Number(sig.value))
+    const inRange = actValue >= act.range.min && actValue <= act.range.max
+
+    switch (act.type) {
+      case 'hide':
+        if (inRange) runActionHide(svgele, gaugeStatus)
+        else runActionShow(svgele, gaugeStatus)
+        break
+      case 'show':
+        if (inRange) runActionShow(svgele, gaugeStatus)
+        else runActionHide(svgele, gaugeStatus)
+        break
+      case 'blink':
+        checkActionBlink(svgele, act, gaugeStatus, inRange)
+        break
+      case 'color':
+        if (inRange) {
+          if (act.options?.fill)
+            walkTreeNodeToSetAttribute(svgele.node || svgele, 'fill', act.options.fill)
+          if (act.options?.stroke) svgele.node?.setAttribute('stroke', act.options.stroke)
         }
-        isOriginal = !isOriginal
-      }, 500)
-
-      activeTimers.set(timerKey, timer)
-      break
-    }
-    case 'clockwise': {
-      // 顺时针旋转（CSS 动画）
-      svgElement.style.animation = 'spin-cw 3s linear infinite'
-      break
-    }
-    case 'anticlockwise': {
-      svgElement.style.animation = 'spin-ccw 3s linear infinite'
-      break
-    }
-    case 'rotate': {
-      // 按值范围映射到角度
-      const min = action.min ?? 0
-      const max = action.max ?? 100
-      const angle = action.angle ?? 360
-      const clampedValue = Math.max(min, Math.min(max, value))
-      const ratio = (clampedValue - min) / (max - min)
-      const deg = ratio * angle
-      try {
-        const bbox = (svgElement as SVGGElement).getBBox()
-        const cx = bbox.x + bbox.width / 2
-        const cy = bbox.y + bbox.height / 2
-        svgElement.setAttribute('transform', `rotate(${deg}, ${cx}, ${cy})`)
-      } catch {
-        svgElement.setAttribute('transform', `rotate(${deg})`)
+        break
+      case 'rotate': {
+        const minA = act.options?.minAngle || 0
+        const maxA = act.options?.maxAngle || 360
+        const range = act.range.max - act.range.min || 1
+        const angle = minA + ((actValue - act.range.min) / range) * (maxA - minA)
+        try {
+          svgele.rotate(angle)
+        } catch {
+          /* ignore */
+        }
+        break
       }
-      break
+      case 'clockwise':
+        if (inRange) startRotation(svgele, gaugeStatus, 3)
+        else stopRotation(svgele, gaugeStatus)
+        break
+      case 'anticlockwise':
+        if (inRange) startRotation(svgele, gaugeStatus, -3)
+        else stopRotation(svgele, gaugeStatus)
+        break
+      case 'move':
+        if (inRange && act.options) {
+          try {
+            svgele
+              .animate(act.options.duration || 500, 0, 'now')
+              .move(act.options.toX || 0, act.options.toY || 0)
+          } catch {
+            /* fallback */
+          }
+        }
+        break
+      case 'stop':
+        if (inRange) {
+          stopRotation(svgele, gaugeStatus)
+          if (gaugeStatus.blinkTimer) {
+            clearInterval(gaugeStatus.blinkTimer)
+            gaugeStatus.blinkTimer = null
+          }
+        }
+        break
     }
-    case 'move': {
-      // 移动到指定位置
-      if (action.toX !== undefined && action.toY !== undefined) {
-        svgElement.setAttribute('transform', `translate(${action.toX},${action.toY})`)
+  }
+}
+
+// ── Action 实现函数 ──
+
+function runActionHide(svgele: any, status: GaugeStatus): void {
+  try {
+    svgele.hide()
+    status.isVisible = false
+  } catch {
+    /* ignore */
+  }
+}
+
+function runActionShow(svgele: any, status: GaugeStatus): void {
+  try {
+    svgele.show()
+    status.isVisible = true
+  } catch {
+    /* ignore */
+  }
+}
+
+function checkActionBlink(
+  svgele: any,
+  act: GaugeAction,
+  status: GaugeStatus,
+  inRange: boolean
+): void {
+  if (status.blinkTimer) {
+    clearInterval(status.blinkTimer)
+    status.blinkTimer = null
+  }
+  if (inRange) {
+    let toggle = false
+    const fillA = act.options?.fillA || '#ff0000'
+    const fillB = act.options?.fillB || '#000000'
+    const interval = act.options?.interval || 500
+    status.blinkTimer = setInterval(() => {
+      toggle = !toggle
+      const color = toggle ? fillA : fillB
+      walkTreeNodeToSetAttribute(svgele.node || svgele, 'fill', color)
+    }, interval)
+  }
+}
+
+function startRotation(svgele: any, status: GaugeStatus, speed: number): void {
+  status.rotationAngle = (status.rotationAngle || 0) + speed
+  try {
+    svgele.rotate(status.rotationAngle)
+  } catch {
+    /* ignore */
+  }
+}
+
+function stopRotation(_svgele: any, _status: GaugeStatus): void {
+  // Rotation stops naturally when not called
+}
+
+// ── 事件系统 ──
+
+export interface RuntimeEventCallback {
+  (action: string, param: string, options?: any): void
+}
+
+export function bindGaugeEvents(
+  svgRootElement: SVGGElement,
+  items: DictionaryGaugeSettings,
+  callback: RuntimeEventCallback
+): void {
+  for (const key in items) {
+    const ga = items[key]
+    if (!ga.property?.events || ga.property.events.length === 0) continue
+
+    const el = svgRootElement.querySelector(`#${CSS.escape(key)}`) as SVGElement | null
+    if (!el) continue
+
+    for (const event of ga.property.events) {
+      const handler = (ev: Event) => {
+        ev.stopPropagation()
+        callback(event.action, event.actparam, event.actoptions)
       }
-      break
-    }
-    case 'stop': {
-      // 停止所有动画
-      svgElement.style.animation = ''
-      if (activeTimers.has(timerKey)) {
-        clearInterval(activeTimers.get(timerKey)!)
-        activeTimers.delete(timerKey)
-      }
-      break
-    }
-  }
-}
 
-/**
- * 清理图元的所有活跃定时器
- */
-export const cleanupGauge = (gaugeId: string) => {
-  for (const [key, timer] of activeTimers.entries()) {
-    if (key.startsWith(gaugeId)) {
-      clearInterval(timer)
-      activeTimers.delete(key)
-    }
-  }
-}
-
-/**
- * 清理所有活跃定时器
- */
-export const cleanupAll = () => {
-  for (const timer of activeTimers.values()) {
-    clearInterval(timer)
-  }
-  activeTimers.clear()
-}
-
-// ── processValue 核心 ──
-
-/**
- * 处理信号值并更新图元（FUXA: GaugesManager.processValue）
- *
- * 处理链路：位掩码 → 范围颜色映射 → 动作执行
- *
- * @param svgElement SVG 图元元素
- * @param gaugeType 图元类型标签
- * @param property 图元属性（含 ranges 和 actions）
- * @param signalValue 信号值
- */
-export const processValue = (
-  svgElement: SVGElement,
-  _gaugeType: string,
-  property: GaugeProperty | null,
-  signalValue: SignalValue
-) => {
-  if (!property) return
-
-  let value = typeof signalValue.value === 'number'
-    ? signalValue.value
-    : parseFloat(String(signalValue.value)) || 0
-
-  // 1. 位掩码处理
-  value = checkBitmask(property.bitmask, value)
-
-  // 2. 范围颜色映射
-  if (property.ranges && property.ranges.length > 0) {
-    const colors = evaluateRanges(value, property.ranges)
-    if (colors) {
-      walkTreeNodeToSetAttribute(svgElement, 'fill', colors.fillColor)
-      walkTreeNodeToSetAttribute(svgElement, 'stroke', colors.strokeColor)
-    }
-  }
-
-  // 3. 动作执行
-  if (property.actions && property.actions.length > 0) {
-    for (const action of property.actions) {
-      processAction(action, svgElement, value)
-    }
-  }
-}
-
-// ── 信号→图元映射管理 ──
-
-/**
- * 信号映射表（FUXA: hmiService.gaugesMap）
- * key: signalId (格式: "deviceId:tagName")
- * value: 图元设置列表
- */
-const signalGaugeMap = new Map<string, GaugeSettings[]>()
-
-/**
- * 注册信号到图元的映射
- */
-export const bindSignalToGauge = (signalId: string, gauge: GaugeSettings) => {
-  const existing = signalGaugeMap.get(signalId) || []
-  if (!existing.find(g => g.id === gauge.id)) {
-    existing.push(gauge)
-  }
-  signalGaugeMap.set(signalId, existing)
-}
-
-/**
- * 移除信号映射
- */
-export const unbindSignalFromGauge = (signalId: string, gaugeId: string) => {
-  const existing = signalGaugeMap.get(signalId)
-  if (existing) {
-    const filtered = existing.filter(g => g.id !== gaugeId)
-    if (filtered.length === 0) {
-      signalGaugeMap.delete(signalId)
-    } else {
-      signalGaugeMap.set(signalId, filtered)
-    }
-  }
-}
-
-/**
- * 获取信号绑定的所有图元
- */
-export const getGaugesBySignal = (signalId: string): GaugeSettings[] => {
-  return signalGaugeMap.get(signalId) || []
-}
-
-/**
- * 清空所有信号映射
- */
-export const clearAllSignalMappings = () => {
-  signalGaugeMap.clear()
-}
-
-/**
- * 处理信号变更（FUXA: handleSignal）
- * 当 WebSocket 收到数据更新时调用
- */
-export const handleSignalChange = (
-  signalId: string,
-  signalValue: SignalValue,
-  svgRootElement: SVGGElement
-) => {
-  const gauges = getGaugesBySignal(signalId)
-  for (const gauge of gauges) {
-    const svgEl = svgRootElement.querySelector(`#${gauge.id}`)
-    if (svgEl) {
-      processValue(svgEl as SVGElement, gauge.type, gauge.property, signalValue)
-    }
-  }
-}
-
-// ── 从 SVG DOM 自动扫描绑定 ──
-
-/**
- * 从 SVG DOM 中的 data-* 属性自动构建 GaugeSettings
- * 扫描所有带 data-bind-target 的元素，自动注册信号映射
- *
- * @param svgRootElement SVG 主组元素
- * @returns 注册的图元数量
- */
-export const scanAndBindFromDOM = (svgRootElement: SVGGElement): number => {
-  let count = 0
-  const elements = svgRootElement.querySelectorAll('[data-bind-target]')
-  elements.forEach((el) => {
-    const svgEl = el as SVGElement
-    const id = svgEl.getAttribute('id')
-    if (!id) return
-
-    const target = svgEl.getAttribute('data-bind-target') || ''
-    const tagName = svgEl.getAttribute('data-bind-tag-name') || ''
-    const deviceId = svgEl.getAttribute('data-bind-device-id') || ''
-    const tagId = svgEl.getAttribute('data-bind-tag-id') || ''
-    const gaugeType = svgEl.getAttribute('type') || ''
-
-    // 解析 data-value-process 属性
-    let property: GaugeProperty = {
-      variableId: `${deviceId}:${tagId}`,
-      variableValue: '',
-      bitmask: 0,
-      ranges: [],
-      events: [],
-      actions: [],
-      readonly: false
-    }
-
-    const vpStr = svgEl.getAttribute('data-value-process')
-    if (vpStr) {
-      try {
-        const vp = JSON.parse(vpStr)
-        property.bitmask = vp.bitMask ?? 0
-        property.ranges = (vp.ranges || []).map((r: any) => ({
-          min: r.min ?? 0,
-          max: r.max ?? 100,
-          fillColor: r.color ?? '#4ac080',
-          strokeColor: r.color ?? '#4ac080'
-        }))
-        property.actions = (vp.actions || []).map((a: any) => ({
-          type: a.actionType || 'show',
-          targetId: a.targetId || ''
-        }))
-      } catch {
-        // 忽略解析错误
+      switch (event.type) {
+        case 'click':
+          el.addEventListener('click', handler)
+          break
+        case 'dblclick':
+          el.addEventListener('dblclick', handler)
+          break
+        case 'mousedown':
+          el.addEventListener('mousedown', handler)
+          break
+        case 'mouseover':
+          el.addEventListener('mouseover', handler)
+          break
       }
     }
+  }
+}
 
-    const gauge: GaugeSettings = {
-      id,
-      type: gaugeType,
-      name: target,
-      label: tagName,
-      property,
-      hide: false,
-      lock: false
+// ── 信号处理入口 ──
+// 照搬 FUXA handleSignal 链路
+
+export function handleSignal(signalId: string, value: any, svgRootElement: SVGGElement): void {
+  const gas = getGaugesBySignal(signalId)
+  if (!gas || gas.length === 0) return
+
+  const sig: Variable = { id: signalId, value }
+
+  for (const ga of gas) {
+    const status = gaugeStatusMap[ga.id] || createGaugeStatus()
+    gaugeStatusMap[ga.id] = status
+
+    // 检查值是否变化
+    if (status.variablesValue[signalId] === value) continue
+    status.variablesValue[signalId] = value
+
+    // 获取 SVG 元素
+    const el = svgRootElement.querySelector(`#${CSS.escape(ga.id)}`)
+    if (!el) continue
+
+    const svgele = getSvgElement(ga.id)
+    if (svgele) {
+      processValue(ga, svgele, sig, status)
     }
+  }
+}
 
-    // 注册信号映射
-    const signalId = `${deviceId}:${tagName}`
-    bindSignalToGauge(signalId, gauge)
-    count++
-  })
-  return count
+// ── 清理 ──
+
+export function cleanupAll(): void {
+  for (const key of Object.keys(gaugeStatusMap)) {
+    const st = gaugeStatusMap[key]
+    if (st.blinkTimer) clearInterval(st.blinkTimer)
+    delete gaugeStatusMap[key]
+  }
 }
