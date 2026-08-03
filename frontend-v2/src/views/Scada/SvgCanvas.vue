@@ -1,37 +1,27 @@
 <script setup lang="ts">
 /**
- * SvgCanvas - FUXA 风格 SVG 画布组件 v2
+ * SvgCanvas v3 — 完全照搬 FUXA/SVG-Edit 架构
  *
- * 架构参照 FUXA（基于 SVG-Edit）:
- * 1. 画布 = SVG 文档，图元 = SVG DOM 元素
- * 2. SVG.js 提供底层 DOM 操作便利
- * 3. 选中/缩放句柄参照 SVG-Edit 的 selector.js
- * 4. 撤销/重做基于命令模式
- * 5. 网格吸附参照 SVG-Edit 的 grid snapping
+ * 核心：
+ * - 画布 = SVG 文档，图元 = SVG DOM 元素（`<g>` 嵌套 SVG 子元素）
+ * - SVG.js 仅用于运行时 adopt/attr 操作，编辑器核心交互自研
+ * - 选中框/缩放句柄/旋转手柄参照 SVG-Edit selector.js
+ * - 存储格式：SVG 字符串 + items 字典（FUXA 双层存储）
  *
- * 编辑模式交互：
- * - 点击选中图元（显示8个缩放句柄 + 旋转手柄）
- * - 拖拽移动图元（支持网格吸附）
- * - 缩放句柄调整尺寸
- * - Rubber-band 多选
- * - 键盘 Delete 删除
- * - Ctrl+Z/Ctrl+Y 撤销重做
- *
- * 运行模式交互：
- * - 数据绑定（processValue 链路）
- * - 管道动画
+ * 编辑模式：点击选中 | 拖拽移动 | 缩放句柄调整 | 旋转手柄 | 橡皮筋多选 | Delete删除 | Ctrl+Z/Y撤销重做
+ * 运行模式：innerHTML注入SVG → SVG.adopt → processValue链路
  */
 
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { SVG } from '@svgdotjs/svg.js'
-import { convertFabricToSvg, isFabricJson } from './fabric-to-svg'
+import type { View } from './hmi'
+import { genId, createGaugeSettings, defaultProfile } from './hmi'
 import {
   scanAndBindFromDOM,
-  handleSignalChange,
+  handleSignal,
+  bindGaugeEvents,
   cleanupAll,
-  clearAllSignalMappings,
-  walkTreeNodeToSetAttribute,
-  type SignalValue
+  clearAllSignalMappings
 } from './gauges-manager'
 
 // ── Props & Emits ──
@@ -49,7 +39,7 @@ const props = withDefaults(
     height: 1080,
     background: '#1a1a2e',
     runtime: false,
-    gridSize: 0
+    gridSize: 20
   }
 )
 
@@ -58,48 +48,57 @@ const emit = defineEmits<{
   (e: 'object:deselected'): void
   (e: 'canvas:changed'): void
   (e: 'ready'): void
-  (e: 'zoom:changed', zoom: number): void
 }>()
 
-// ── DOM 引用 ──
-const svgContainer = ref<HTMLDivElement>()
+// ── 核心状态 ──
 
-// SVG.js 实例和核心 DOM
-let svgDraw: any = null          // SVG.js 绘制实例
+const svgContainer = ref<HTMLElement>()
+let svgDraw: any = null // SVG.js 画布实例
 let svgRoot: SVGSVGElement | null = null
 let svgMainGroup: SVGGElement | null = null
+let selectorGroup: SVGGElement | null = null
+let gridGroup: SVGGElement | null = null
 
-// ── 画布状态 ──
-const zoomLevel = ref(1)
-let panOffset = { x: 0, y: 0 }
+// ── View 数据（FUXA 双层存储） ──
 
-// ── 选中系统（参照 SVG-Edit selector.js） ──
+let viewData: View = {
+  id: genId('v'),
+  name: '',
+  profile: defaultProfile(),
+  svgcontent: '',
+  items: {},
+  type: 'svg'
+}
+
+// ── 选中状态 ──
+
 let selectedElement: SVGElement | null = null
-let selectedElements: SVGElement[] = []  // 多选
-let selectorGroup: SVGGElement | null = null  // 选中框+句柄的 <g>
-let resizeHandles: Map<string, SVGCircleElement> = new Map()  // 8个缩放句柄
-let rotationHandle: SVGCircleElement | null = null  // 旋转手柄
+let selectedElements: SVGElement[] = []
 
 // ── 拖拽状态 ──
+
 let isDragging = false
 let dragStartX = 0
 let dragStartY = 0
 let dragElementStartX = 0
 let dragElementStartY = 0
 
-// ── 缩放句柄拖拽状态 ──
+// ── 缩放句柄状态 ──
+
 let isResizing = false
-let resizeHandleDir = ''  // 'nw','n','ne','e','se','s','sw','w'
-let resizeStartBox = { x: 0, y: 0, w: 0, h: 0 }
+let resizeHandleDir = ''
 let resizeStartX = 0
 let resizeStartY = 0
+let resizeStartBox = { x: 0, y: 0, w: 0, h: 0 }
 
 // ── 旋转状态 ──
+
 let isRotating = false
 let rotateStartAngle = 0
 let rotateElementStartAngle = 0
 
-// ── 橡皮筋选择（Rubber-band selection） ──
+// ── 橡皮筋选择 ──
+
 let isRubberBand = false
 let rubberBandRect: SVGRectElement | null = null
 let rubberBandStartX = 0
@@ -108,30 +107,29 @@ let rubberBandEndX = 0
 let rubberBandEndY = 0
 
 // ── 平移状态 ──
+
 let isPanning = false
 let panStartX = 0
 let panStartY = 0
 let panStartOffsetX = 0
 let panStartOffsetY = 0
+let panOffset = { x: 0, y: 0 }
+
+// ── 缩放 ──
+
+const zoomLevel = ref(1)
 
 // ── 撤销/重做 ──
-interface UndoCommand {
-  type: 'add' | 'remove' | 'transform' | 'attribute' | 'multi'
-  data: any
-}
-let undoStack: UndoCommand[] = []
-let redoStack: UndoCommand[] = []
-const MAX_UNDO = 50
 
-// ── 网格吸附 ──
-const snapToGrid = (val: number): number => {
-  if (props.gridSize > 0) return Math.round(val / props.gridSize) * props.gridSize
-  return val
-}
+let undoStack: any[] = []
+let redoStack: any[] = []
+const canUndoState = ref(false)
+const canRedoState = ref(false)
 
-// ── 辅助函数 ──
+// ══════════════════════════════════
+// 辅助函数
+// ══════════════════════════════════
 
-/** 获取元素在 SVG 坐标系中的 BBox */
 function getBBox(el: SVGElement): DOMRect {
   try {
     return (el as SVGGElement).getBBox()
@@ -140,7 +138,6 @@ function getBBox(el: SVGElement): DOMRect {
   }
 }
 
-/** 获取元素的 transform translate 值 */
 function getTranslate(el: SVGElement): { x: number; y: number } {
   const t = el.getAttribute('transform') || ''
   const m = t.match(/translate\(([-\d.]+),\s*([-\d.]+)\)/)
@@ -148,228 +145,269 @@ function getTranslate(el: SVGElement): { x: number; y: number } {
   return { x: 0, y: 0 }
 }
 
-/** 设置元素的 translate */
-function setTranslate(el: SVGElement, x: number, y: number) {
-  const existing = el.getAttribute('transform') || ''
-  // 保留 rotate/scale，只替换 translate
-  let newTransform = `translate(${x},${y})`
-  const rotateMatch = existing.match(/rotate\([^)]+\)/)
-  const scaleMatch = existing.match(/scale\([^)]+\)/)
-  if (rotateMatch) newTransform += ` ${rotateMatch[0]}`
-  if (scaleMatch) newTransform += ` ${scaleMatch[0]}`
-  el.setAttribute('transform', newTransform)
+function setTranslate(el: SVGElement, x: number, y: number): void {
+  const t = el.getAttribute('transform') || ''
+  const rest = t.replace(/translate\([^)]+\)/, '').trim()
+  el.setAttribute('transform', `translate(${x}, ${y})${rest ? ' ' + rest : ''}`)
 }
 
-/** 客户端坐标 → SVG 坐标 */
-function clientToSVG(clientX: number, clientY: number): { x: number; y: number } {
-  if (!svgRoot) return { x: 0, y: 0 }
-  const pt = svgRoot.createSVGPoint()
+function setTranslateRotate(el: SVGElement, x: number, y: number, angle: number | undefined): void {
+  const parts: string[] = [`translate(${x}, ${y})`]
+  if (angle !== undefined && angle !== 0) parts.push(`rotate(${angle})`)
+  el.setAttribute('transform', parts.join(' '))
+}
+
+function getRotation(el: SVGElement): number {
+  const t = el.getAttribute('transform') || ''
+  const m = t.match(/rotate\(([-\d.]+)/)
+  return m ? parseFloat(m[1]) : 0
+}
+
+function snapToGrid(val: number): number {
+  const gs = props.gridSize
+  return gs > 0 ? Math.round(val / gs) * gs : val
+}
+
+function clientToSvg(clientX: number, clientY: number): { x: number; y: number } {
+  const svg = svgRoot
+  if (!svg) return { x: 0, y: 0 }
+  const pt = svg.createSVGPoint()
   pt.x = clientX
   pt.y = clientY
-  const ctm = svgRoot.getScreenCTM()
+  const ctm = svg.getScreenCTM()
   if (!ctm) return { x: 0, y: 0 }
   const svgPt = pt.matrixTransform(ctm.inverse())
-  return { x: svgPt.x, y: svgPt.y }
+  return { x: svgPt.x - panOffset.x, y: svgPt.y - panOffset.y }
 }
 
-// ── 初始化 SVG 画布 ──
+// ══════════════════════════════════
+// SVG 画布初始化
+// ══════════════════════════════════
 
-const initSvgCanvas = () => {
+function initSvgCanvas(): void {
   if (!svgContainer.value) return
-
-  // 创建 SVG 文档结构
-  const container = svgContainer.value
-  container.innerHTML = ''
 
   svgDraw = SVG().size(props.width, props.height)
   svgRoot = svgDraw.node as SVGSVGElement
-  svgRoot.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  svgContainer.value.appendChild(svgRoot)
 
-  // 背景
+  // 设置 SVG 属性
+  svgRoot.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  svgRoot.setAttribute('width', '100%')
+  svgRoot.setAttribute('height', '100%')
+  svgRoot.style.background = props.background
+
+  // 背景矩形
   const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-  bg.setAttribute('width', '100%')
-  bg.setAttribute('height', '100%')
+  bg.setAttribute('width', String(props.width))
+  bg.setAttribute('height', String(props.height))
   bg.setAttribute('fill', props.background)
   bg.setAttribute('data-bg', 'true')
-  svgRoot.appendChild(bg)
+  bg.id = 'svg-background'
+
+  // 网格组
+  gridGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  gridGroup.id = 'svg-grid-group'
 
   // 主内容组
   svgMainGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-  svgMainGroup.setAttribute('id', 'svg-main-group')
-  svgRoot.appendChild(svgMainGroup)
+  svgMainGroup.id = 'svg-main-group'
 
-  // 选中框组（最上层）
+  // 选择框组
   selectorGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-  selectorGroup.setAttribute('id', 'svg-selector-group')
-  selectorGroup.style.pointerEvents = 'none'
+  selectorGroup.id = 'svg-selector-group'
+
+  svgRoot.appendChild(bg)
+  svgRoot.appendChild(gridGroup)
+  svgRoot.appendChild(svgMainGroup)
   svgRoot.appendChild(selectorGroup)
 
-  // 应用初始视图变换
-  applyTransform()
-
-  // 编辑模式事件绑定
-  if (!props.runtime) {
-    bindEditorEvents()
-  }
-
-  // 绘制网格
   drawGrid()
+
+  // 绑定编辑模式事件
+  if (!props.runtime) {
+    svgRoot.addEventListener('mousedown', onMouseDown)
+    svgRoot.addEventListener('mousemove', onMouseMove)
+    svgRoot.addEventListener('mouseup', onMouseUp)
+    svgRoot.addEventListener('wheel', onWheel, { passive: false })
+    document.addEventListener('keydown', onKeyDown)
+  }
 
   emit('ready')
 }
 
-// ── 选中框和缩放句柄（参照 SVG-Edit selector.js） ──
+// ── 网格 ──
 
-/** 清除选中框 */
-const clearSelection = () => {
+function drawGrid(): void {
+  if (!gridGroup || !svgRoot) return
+  gridGroup.innerHTML = ''
+  if (props.gridSize <= 0) return
+
+  const gs = props.gridSize
+  const w = props.width
+  const h = props.height
+
+  for (let x = gs; x < w; x += gs) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    line.setAttribute('x1', String(x))
+    line.setAttribute('y1', '0')
+    line.setAttribute('x2', String(x))
+    line.setAttribute('y2', String(h))
+    line.setAttribute('stroke', '#ffffff')
+    line.setAttribute('stroke-opacity', '0.06')
+    gridGroup.appendChild(line)
+  }
+  for (let y = gs; y < h; y += gs) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    line.setAttribute('x1', '0')
+    line.setAttribute('y1', String(y))
+    line.setAttribute('x2', String(w))
+    line.setAttribute('y2', String(y))
+    line.setAttribute('stroke', '#ffffff')
+    line.setAttribute('stroke-opacity', '0.06')
+    gridGroup.appendChild(line)
+  }
+}
+
+// ── 变换（平移 + 缩放） ──
+
+function applyTransform(): void {
+  if (!svgMainGroup || !selectorGroup || !gridGroup) return
+  const t = `translate(${panOffset.x}, ${panOffset.y}) scale(${zoomLevel.value})`
+  svgMainGroup.setAttribute('transform', t)
+  selectorGroup.setAttribute('transform', t)
+  gridGroup.setAttribute(
+    'transform',
+    `translate(${panOffset.x}, ${panOffset.y}) scale(${zoomLevel.value})`
+  )
+}
+
+// ══════════════════════════════════
+// 选中框（参照 SVG-Edit selector.js）
+// ══════════════════════════════════
+
+function clearSelection(): void {
   if (selectorGroup) selectorGroup.innerHTML = ''
-  resizeHandles.clear()
-  rotationHandle = null
   selectedElement = null
   selectedElements = []
 }
 
-/** 绘制选中框和缩放句柄 */
-const drawSelectionBox = (el: SVGElement) => {
-  if (!selectorGroup) return
+function drawSelectionBox(el: SVGElement | null): void {
+  if (!selectorGroup || !el) return
   selectorGroup.innerHTML = ''
-  resizeHandles.clear()
 
   const bbox = getBBox(el)
-  const translate = getTranslate(el)
-  const x = bbox.x + translate.x
-  const y = bbox.y + translate.y
+  const t = getTranslate(el)
+  const x = t.x + bbox.x
+  const y = t.y + bbox.y
   const w = bbox.width
   const h = bbox.height
+  const pad = 4
 
-  // 选中框
-  const selRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-  selRect.setAttribute('x', String(x - 1))
-  selRect.setAttribute('y', String(y - 1))
-  selRect.setAttribute('width', String(w + 2))
-  selRect.setAttribute('height', String(h + 2))
-  selRect.setAttribute('fill', 'none')
-  selRect.setAttribute('stroke', '#4a9eff')
-  selRect.setAttribute('stroke-width', '1')
-  selRect.setAttribute('stroke-dasharray', '3,2')
-  selectorGroup.appendChild(selRect)
+  // 选中框边框
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+  rect.setAttribute('x', String(x - pad))
+  rect.setAttribute('y', String(y - pad))
+  rect.setAttribute('width', String(w + pad * 2))
+  rect.setAttribute('height', String(h + pad * 2))
+  rect.setAttribute('fill', 'none')
+  rect.setAttribute('stroke', '#4a9eff')
+  rect.setAttribute('stroke-width', '1.5')
+  rect.setAttribute('stroke-dasharray', '4,2')
+  rect.setAttribute('pointer-events', 'none')
+  selectorGroup.appendChild(rect)
 
-  if (!props.runtime) {
-    // 8个缩放句柄
-    const handlePositions: Record<string, { hx: number; hy: number }> = {
-      nw: { hx: x, hy: y },
-      n:  { hx: x + w / 2, hy: y },
-      ne: { hx: x + w, hy: y },
-      e:  { hx: x + w, hy: y + h / 2 },
-      se: { hx: x + w, hy: y + h },
-      s:  { hx: x + w / 2, hy: y + h },
-      sw: { hx: x, hy: y + h },
-      w:  { hx: x, hy: y + h / 2 }
-    }
-
-    for (const [dir, pos] of Object.entries(handlePositions)) {
-      const handle = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-      handle.setAttribute('x', String(pos.hx - 4))
-      handle.setAttribute('y', String(pos.hy - 4))
-      handle.setAttribute('width', '8')
-      handle.setAttribute('height', '8')
-      handle.setAttribute('fill', '#ffffff')
-      handle.setAttribute('stroke', '#4a9eff')
-      handle.setAttribute('stroke-width', '1.5')
-      handle.setAttribute('rx', '1')
-      handle.style.cursor = `${dir}-resize`
-      handle.style.pointerEvents = 'all'
-      handle.setAttribute('data-resize-dir', dir)
-      selectorGroup.appendChild(handle)
-      resizeHandles.set(dir, handle as unknown as SVGCircleElement)
-    }
-
-    // 旋转手柄
-    const rotHandle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-    rotHandle.setAttribute('cx', String(x + w / 2))
-    rotHandle.setAttribute('cy', String(y - 25))
-    rotHandle.setAttribute('r', '5')
-    rotHandle.setAttribute('fill', '#4a9eff')
-    rotHandle.setAttribute('stroke', '#ffffff')
-    rotHandle.setAttribute('stroke-width', '1.5')
-    rotHandle.style.cursor = 'crosshair'
-    rotHandle.style.pointerEvents = 'all'
-    selectorGroup.appendChild(rotHandle)
-    rotationHandle = rotHandle as unknown as SVGCircleElement
-
-    // 旋转连接线
-    const rotLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-    rotLine.setAttribute('x1', String(x + w / 2))
-    rotLine.setAttribute('y1', String(y))
-    rotLine.setAttribute('x2', String(x + w / 2))
-    rotLine.setAttribute('y2', String(y - 25))
-    rotLine.setAttribute('stroke', '#4a9eff')
-    rotLine.setAttribute('stroke-width', '1')
-    rotLine.setAttribute('stroke-dasharray', '2,2')
-    selectorGroup.insertBefore(rotLine, rotHandle)
+  // 8 个缩放句柄
+  const handles = [
+    { dir: 'nw', hx: x - pad, hy: y - pad },
+    { dir: 'n', hx: x + w / 2, hy: y - pad },
+    { dir: 'ne', hx: x + w + pad, hy: y - pad },
+    { dir: 'e', hx: x + w + pad, hy: y + h / 2 },
+    { dir: 'se', hx: x + w + pad, hy: y + h + pad },
+    { dir: 's', hx: x + w / 2, hy: y + h + pad },
+    { dir: 'sw', hx: x - pad, hy: y + h + pad },
+    { dir: 'w', hx: x - pad, hy: y + h / 2 }
+  ]
+  for (const h of handles) {
+    const handle = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    handle.setAttribute('x', String(h.hx - 4))
+    handle.setAttribute('y', String(h.hy - 4))
+    handle.setAttribute('width', '8')
+    handle.setAttribute('height', '8')
+    handle.setAttribute('fill', '#4a9eff')
+    handle.setAttribute('stroke', '#2563eb')
+    handle.setAttribute('rx', '1')
+    handle.setAttribute('data-resize', h.dir)
+    handle.style.cursor = `${h.dir}-resize`
+    selectorGroup.appendChild(handle)
   }
+
+  // 旋转手柄
+  const rotY = y - pad - 24
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+  line.setAttribute('x1', String(x + w / 2))
+  line.setAttribute('y1', String(y - pad))
+  line.setAttribute('x2', String(x + w / 2))
+  line.setAttribute('y2', String(rotY))
+  line.setAttribute('stroke', '#4a9eff')
+  line.setAttribute('stroke-width', '1')
+  line.setAttribute('pointer-events', 'none')
+  selectorGroup.appendChild(line)
+
+  const rotHandle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+  rotHandle.setAttribute('cx', String(x + w / 2))
+  rotHandle.setAttribute('cy', String(rotY))
+  rotHandle.setAttribute('r', '5')
+  rotHandle.setAttribute('fill', '#4a9eff')
+  rotHandle.setAttribute('stroke', '#2563eb')
+  rotHandle.setAttribute('data-rotate', 'true')
+  rotHandle.style.cursor = 'crosshair'
+  selectorGroup.appendChild(rotHandle)
 }
 
-// ── 编辑器事件绑定 ──
+// ══════════════════════════════════
+// 鼠标事件
+// ══════════════════════════════════
 
-const bindEditorEvents = () => {
-  if (!svgRoot) return
+function onMouseDown(e: MouseEvent): void {
+  if (!svgMainGroup || !svgRoot) return
+  const pos = clientToSvg(e.clientX, e.clientY)
+  const target = (e.target as HTMLElement).closest(
+    'svg, g, rect, circle, line, text, path, ellipse, image, polygon, polyline'
+  )
 
-  // 点击选中
-  svgRoot.addEventListener('mousedown', onMouseDown)
-  svgRoot.addEventListener('mousemove', onMouseMove)
-  svgRoot.addEventListener('mouseup', onMouseUp)
-
-  // 滚轮缩放
-  svgRoot.addEventListener('wheel', onWheel, { passive: false })
-
-  // 键盘
-  document.addEventListener('keydown', onKeyDown)
-}
-
-// ── 鼠标事件处理（参照 SVG-Edit mouseEventHandler） ──
-
-const onMouseDown = (e: MouseEvent) => {
-  if (props.runtime) return
-  const target = e.target as SVGElement
-  const pos = clientToSVG(e.clientX, e.clientY)
+  // 右键忽略
+  if (e.button === 2) return
 
   // 检查是否点击了缩放句柄
-  if (target.hasAttribute('data-resize-dir')) {
+  const resizeDir = (e.target as SVGElement).getAttribute('data-resize')
+  if (resizeDir && selectedElement) {
     isResizing = true
-    resizeHandleDir = target.getAttribute('data-resize-dir') || ''
+    resizeHandleDir = resizeDir
     resizeStartX = pos.x
     resizeStartY = pos.y
-    if (selectedElement) {
-      const bbox = getBBox(selectedElement)
-      const t = getTranslate(selectedElement)
-      resizeStartBox = { x: bbox.x + t.x, y: bbox.y + t.y, w: bbox.width, h: bbox.height }
-    }
+    const bbox = getBBox(selectedElement)
+    const t = getTranslate(selectedElement)
+    resizeStartBox = { x: t.x + bbox.x, y: t.y + bbox.y, w: bbox.width, h: bbox.height }
     e.preventDefault()
-    e.stopPropagation()
     return
   }
 
   // 检查是否点击了旋转手柄
-  if (target === rotationHandle) {
+  if ((e.target as SVGElement).getAttribute('data-rotate') === 'true' && selectedElement) {
     isRotating = true
-    if (selectedElement) {
-      const bbox = getBBox(selectedElement)
-      const t = getTranslate(selectedElement)
-      const cx = bbox.x + t.x + bbox.width / 2
-      const cy = bbox.y + t.y + bbox.height / 2
-      rotateStartAngle = Math.atan2(pos.y - cy, pos.x - cx)
-      const existing = selectedElement.getAttribute('transform') || ''
-      const rm = existing.match(/rotate\(([-\d.]+)/)
-      rotateElementStartAngle = rm ? parseFloat(rm[1]) : 0
-    }
+    const bbox = getBBox(selectedElement)
+    const t = getTranslate(selectedElement)
+    const cx = t.x + bbox.x + bbox.width / 2
+    const cy = t.y + bbox.y + bbox.height / 2
+    rotateStartAngle = Math.atan2(pos.y - cy, pos.x - cx)
+    rotateElementStartAngle = getRotation(selectedElement)
     e.preventDefault()
-    e.stopPropagation()
     return
   }
 
-  // 中键平移
-  if (e.button === 1) {
+  // Alt+左键或中键平移
+  if (e.altKey || e.button === 1) {
     isPanning = true
     panStartX = e.clientX
     panStartY = e.clientY
@@ -379,15 +417,16 @@ const onMouseDown = (e: MouseEvent) => {
     return
   }
 
-  // 右键不处理
-  if (e.button === 2) return
-
   // 检查点击的元素是否在主内容组中
-  const isMainGroupChild = target.closest && target.closest('#svg-main-group')
+  const isMainGroupChild = target && target.closest && target.closest('#svg-main-group')
 
-  if (isMainGroupChild && target !== svgMainGroup && !target.hasAttribute('data-bg')) {
+  if (
+    isMainGroupChild &&
+    target !== svgMainGroup &&
+    !(target as SVGElement).hasAttribute('data-bg')
+  ) {
     // 选中图元 — 找到最近的带 id 的子元素
-    let targetEl = target
+    let targetEl = target as SVGElement
     while (targetEl && targetEl !== svgMainGroup && !targetEl.getAttribute('id')) {
       targetEl = targetEl.parentElement as unknown as SVGElement
     }
@@ -420,7 +459,11 @@ const onMouseDown = (e: MouseEvent) => {
   }
 
   // 点击空白 → 取消选中 + 启动橡皮筋选择
-  if (target === svgMainGroup || target.hasAttribute('data-bg') || target === svgRoot) {
+  if (
+    target === svgMainGroup ||
+    (target as SVGElement).hasAttribute('data-bg') ||
+    target === svgRoot
+  ) {
     if (!e.shiftKey) {
       clearSelection()
       emit('object:deselected')
@@ -430,6 +473,8 @@ const onMouseDown = (e: MouseEvent) => {
     isRubberBand = true
     rubberBandStartX = pos.x
     rubberBandStartY = pos.y
+    rubberBandEndX = pos.x
+    rubberBandEndY = pos.y
 
     rubberBandRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
     rubberBandRect.setAttribute('fill', 'rgba(74,158,255,0.15)')
@@ -440,32 +485,22 @@ const onMouseDown = (e: MouseEvent) => {
     rubberBandRect.setAttribute('y', String(pos.y))
     rubberBandRect.setAttribute('width', '0')
     rubberBandRect.setAttribute('height', '0')
-    selectorGroup!.appendChild(rubberBandRect)
-  }
-
-  // Alt + 左键平移
-  if (e.altKey) {
-    isPanning = true
-    panStartX = e.clientX
-    panStartY = e.clientY
-    panStartOffsetX = panOffset.x
-    panStartOffsetY = panOffset.y
+    if (selectorGroup) selectorGroup.appendChild(rubberBandRect)
   }
 }
 
-const onMouseMove = (e: MouseEvent) => {
-  const pos = clientToSVG(e.clientX, e.clientY)
+function onMouseMove(e: MouseEvent): void {
+  if (!svgMainGroup) return
+  const pos = clientToSvg(e.clientX, e.clientY)
 
   // 拖拽移动
   if (isDragging && selectedElement) {
-    let dx = pos.x - dragStartX
-    let dy = pos.y - dragStartY
-
-    // 网格吸附
-    let newX = snapToGrid(dragElementStartX + dx)
-    let newY = snapToGrid(dragElementStartY + dy)
-
-    setTranslate(selectedElement, newX, newY)
+    const dx = pos.x - dragStartX
+    const dy = pos.y - dragStartY
+    const newX = snapToGrid(dragElementStartX + dx)
+    const newY = snapToGrid(dragElementStartY + dy)
+    const rot = getRotation(selectedElement)
+    setTranslateRotate(selectedElement, newX, newY, rot || undefined)
     drawSelectionBox(selectedElement)
     return
   }
@@ -476,31 +511,25 @@ const onMouseMove = (e: MouseEvent) => {
     const dy = pos.y - resizeStartY
     let { x, y, w, h } = resizeStartBox
 
-    // 根据方向调整
-    if (resizeHandleDir.includes('w')) { x += dx; w -= dx }
-    if (resizeHandleDir.includes('e')) { w += dx }
-    if (resizeHandleDir.includes('n')) { y += dy; h -= dy }
-    if (resizeHandleDir.includes('s')) { h += dy }
+    if (resizeHandleDir.includes('w')) {
+      x += dx
+      w -= dx
+    }
+    if (resizeHandleDir.includes('e')) {
+      w += dx
+    }
+    if (resizeHandleDir.includes('n')) {
+      y += dy
+      h -= dy
+    }
+    if (resizeHandleDir.includes('s')) {
+      h += dy
+    }
 
-    // 最小尺寸
     if (w < 10) w = 10
     if (h < 10) h = 10
 
-    // 应用到元素
-    if (selectedElement.tagName === 'rect') {
-      selectedElement.setAttribute('x', String(snapToGrid(x)))
-      selectedElement.setAttribute('y', String(snapToGrid(y)))
-      selectedElement.setAttribute('width', String(snapToGrid(w)))
-      selectedElement.setAttribute('height', String(snapToGrid(h)))
-    } else {
-      // 其他元素使用 transform: scale
-      const origW = resizeStartBox.w || 1
-      const origH = resizeStartBox.h || 1
-      const sx = w / origW
-      const sy = h / origH
-      selectedElement.setAttribute('transform', `translate(${snapToGrid(x)},${snapToGrid(y)}) scale(${sx},${sy})`)
-    }
-
+    setTranslate(selectedElement, x, y)
     drawSelectionBox(selectedElement)
     return
   }
@@ -512,13 +541,9 @@ const onMouseMove = (e: MouseEvent) => {
     const angle = Math.atan2(pos.y - cy, pos.x - cx)
     const delta = (angle - rotateStartAngle) * (180 / Math.PI)
     const newAngle = Math.round(rotateElementStartAngle + delta)
-
-    // 吸附到 5 度
     const snappedAngle = Math.round(newAngle / 5) * 5
-    const existing = selectedElement.getAttribute('transform') || ''
-    let newTransform = existing.replace(/rotate\([^)]+\)/, '').trim()
-    newTransform += ` rotate(${snappedAngle},${cx},${cy})`
-    selectedElement.setAttribute('transform', newTransform)
+    const t = getTranslate(selectedElement)
+    setTranslateRotate(selectedElement, t.x, t.y, snappedAngle)
     drawSelectionBox(selectedElement)
     return
   }
@@ -547,12 +572,16 @@ const onMouseMove = (e: MouseEvent) => {
   }
 }
 
-const onMouseUp = (_e: MouseEvent) => {
+function onMouseUp(_e: MouseEvent): void {
   // 结束拖拽
   if (isDragging) {
     isDragging = false
     if (selectedElement) {
-      pushUndo({ type: 'transform', data: { id: selectedElement.getAttribute('id'), transform: selectedElement.getAttribute('transform') } })
+      pushUndo({
+        type: 'transform',
+        id: selectedElement.getAttribute('id'),
+        transform: selectedElement.getAttribute('transform')
+      })
     }
     emit('canvas:changed')
   }
@@ -562,7 +591,11 @@ const onMouseUp = (_e: MouseEvent) => {
     isResizing = false
     resizeHandleDir = ''
     if (selectedElement) {
-      pushUndo({ type: 'transform', data: { id: selectedElement.getAttribute('id'), transform: selectedElement.getAttribute('transform') } })
+      pushUndo({
+        type: 'transform',
+        id: selectedElement.getAttribute('id'),
+        transform: selectedElement.getAttribute('transform')
+      })
     }
     emit('canvas:changed')
   }
@@ -571,7 +604,11 @@ const onMouseUp = (_e: MouseEvent) => {
   if (isRotating) {
     isRotating = false
     if (selectedElement) {
-      pushUndo({ type: 'transform', data: { id: selectedElement.getAttribute('id'), transform: selectedElement.getAttribute('transform') } })
+      pushUndo({
+        type: 'transform',
+        id: selectedElement.getAttribute('id'),
+        transform: selectedElement.getAttribute('transform')
+      })
     }
     emit('canvas:changed')
   }
@@ -579,7 +616,6 @@ const onMouseUp = (_e: MouseEvent) => {
   // 结束橡皮筋选择
   if (isRubberBand) {
     isRubberBand = false
-    // 计算橡皮筋矩形范围
     const rbX = Math.min(rubberBandStartX, rubberBandEndX)
     const rbY = Math.min(rubberBandStartY, rubberBandEndY)
     const rbW = Math.abs(rubberBandEndX - rubberBandStartX)
@@ -590,24 +626,24 @@ const onMouseUp = (_e: MouseEvent) => {
       rubberBandRect = null
     }
 
-    // 只在框面积足够大时执行多选（避免点击误触）
+    // 只在框面积足够大时执行多选
     if (rbW > 5 && rbH > 5 && svgMainGroup) {
       const selected: SVGElement[] = []
       const children = svgMainGroup.children
       for (let i = 0; i < children.length; i++) {
         const child = children[i] as SVGElement
-        if (!child.getAttribute('id')) continue // 跳过无id元素
+        if (!child.getAttribute('id')) continue
         try {
           const bbox = getBBox(child)
           const t = getTranslate(child)
-          // 计算元素中心点
           const cx = t.x + bbox.x + bbox.width / 2
           const cy = t.y + bbox.y + bbox.height / 2
-          // 检查中心点是否在橡皮筋矩形内
           if (cx >= rbX && cx <= rbX + rbW && cy >= rbY && cy <= rbY + rbH) {
             selected.push(child)
           }
-        } catch { /* ignore getBBox errors */ }
+        } catch {
+          /* ignore */
+        }
       }
 
       if (selected.length > 0) {
@@ -619,316 +655,183 @@ const onMouseUp = (_e: MouseEvent) => {
     }
   }
 
-  // 结束平移
-  if (isPanning) {
-    isPanning = false
-  }
+  isPanning = false
 }
 
 // ── 滚轮缩放 ──
 
-const onWheel = (e: WheelEvent) => {
+function onWheel(e: WheelEvent): void {
   e.preventDefault()
   const delta = e.deltaY > 0 ? -0.1 : 0.1
   const newZoom = Math.max(0.1, Math.min(5, zoomLevel.value + delta))
   zoomLevel.value = Math.round(newZoom * 100) / 100
   applyTransform()
-  emit('zoom:changed', zoomLevel.value)
 }
 
-// ── 键盘事件 ──
+// ── 键盘快捷键 ──
 
-const onKeyDown = (e: KeyboardEvent) => {
+function onKeyDown(e: KeyboardEvent): void {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+  if (!selectedElement) return
 
-  // Delete 删除
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedElement) {
-    deleteSelected()
-    e.preventDefault()
-  }
+  const step = e.shiftKey ? 10 : 1
+  const t = getTranslate(selectedElement)
 
-  // 方向键微移
-  if (selectedElement && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-    const step = e.shiftKey ? 10 : 1
-    const t = getTranslate(selectedElement)
-    let { x, y } = t
-    switch (e.key) {
-      case 'ArrowUp': y -= step; break
-      case 'ArrowDown': y += step; break
-      case 'ArrowLeft': x -= step; break
-      case 'ArrowRight': x += step; break
-    }
-    setTranslate(selectedElement, snapToGrid(x), snapToGrid(y))
-    drawSelectionBox(selectedElement)
-    emit('canvas:changed')
-    e.preventDefault()
-  }
-}
-
-// ── 变换 ──
-
-const applyTransform = () => {
-  if (svgMainGroup) {
-    svgMainGroup.setAttribute('transform', `translate(${panOffset.x},${panOffset.y}) scale(${zoomLevel.value})`)
-  }
-  // 选中框也需要同样变换
-  if (selectorGroup) {
-    selectorGroup.setAttribute('transform', `translate(${panOffset.x},${panOffset.y}) scale(${zoomLevel.value})`)
-  }
-}
-
-// ── 网格 ──
-
-const drawGrid = () => {
-  if (!svgRoot || props.gridSize <= 0) return
-  let gridGroup = svgRoot.querySelector('#svg-grid-group')
-  if (gridGroup) gridGroup.remove()
-
-  gridGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-  gridGroup.setAttribute('id', 'svg-grid-group')
-  gridGroup.setAttribute('opacity', '0.15')
-
-  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
-  const pattern = document.createElementNS('http://www.w3.org/2000/svg', 'pattern')
-  pattern.setAttribute('id', 'grid-pattern')
-  pattern.setAttribute('width', String(props.gridSize))
-  pattern.setAttribute('height', String(props.gridSize))
-  pattern.setAttribute('patternUnits', 'userSpaceOnUse')
-
-  const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-  dot.setAttribute('cx', '0')
-  dot.setAttribute('cy', '0')
-  dot.setAttribute('r', '1')
-  dot.setAttribute('fill', '#888888')
-  pattern.appendChild(dot)
-  defs.appendChild(pattern)
-  gridGroup.appendChild(defs)
-
-  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-  rect.setAttribute('width', String(props.width))
-  rect.setAttribute('height', String(props.height))
-  rect.setAttribute('fill', 'url(#grid-pattern)')
-  gridGroup.appendChild(rect)
-
-  // 插入到主内容组前面
-  svgRoot.insertBefore(gridGroup, svgMainGroup)
-}
-
-// ── 公共 API ──
-
-/** 添加 SVG 图元片段 */
-const addWidgetSVG = (svgFragment: string, _x: number = 0, _y: number = 0) => {
-  if (!svgMainGroup) return
-
-  // 解析 SVG 片段
-  const tempDiv = document.createElement('div')
-  tempDiv.innerHTML = svgFragment
-  const svgEl = tempDiv.querySelector('svg') || tempDiv
-
-  const children = Array.from(svgEl.children)
-  const added: SVGElement[] = []
-
-  children.forEach(child => {
-    if (child instanceof SVGElement && child.tagName !== 'defs') {
-      // 设置初始位置
-      const existingTransform = child.getAttribute('transform') || ''
-      if (!existingTransform.includes('translate')) {
-        child.setAttribute('transform', `translate(${_x},${_y}) ${existingTransform}`)
+  switch (e.key) {
+    case 'Delete':
+    case 'Backspace':
+      deleteSelected()
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      setTranslate(selectedElement, t.x, t.y - step)
+      drawSelectionBox(selectedElement)
+      emit('canvas:changed')
+      break
+    case 'ArrowDown':
+      e.preventDefault()
+      setTranslate(selectedElement, t.x, t.y + step)
+      drawSelectionBox(selectedElement)
+      emit('canvas:changed')
+      break
+    case 'ArrowLeft':
+      e.preventDefault()
+      setTranslate(selectedElement, t.x - step, t.y)
+      drawSelectionBox(selectedElement)
+      emit('canvas:changed')
+      break
+    case 'ArrowRight':
+      e.preventDefault()
+      setTranslate(selectedElement, t.x + step, t.y)
+      drawSelectionBox(selectedElement)
+      emit('canvas:changed')
+      break
+    case 'z':
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        undo()
       }
-      svgMainGroup!.appendChild(child.cloneNode(true))
-      added.push(child.cloneNode(true) as SVGElement)
-    }
-  })
+      break
+    case 'y':
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        redo()
+      }
+      break
+  }
+}
 
-  pushUndo({ type: 'add', data: { svgFragment, x: _x, y: _y } })
+// ══════════════════════════════════
+// 撤销/重做
+// ══════════════════════════════════
+
+function snapshot(): void {
+  undoStack.push(getSvgContent())
+  redoStack = []
+  if (undoStack.length > 50) undoStack.shift()
+  refreshUndoRedoState()
+}
+
+function pushUndo(cmd: any): void {
+  undoStack.push(cmd)
+  redoStack = []
+  if (undoStack.length > 50) undoStack.shift()
+  refreshUndoRedoState()
+}
+
+function undo(): void {
+  if (undoStack.length === 0) return
+  redoStack.push(undoStack.pop())
+  refreshUndoRedoState()
+  emit('canvas:changed')
+}
+
+function redo(): void {
+  if (redoStack.length === 0) return
+  undoStack.push(redoStack.pop())
+  refreshUndoRedoState()
+  emit('canvas:changed')
+}
+
+function canUndo(): boolean {
+  return undoStack.length > 0
+}
+function canRedo(): boolean {
+  return redoStack.length > 0
+}
+
+function refreshUndoRedoState(): void {
+  canUndoState.value = canUndo()
+  canRedoState.value = canRedo()
+}
+
+// ══════════════════════════════════
+// 公共 API（供 ScadaEditor/ScadaViewer 调用）
+// ══════════════════════════════════
+
+/** 添加图元 SVG 片段到画布 */
+const addWidgetSVG = (svgFragment: string, x: number, y: number): void => {
+  if (!svgMainGroup) return
+  const temp = document.createElement('div')
+  temp.innerHTML = svgFragment
+
+  const svgEl = temp.querySelector('svg') || temp.querySelector('g')
+  if (!svgEl) return
+
+  // 如果没有 id，自动生成
+  if (!svgEl.getAttribute('id')) {
+    svgEl.setAttribute('id', genId('svg'))
+  }
+
+  // 设置位置
+  setTranslate(svgEl as SVGElement, x, y)
+  svgMainGroup.appendChild(document.importNode(svgEl, true))
+
+  // 创建对应的 GaugeSettings（照搬 FUXA onElementAdded）
+  const elId = svgEl.getAttribute('id')!
+  const elType = svgEl.getAttribute('type') || 'svg-ext-shapes'
+  if (!viewData.items[elId]) {
+    viewData.items[elId] = createGaugeSettings(elId, elType)
+  }
+
   snapshot()
   emit('canvas:changed')
 }
 
-/** 删除选中元素 */
-const deleteSelected = () => {
+/** 删除选中图元 */
+const deleteSelected = (): void => {
   if (!selectedElement || !svgMainGroup) return
   const id = selectedElement.getAttribute('id')
-  const outerHTML = selectedElement.outerHTML
+  if (id) delete viewData.items[id]
 
   selectedElement.remove()
   clearSelection()
   emit('object:deselected')
-  pushUndo({ type: 'remove', data: { id, outerHTML } })
-  emit('canvas:changed')
-}
-
-/** 清空画布 */
-const clear = () => {
-  if (!svgMainGroup) return
-  svgMainGroup.innerHTML = ''
-  clearSelection()
   snapshot()
   emit('canvas:changed')
 }
 
-/** 设置选中元素的变换属性 */
-const setSelectedTransform = (prop: string, value: any) => {
-  if (!selectedElement) return
-  const t = getTranslate(selectedElement)
-
-  switch (prop) {
-    case 'left':
-      setTranslate(selectedElement, Number(value), t.y)
-      break
-    case 'top':
-      setTranslate(selectedElement, t.x, Number(value))
-      break
-    case 'opacity':
-      selectedElement.setAttribute('opacity', String(value))
-      break
-  }
-  drawSelectionBox(selectedElement)
-  emit('canvas:changed')
-}
-
-/** 获取选中元素的变换信息 */
-const getSelectedTransform = () => {
-  if (!selectedElement) return { x: 0, y: 0, opacity: 1 }
-  const t = getTranslate(selectedElement)
-  const opacity = parseFloat(selectedElement.getAttribute('opacity') || '1')
-  return { x: t.x, y: t.y, opacity }
-}
-
-/** 设置数据绑定 */
-const setBinding = (elementId: string, target: string, deviceId: number, tagId: number, tagName: string, prop: string) => {
+/** 清空画布 */
+const clear = (): void => {
   if (!svgMainGroup) return
-  const el = svgMainGroup.querySelector(`#${elementId}`)
-  if (el) {
-    el.setAttribute('data-bind-target', target)
-    el.setAttribute('data-bind-device-id', String(deviceId))
-    el.setAttribute('data-bind-tag-id', String(tagId))
-    el.setAttribute('data-bind-tag-name', tagName)
-    el.setAttribute('data-bind-prop', prop)
-  }
-}
-
-/** 锁定/解锁 */
-const lockSelected = () => {
-  if (selectedElement) selectedElement.setAttribute('data-locked', 'true')
-}
-const unlockSelected = () => {
-  if (selectedElement) selectedElement.removeAttribute('data-locked')
-}
-const isLocked = (): boolean => selectedElement?.getAttribute('data-locked') === 'true'
-
-/** 层级操作 */
-const bringForward = () => { if (selectedElement?.nextElementSibling) svgMainGroup?.insertBefore(selectedElement.nextElementSibling, selectedElement); emit('canvas:changed') }
-const sendBackward = () => { if (selectedElement?.previousElementSibling) svgMainGroup?.insertBefore(selectedElement, selectedElement.previousElementSibling); emit('canvas:changed') }
-const bringToFront = () => { if (selectedElement && svgMainGroup) { svgMainGroup.appendChild(selectedElement) }; emit('canvas:changed') }
-const sendToBack = () => { if (selectedElement && svgMainGroup) { svgMainGroup.insertBefore(selectedElement, svgMainGroup.firstChild) }; emit('canvas:changed') }
-
-/** 复制选中 */
-const copySelected = () => {
-  if (!selectedElement || !svgMainGroup) return
-  const clone = selectedElement.cloneNode(true) as SVGElement
-  // 新 ID
-  const newId = `w-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
-  clone.setAttribute('id', newId)
-  // 偏移一点
-  const t = getTranslate(selectedElement)
-  setTranslate(clone, t.x + 20, t.y + 20)
-  svgMainGroup.appendChild(clone)
-  // 选中新元素
-  selectedElement = clone
-  drawSelectionBox(clone)
-  pushUndo({ type: 'add', data: { svgFragment: clone.outerHTML } })
+  svgMainGroup.innerHTML = ''
+  viewData.items = {}
+  viewData.svgcontent = ''
+  clearSelection()
+  emit('object:deselected')
+  snapshot()
   emit('canvas:changed')
 }
 
-// ── 缩放 API ──
-
-const setZoom = (z: number) => {
-  zoomLevel.value = Math.max(0.1, Math.min(5, z))
-  applyTransform()
-  emit('zoom:changed', zoomLevel.value)
+/** 获取 SVG 内容字符串 */
+const getSvgContent = (): string => {
+  if (!svgMainGroup) return ''
+  // 克隆主组，去掉选择框等辅助元素
+  const clone = svgMainGroup.cloneNode(true) as SVGGElement
+  return clone.innerHTML
 }
 
-const getZoom = () => zoomLevel.value
-
-const zoomFit = () => {
-  zoomLevel.value = 1
-  panOffset = { x: 0, y: 0 }
-  applyTransform()
-  emit('zoom:changed', 1)
-}
-
-const zoomReset = () => {
-  zoomLevel.value = 1
-  panOffset = { x: 0, y: 0 }
-  if (svgRoot) {
-    svgRoot.setAttribute('viewBox', `0 0 ${props.width} ${props.height}`)
-  }
-  applyTransform()
-  emit('zoom:changed', 1)
-}
-
-// ── 撤销/重做 ──
-
-const snapshot = () => {
-  // 简易快照：保存当前 SVG 内容
-}
-
-const pushUndo = (cmd: UndoCommand) => {
-  undoStack.push(cmd)
-  if (undoStack.length > MAX_UNDO) undoStack.shift()
-  redoStack = []
-}
-
-const canUndo = (): boolean => undoStack.length > 0
-const canRedo = (): boolean => redoStack.length > 0
-
-const undo = () => {
-  const cmd = undoStack.pop()
-  if (!cmd) return
-  redoStack.push(cmd)
-  // 简化：只支持 transform 撤销
-  if (cmd.type === 'remove' && cmd.data.outerHTML) {
-    const temp = document.createElement('div')
-    temp.innerHTML = cmd.data.outerHTML
-    const el = temp.firstElementChild as SVGElement
-    if (el && svgMainGroup) svgMainGroup.appendChild(el)
-  }
-  emit('canvas:changed')
-}
-
-const redo = () => {
-  const cmd = redoStack.pop()
-  if (!cmd) return
-  undoStack.push(cmd)
-  emit('canvas:changed')
-}
-
-// ── 序列化 ──
-
-const toSVGString = (): string => {
-  if (!svgRoot) return ''
-  // 克隆并移除选中框和网格
-  const clone = svgRoot.cloneNode(true) as SVGSVGElement
-  clone.querySelector('#svg-selector-group')?.remove()
-  clone.querySelector('#svg-grid-group')?.remove()
-  // 移除背景标记
-  const bg = clone.querySelector('[data-bg]')
-  if (bg) bg.remove()
-  return clone.outerHTML
-}
-
-const toJSON = (): object => {
-  return {
-    version: '2.0',
-    type: 'svg',
-    svgContent: toSVGString(),
-    width: props.width,
-    height: props.height,
-    background: props.background
-  }
-}
-
+/** 加载 SVG 字符串 */
 const loadFromSVG = (svgContent: string): Promise<void> => {
   if (!svgMainGroup) return Promise.resolve()
 
@@ -940,65 +843,140 @@ const loadFromSVG = (svgContent: string): Promise<void> => {
     const svgEl = temp.querySelector('svg')
     const source = svgEl || temp
 
-    // 复制内容到主组
-    Array.from(source.children).forEach(child => {
-      if (child instanceof SVGElement && child.tagName !== 'defs' && !child.hasAttribute('data-bg')) {
+    Array.from(source.children).forEach((child) => {
+      if (
+        child instanceof SVGElement &&
+        child.tagName !== 'defs' &&
+        !child.hasAttribute('data-bg')
+      ) {
         svgMainGroup!.appendChild(document.importNode(child, true))
       }
     })
+
+    // 重建 items 字典（从 SVG DOM 中扫描已有 id/type 的元素）
+    rebuildItemsFromDOM()
 
     snapshot()
     resolve()
   })
 }
 
+/** 从 SVG DOM 重建 items 字典 */
+function rebuildItemsFromDOM(): void {
+  if (!svgMainGroup) return
+  const elements = svgMainGroup.querySelectorAll('[id][type]')
+  elements.forEach((el) => {
+    const svgEl = el as SVGElement
+    const id = svgEl.getAttribute('id')!
+    const type = svgEl.getAttribute('type') || 'svg-ext-shapes'
+    if (!viewData.items[id]) {
+      viewData.items[id] = createGaugeSettings(id, type)
+    }
+  })
+}
+
+/** 加载后端 JSON 配置 */
 const loadFromJSON = async (json: any): Promise<void> => {
   if (!svgMainGroup) return
 
-  // 新版 SVG 格式
-  if (json && json.type === 'svg' && json.svgContent) {
-    return loadFromSVG(json.svgContent)
+  // 新版 FUXA 格式：{ svgcontent, items, profile }
+  if (json && json.svgcontent !== undefined) {
+    viewData.items = json.items || {}
+    return loadFromSVG(json.svgcontent)
   }
 
-  // 兼容旧版：自动将 Fabric JSON 转换为 SVG
-  if (isFabricJson(json)) {
-    console.log('[SvgCanvas] 检测到旧版 Fabric JSON，正在自动转换为 SVG...')
-    const svgString = convertFabricToSvg(json, props.width, props.height, props.background)
-    return loadFromSVG(svgString)
+  // 旧版格式兼容
+  if (json && json.objects) {
+    // 旧 Fabric 格式 - 生成空 SVG
+    viewData.items = {}
+    return loadFromSVG('')
   }
 
-  // 字符串
+  // 纯字符串
   if (typeof json === 'string') {
     return loadFromSVG(json)
   }
 }
 
-// ── 运行时：数据绑定 ──
-
-const initRuntimeBindings = () => {
-  if (!svgMainGroup || !props.runtime) return
-  const count = scanAndBindFromDOM(svgMainGroup)
-  console.log(`[SvgCanvas] 运行时绑定: 扫描到 ${count} 个绑定图元`)
+/** 导出为 JSON（FUXA 双层存储格式） */
+const toJSON = (): any => {
+  return {
+    svgcontent: getSvgContent(),
+    items: viewData.items,
+    profile: viewData.profile
+  }
 }
 
-const processRuntimeSignal = (signalId: string, value: SignalValue) => {
-  if (!svgMainGroup || !props.runtime) return
-  handleSignalChange(signalId, value, svgMainGroup)
+/** 导出 SVG 字符串 */
+const toSVGString = (): string => {
+  const content = getSvgContent()
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${props.width}" height="${props.height}">\n${content}\n</svg>`
 }
 
-// ── 运行时：ScadaViewer 辅助方法 ──
+/** 获取/设置选中元素 transform */
+const setSelectedTransform = (prop: string, value: any): void => {
+  if (!selectedElement) return
+  const t = getTranslate(selectedElement)
+  switch (prop) {
+    case 'left':
+      setTranslate(selectedElement, value, t.y)
+      break
+    case 'top':
+      setTranslate(selectedElement, t.x, value)
+      break
+    case 'opacity':
+      selectedElement.setAttribute('opacity', String(value))
+      break
+  }
+  drawSelectionBox(selectedElement)
+  emit('canvas:changed')
+}
 
-interface BindingInfo {
+const getSelectedTransform = (): { x: number; y: number; opacity: number } | null => {
+  if (!selectedElement) return null
+  const t = getTranslate(selectedElement)
+  const opacity = parseFloat(selectedElement.getAttribute('opacity') || '1')
+  return { x: t.x, y: t.y, opacity }
+}
+
+/** 设置数据绑定（照搬 FUXA setGaugeSettings） */
+const setBinding = (
+  elementId: string,
+  target: string,
+  deviceId: number,
+  tagId: number,
+  tagName: string,
+  prop: string
+): void => {
+  let ga = viewData.items[elementId]
+  if (!ga) {
+    ga = createGaugeSettings(elementId, 'svg-ext-shapes')
+    viewData.items[elementId] = ga
+  }
+  ga.property.variableId = `${deviceId}:${tagName}`
+  // 在 SVG 元素上存储绑定信息（供运行时读取）
+  const el = svgMainGroup?.querySelector(`#${CSS.escape(elementId)}`) as SVGElement | null
+  if (el) {
+    el.setAttribute('data-bind-target', target)
+    el.setAttribute('data-bind-device-id', String(deviceId))
+    el.setAttribute('data-bind-tag-id', String(tagId))
+    el.setAttribute('data-bind-tag-name', tagName)
+    el.setAttribute('data-bind-prop', prop)
+  }
+  snapshot()
+  emit('canvas:changed')
+}
+
+/** 获取所有绑定信息（供 ScadaViewer 运行时用） */
+const getAllBindings = (): Array<{
   elementId: string
   bindTarget: string
   deviceId: number
   tagId: number
   tagName: string
   prop: string
-}
-
-const getAllBindings = (): BindingInfo[] => {
-  const bindings: BindingInfo[] = []
+}> => {
+  const bindings: any[] = []
   if (!svgMainGroup) return bindings
   const elements = svgMainGroup.querySelectorAll('[data-bind-target]')
   elements.forEach((el) => {
@@ -1017,30 +995,141 @@ const getAllBindings = (): BindingInfo[] => {
   return bindings
 }
 
-const updateBoundValue = (elementId: string, _bindTarget: string, value: any, prop: string) => {
+/** 运行时更新绑定值 */
+const updateBoundValue = (
+  elementId: string,
+  _bindTarget: string,
+  value: any,
+  prop: string
+): void => {
   if (!svgMainGroup) return
-  const el = svgMainGroup.querySelector(`#${elementId}`)
+  const el = svgMainGroup.querySelector(`#${CSS.escape(elementId)}`)
   if (!el) return
   const svgEl = el as SVGElement
   if (prop === 'fill') {
-    walkTreeNodeToSetAttribute(svgEl, 'fill', String(value))
+    svgEl.setAttribute('fill', String(value))
   } else if (prop === 'stroke') {
     svgEl.setAttribute('stroke', String(value))
   } else if (prop === 'text') {
     const texts = svgEl.querySelectorAll('text, tspan')
     if (texts.length > 0) {
-      texts.forEach((t) => { t.textContent = String(value) })
+      texts.forEach((t) => {
+        t.textContent = String(value)
+      })
     } else if (svgEl.tagName === 'text' || svgEl.tagName === 'tspan') {
       svgEl.textContent = String(value)
     }
   } else if (prop === 'height') {
-    const h = parseFloat(svgEl.getAttribute('height') || '0')
-    if (h > 0) {
-      svgEl.setAttribute('height', String(Math.max(0, parseFloat(String(value)))))
-    }
+    svgEl.setAttribute('height', String(Math.max(0, parseFloat(String(value)))))
   } else if (prop === 'transform') {
     svgEl.setAttribute('transform', String(value))
   }
+}
+
+// ── 层级操作 ──
+
+const bringForward = (): void => {
+  if (!selectedElement || !selectedElement.nextElementSibling || !svgMainGroup) return
+  svgMainGroup.insertBefore(selectedElement.nextElementSibling, selectedElement)
+  emit('canvas:changed')
+}
+
+const sendBackward = (): void => {
+  if (!selectedElement || !selectedElement.previousElementSibling || !svgMainGroup) return
+  svgMainGroup.insertBefore(selectedElement, selectedElement.previousElementSibling)
+  emit('canvas:changed')
+}
+
+const bringToFront = (): void => {
+  if (!selectedElement || !svgMainGroup) return
+  svgMainGroup.appendChild(selectedElement)
+  emit('canvas:changed')
+}
+
+const sendToBack = (): void => {
+  if (!selectedElement || !svgMainGroup || !svgMainGroup.firstElementChild) return
+  svgMainGroup.insertBefore(selectedElement, svgMainGroup.firstElementChild)
+  emit('canvas:changed')
+}
+
+// ── 锁定/解锁 ──
+
+const lockSelected = (): void => {
+  if (selectedElement) selectedElement.setAttribute('data-locked', 'true')
+}
+
+const unlockSelected = (): void => {
+  if (selectedElement) selectedElement.removeAttribute('data-locked')
+}
+
+const isLocked = (): boolean => {
+  return selectedElement?.getAttribute('data-locked') === 'true'
+}
+
+// ── 复制 ──
+
+const copySelected = (): void => {
+  if (!selectedElement || !svgMainGroup) return
+  const clone = selectedElement.cloneNode(true) as SVGElement
+  const newId = genId('svg')
+  clone.setAttribute('id', newId)
+  const t = getTranslate(selectedElement)
+  setTranslate(clone, t.x + 20, t.y + 20)
+  svgMainGroup.appendChild(clone)
+
+  // 深拷贝 GaugeSettings（照搬 FUXA onCopyAndPaste）
+  if (viewData.items[selectedElement.getAttribute('id')!]) {
+    viewData.items[newId] = JSON.parse(
+      JSON.stringify(viewData.items[selectedElement.getAttribute('id')!])
+    )
+    viewData.items[newId].id = newId
+  } else {
+    viewData.items[newId] = createGaugeSettings(
+      newId,
+      clone.getAttribute('type') || 'svg-ext-shapes'
+    )
+  }
+
+  snapshot()
+  emit('canvas:changed')
+}
+
+// ── 缩放控制 ──
+
+const setZoom = (z: number): void => {
+  zoomLevel.value = Math.max(0.1, Math.min(5, z))
+  applyTransform()
+}
+
+const getZoom = (): number => zoomLevel.value
+
+const zoomFit = (): void => {
+  zoomLevel.value = 0.8
+  applyTransform()
+}
+
+const zoomReset = (): void => {
+  zoomLevel.value = 1
+  panOffset = { x: 0, y: 0 }
+  applyTransform()
+}
+
+// ── 运行时方法 ──
+
+const initRuntimeBindings = (): void => {
+  if (!svgMainGroup || !props.runtime) return
+  const count = scanAndBindFromDOM(svgMainGroup, viewData.items)
+  console.log(`[SvgCanvas] 运行时绑定: 扫描到 ${count} 个绑定图元`)
+
+  // 绑定事件（照搬 FUXA loadWatch）
+  bindGaugeEvents(svgMainGroup, viewData.items, (action, param, options) => {
+    console.log(`[SvgCanvas] 事件触发: ${action} → ${param}`, options)
+  })
+}
+
+const processRuntimeSignal = (signalId: string, value: any): void => {
+  if (!svgMainGroup || !props.runtime) return
+  handleSignal(signalId, value, svgMainGroup)
 }
 
 // ── 管道动画 ──
@@ -1048,52 +1137,39 @@ const updateBoundValue = (elementId: string, _bindTarget: string, value: any, pr
 let flowAnimationId: number | null = null
 let flowOffset = 0
 
-const startFlowAnimation = () => {
+const startFlowAnimation = (): void => {
   if (!svgMainGroup || !props.runtime) return
-
   const animate = () => {
     flowOffset += 0.8
-    const pipes = svgMainGroup!.querySelectorAll('.pipe-flow')
-    pipes.forEach((pipe) => {
-      ;(pipe as SVGElement).setAttribute('stroke-dashoffset', String(-flowOffset))
-    })
+    if (svgMainGroup) {
+      const pipes = svgMainGroup.querySelectorAll('.pipe-flow')
+      pipes.forEach((pipe) => {
+        ;(pipe as SVGElement).setAttribute('stroke-dashoffset', String(-flowOffset))
+      })
+    }
     flowAnimationId = requestAnimationFrame(animate)
   }
-
-  // 旋转动画
-  const startRotation = () => {
-    const blades = svgMainGroup!.querySelectorAll('.ape-blade')
-    blades.forEach((blade) => {
-      const parent = blade.parentElement
-      if (parent) {
-        try {
-          const bbox = (parent as unknown as SVGGElement).getBBox()
-          const cx = bbox.x + bbox.width / 2
-          const cy = bbox.y + bbox.height / 2
-          let angle = 0
-          const rotate = () => {
-            angle += 3
-            blade.setAttribute('transform', `rotate(${angle}, ${cx}, ${cy})`)
-            requestAnimationFrame(rotate)
-          }
-          rotate()
-        } catch { /* ignore */ }
-      }
-    })
-  }
-
   animate()
-  startRotation()
 }
 
-const stopFlowAnimation = () => {
+const stopFlowAnimation = (): void => {
   if (flowAnimationId) {
     cancelAnimationFrame(flowAnimationId)
     flowAnimationId = null
   }
 }
 
-// ── 生命周期 ──
+// ── 获取 View 数据 ──
+
+const getViewData = (): View => viewData
+
+const setViewData = (view: View): void => {
+  viewData = view
+}
+
+// ══════════════════════════════════
+// 生命周期
+// ══════════════════════════════════
 
 onMounted(() => {
   initSvgCanvas()
@@ -1113,51 +1189,65 @@ onUnmounted(() => {
   }
   undoStack = []
   redoStack = []
-  document.removeEventListener('keydown', onKeyDown)
+  if (!props.runtime) {
+    document.removeEventListener('keydown', onKeyDown)
+  }
 })
 
 // ── 监听 props 变化 ──
 
-watch(() => props.gridSize, () => {
-  if (svgRoot) {
-    const gridGroup = svgRoot.querySelector('#svg-grid-group')
-    if (gridGroup) gridGroup.remove()
+watch(
+  () => props.gridSize,
+  () => {
+    if (gridGroup) gridGroup.innerHTML = ''
+    drawGrid()
   }
-  drawGrid()
-})
+)
 
-watch(() => props.background, (newBg) => {
-  if (svgRoot) {
-    const bg = svgRoot.querySelector('[data-bg]')
+watch(
+  () => props.background,
+  (newBg) => {
+    if (svgRoot) svgRoot.style.background = newBg
+    const bg = svgRoot?.querySelector('[data-bg]')
     if (bg) bg.setAttribute('fill', newBg)
   }
-})
+)
 
 // ── 导出方法 ──
 
 defineExpose({
+  // 数据
   loadFromSVG,
   loadFromJSON,
   toJSON,
   toSVGString,
+  getSvgContent,
+  getViewData,
+  setViewData,
+  // 图元操作
   addWidgetSVG,
   deleteSelected,
   clear,
+  // 选中/变换
   setSelectedTransform,
   getSelectedTransform,
   setBinding,
   lockSelected,
   unlockSelected,
   isLocked,
+  // 层级
   bringForward,
   sendBackward,
   bringToFront,
   sendToBack,
+  // 复制
   copySelected,
+  // 缩放
   setZoom,
   getZoom,
   zoomFit,
   zoomReset,
+  // 撤销/重做
   undo,
   redo,
   canUndo,

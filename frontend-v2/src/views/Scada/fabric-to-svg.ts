@@ -108,9 +108,8 @@ function fabricObjToSvg(obj: FabricObject, indent: string = '  '): string {
   if (obj.visible === false) return ''
 
   const id = genUid()
-  const opacityAttr = (obj.opacity !== undefined && obj.opacity !== 1)
-    ? ` opacity="${obj.opacity}"`
-    : ''
+  const opacityAttr =
+    obj.opacity !== undefined && obj.opacity !== 1 ? ` opacity="${obj.opacity}"` : ''
   const stroke = normalizeColor(obj.stroke)
   const strokeAttr = stroke ? ` stroke="${stroke}"` : ' stroke="none"'
   const sw = obj.strokeWidth ?? (stroke ? 1 : 0)
@@ -192,7 +191,7 @@ function fabricObjToSvg(obj: FabricObject, indent: string = '  '): string {
       if (!obj.objects || obj.objects.length === 0) return ''
       const transform = buildTransform(obj)
       const children = obj.objects
-        .map(child => fabricObjToSvg(child, indent + '  '))
+        .map((child) => fabricObjToSvg(child, indent + '  '))
         .filter(Boolean)
         .join('\n')
       return `${indent}<g id="${id}" transform="${transform}">\n${children}\n${indent}</g>`
@@ -207,29 +206,48 @@ function fabricObjToSvg(obj: FabricObject, indent: string = '  '): string {
 /** Fabric path 数组 → SVG d 属性 */
 function fabricPathToSvgD(segments: any[]): string {
   if (!Array.isArray(segments)) return ''
-  return segments.map(seg => {
-    if (!Array.isArray(seg)) return ''
-    const cmd = seg[0]
-    switch (cmd) {
-      case 'M': return `M${seg[1]},${seg[2]}`
-      case 'L': return `L${seg[1]},${seg[2]}`
-      case 'C': return `C${seg[1]},${seg[2]},${seg[3]},${seg[4]},${seg[5]},${seg[6]}`
-      case 'Q': return `Q${seg[1]},${seg[2]},${seg[3]},${seg[4]}`
-      case 'Z': case 'z': return 'Z'
-      case 'H': return `H${seg[1]}`
-      case 'V': return `V${seg[1]}`
-      case 'm': return `m${seg[1]},${seg[2]}`
-      case 'l': return `l${seg[1]},${seg[2]}`
-      case 'h': return `h${seg[1]}`
-      case 'v': return `v${seg[1]}`
-      default: return seg.join(' ')
-    }
-  }).join(' ')
+  return segments
+    .map((seg) => {
+      if (!Array.isArray(seg)) return ''
+      const cmd = seg[0]
+      switch (cmd) {
+        case 'M':
+          return `M${seg[1]},${seg[2]}`
+        case 'L':
+          return `L${seg[1]},${seg[2]}`
+        case 'C':
+          return `C${seg[1]},${seg[2]},${seg[3]},${seg[4]},${seg[5]},${seg[6]}`
+        case 'Q':
+          return `Q${seg[1]},${seg[2]},${seg[3]},${seg[4]}`
+        case 'Z':
+        case 'z':
+          return 'Z'
+        case 'H':
+          return `H${seg[1]}`
+        case 'V':
+          return `V${seg[1]}`
+        case 'm':
+          return `m${seg[1]},${seg[2]}`
+        case 'l':
+          return `l${seg[1]},${seg[2]}`
+        case 'h':
+          return `h${seg[1]}`
+        case 'v':
+          return `v${seg[1]}`
+        default:
+          return seg.join(' ')
+      }
+    })
+    .join(' ')
 }
 
 /** XML 特殊字符转义 */
 function escapeXml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
 /**
@@ -265,7 +283,7 @@ export function convertFabricToSvg(
 
   // 转换所有对象
   const svgContent = objects
-    .map(obj => fabricObjToSvg(obj, '  '))
+    .map((obj) => fabricObjToSvg(obj, '  '))
     .filter(Boolean)
     .join('\n')
 
