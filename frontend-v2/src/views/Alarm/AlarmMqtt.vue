@@ -18,8 +18,7 @@ import {
   ElMessageBox,
   ElAlert,
   ElEmpty,
-  ElDivider,
-  ElTooltip
+  ElDivider
 } from 'element-plus'
 import {
   getAlarmMqttConfigs,
@@ -395,7 +394,7 @@ onMounted(fetchList)
       </ElForm>
 
       <template #footer>
-        <ElButton @click="dialogVisible.value = false">取消</ElButton>
+        <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">确定</ElButton>
       </template>
     </ElDialog>

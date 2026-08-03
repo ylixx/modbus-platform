@@ -100,7 +100,10 @@ const selectedObj = ref<SVGElement | null>(null)
 const selectedProps = reactive<any>({
   left: 0,
   top: 0,
-  opacity: 1
+  opacity: 1,
+  fill: '#ffffff',
+  stroke: '#000000',
+  strokeWidth: 1
 })
 
 // ── 选中图元的类型信息 ──
@@ -340,6 +343,10 @@ const onObjectSelected = (el: SVGElement | null) => {
       selectedProps.top = Math.round(transform.y)
       selectedProps.opacity = transform.opacity
     }
+    // Fill / Stroke
+    selectedProps.fill = el.getAttribute('fill') || '#ffffff'
+    selectedProps.stroke = el.getAttribute('stroke') || '#000000'
+    selectedProps.strokeWidth = parseFloat(el.getAttribute('stroke-width') || '1')
     isLockedState.value = canvasRef.value?.isLocked() ?? false
   }
 }
@@ -351,6 +358,46 @@ const onObjectDeselected = () => {
 const updateProp = (prop: string, value: any) => {
   if (!selectedObj.value) return
   canvasRef.value?.setSelectedTransform(prop, value)
+}
+
+// ── Fill / Stroke 变更 ──
+
+const onFillChange = (color: string | null) => {
+  if (!selectedObj.value) return
+  selectedObj.value.setAttribute('fill', color || 'none')
+  markDirty()
+}
+
+const onStrokeChange = (color: string | null) => {
+  if (!selectedObj.value) return
+  selectedObj.value.setAttribute('stroke', color || 'none')
+  markDirty()
+}
+
+const onStrokeWidthChange = (width: number | undefined) => {
+  if (!selectedObj.value) return
+  selectedObj.value.setAttribute('stroke-width', String(width ?? 1))
+  markDirty()
+}
+
+// ── 对齐操作（参照 FUXA alignSelectedElements） ──
+
+const handleAlign = (direction: string) => {
+  if (!selectedObj.value) return
+  // 简化版：对齐到画布
+  const transform = canvasRef.value?.getSelectedTransform()
+  if (!transform) return
+  const pageW = page.value.width || 1920
+  const pageH = page.value.height || 1080
+  switch (direction) {
+    case 'left':   updateProp('left', 0); selectedProps.left = 0; break
+    case 'center': updateProp('left', Math.round(pageW / 2)); selectedProps.left = Math.round(pageW / 2); break
+    case 'right':  updateProp('left', pageW - 100); selectedProps.left = pageW - 100; break
+    case 'top':    updateProp('top', 0); selectedProps.top = 0; break
+    case 'middle': updateProp('top', Math.round(pageH / 2)); selectedProps.top = Math.round(pageH / 2); break
+    case 'bottom': updateProp('top', pageH - 50); selectedProps.top = pageH - 50; break
+  }
+  markDirty()
 }
 
 // ── 数据绑定 ──
@@ -694,87 +741,107 @@ onUnmounted(() => {
         />
       </div>
 
-      <!-- 右侧：属性面板 -->
+      <!-- 右侧：属性面板（参照 FUXA 右侧浮窗结构） -->
       <div class="editor-props">
-        <div class="text-14px font-600 mb-12px">属性面板</div>
-
         <template v-if="selectedObj">
-          <div class="mb-8px">
-            <span class="text-12px text-gray-400">ID:</span>
-            <span class="text-12px ml-4px">{{ selectedWidgetId }}</span>
-          </div>
-          <div class="mb-8px">
-            <span class="text-12px text-gray-400">类型:</span>
-            <ElTag size="small" class="ml-4px">{{ selectedWidgetType }}</ElTag>
-          </div>
-
-          <ElForm label-width="70px" size="small">
-            <ElFormItem label="X">
-              <ElInputNumber
-                v-model="selectedProps.left"
-                :step="1"
-                @change="updateProp('left', $event)"
-                class="w-full"
-              />
-            </ElFormItem>
-            <ElFormItem label="Y">
-              <ElInputNumber
-                v-model="selectedProps.top"
-                :step="1"
-                @change="updateProp('top', $event)"
-                class="w-full"
-              />
-            </ElFormItem>
-            <ElFormItem label="透明度">
-              <ElSlider
-                v-model="selectedProps.opacity"
-                :min="0"
-                :max="1"
-                :step="0.05"
-                @change="updateProp('opacity', $event)"
-              />
-            </ElFormItem>
-          </ElForm>
-
-          <ElDivider />
-
-          <div class="flex justify-between items-center mb-8px">
-            <span class="text-13px font-600">数据绑定</span>
-            <ElButton size="small" type="primary" @click="openBindDialog">绑定点位</ElButton>
+          <!-- ═══ Interactivity ═══ -->
+          <div class="prop-section">
+            <div class="prop-section-title">Interactivity</div>
+            <ElForm label-width="60px" size="small" class="compact-form">
+              <ElFormItem label="ID">
+                <ElInput :model-value="selectedWidgetId" disabled class="w-full" />
+              </ElFormItem>
+              <ElFormItem label="类型">
+                <ElTag size="small">{{ selectedWidgetType }}</ElTag>
+              </ElFormItem>
+            </ElForm>
           </div>
 
-          <!-- 显示当前图元的绑定信息 -->
-          <div class="binding-info" v-if="selectedObj">
-            <div v-for="child in Array.from(selectedObj.querySelectorAll('[data-bind-target]') as NodeListOf<Element>)" :key="child.id || child.getAttribute('data-bind-target') || ''" class="text-12px mb-4px">
-              <span class="text-green-400">{{ child.getAttribute('data-bind-target') }}</span>
-              <span class="text-gray-400 ml-4px">→ {{ child.getAttribute('data-bind-tag-name') || '未绑定' }}</span>
-              <span class="text-gray-500 ml-4px">({{ child.getAttribute('data-bind-prop') }})</span>
+          <!-- ═══ Transform ═══ -->
+          <div class="prop-section">
+            <div class="prop-section-title">Transform</div>
+            <ElForm label-width="60px" size="small" class="compact-form">
+              <div class="grid grid-cols-2 gap-4px">
+                <ElFormItem label="X" label-width="18px">
+                  <ElInputNumber v-model="selectedProps.left" :step="1" :controls="false" @change="updateProp('left', $event)" class="w-full" size="small" />
+                </ElFormItem>
+                <ElFormItem label="Y" label-width="18px">
+                  <ElInputNumber v-model="selectedProps.top" :step="1" :controls="false" @change="updateProp('top', $event)" class="w-full" size="small" />
+                </ElFormItem>
+              </div>
+              <ElFormItem label="透明度">
+                <ElSlider v-model="selectedProps.opacity" :min="0" :max="1" :step="0.05" @change="updateProp('opacity', $event)" />
+              </ElFormItem>
+            </ElForm>
+          </div>
+
+          <!-- ═══ Fill / Stroke ═══ -->
+          <div class="prop-section">
+            <div class="prop-section-title">Fill / Stroke</div>
+            <ElForm label-width="60px" size="small" class="compact-form">
+              <ElFormItem label="填充">
+                <ElColorPicker v-model="selectedProps.fill" @change="onFillChange" size="small" />
+              </ElFormItem>
+              <ElFormItem label="描边">
+                <ElColorPicker v-model="selectedProps.stroke" @change="onStrokeChange" size="small" />
+              </ElFormItem>
+              <ElFormItem label="线宽">
+                <ElInputNumber v-model="selectedProps.strokeWidth" :min="0" :max="20" :step="0.5" @change="onStrokeWidthChange" class="w-full" size="small" />
+              </ElFormItem>
+            </ElForm>
+          </div>
+
+          <!-- ═══ Align ═══ -->
+          <div class="prop-section">
+            <div class="prop-section-title">Align</div>
+            <div class="flex gap-4px flex-wrap">
+              <ElTooltip content="左对齐" placement="bottom"><ElButton size="small" @click="handleAlign('left')">⫷</ElButton></ElTooltip>
+              <ElTooltip content="水平居中" placement="bottom"><ElButton size="small" @click="handleAlign('center')">⫿</ElButton></ElTooltip>
+              <ElTooltip content="右对齐" placement="bottom"><ElButton size="small" @click="handleAlign('right')">⫸</ElButton></ElTooltip>
+              <ElTooltip content="顶对齐" placement="bottom"><ElButton size="small" @click="handleAlign('top')">⫵</ElButton></ElTooltip>
+              <ElTooltip content="垂直居中" placement="bottom"><ElButton size="small" @click="handleAlign('middle')">⫯</ElButton></ElTooltip>
+              <ElTooltip content="底对齐" placement="bottom"><ElButton size="small" @click="handleAlign('bottom')">⫠</ElButton></ElTooltip>
             </div>
           </div>
 
-          <ElDivider />
-
-          <div class="flex justify-between items-center mb-8px">
-            <span class="text-13px font-600">值处理</span>
-            <ElButton size="small" type="warning" @click="openValueProcessDialog">配置</ElButton>
+          <!-- ═══ 数据绑定 ═══ -->
+          <div class="prop-section">
+            <div class="flex justify-between items-center mb-8px">
+              <div class="prop-section-title" style="margin-bottom:0">数据绑定</div>
+              <ElButton size="small" type="primary" @click="openBindDialog">绑定</ElButton>
+            </div>
+            <div class="binding-info" v-if="selectedObj">
+              <div v-for="child in Array.from(selectedObj.querySelectorAll('[data-bind-target]') as NodeListOf<Element>)" :key="child.id || child.getAttribute('data-bind-target') || ''" class="text-12px mb-4px">
+                <span class="text-green-400">{{ child.getAttribute('data-bind-target') }}</span>
+                <span class="text-gray-400 ml-4px">→ {{ child.getAttribute('data-bind-tag-name') || '未绑定' }}</span>
+                <span class="text-gray-500 ml-4px">({{ child.getAttribute('data-bind-prop') }})</span>
+              </div>
+            </div>
+            <div v-else class="text-11px text-gray-500">未绑定</div>
           </div>
 
-          <!-- 显示当前值处理配置摘要 -->
-          <div class="value-process-summary" v-if="selectedObj?.getAttribute('data-value-process')">
-            <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').bitMask" class="text-12px mb-4px">
-              <span class="text-gray-400">位掩码:</span>
-              <span class="text-yellow-400 ml-4px">0x{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').bitMask.toString(16) }}</span>
+          <!-- ═══ 值处理 ═══ -->
+          <div class="prop-section">
+            <div class="flex justify-between items-center mb-8px">
+              <div class="prop-section-title" style="margin-bottom:0">值处理</div>
+              <ElButton size="small" type="warning" @click="openValueProcessDialog">配置</ElButton>
             </div>
-            <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').ranges?.length" class="text-12px mb-4px">
-              <span class="text-gray-400">颜色映射:</span>
-              <span class="text-blue-400 ml-4px">{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').ranges.length }} 条规则</span>
+            <div class="value-process-summary" v-if="selectedObj?.getAttribute('data-value-process')">
+              <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').bitMask" class="text-12px mb-4px">
+                <span class="text-gray-400">位掩码:</span>
+                <span class="text-yellow-400 ml-4px">0x{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').bitMask.toString(16) }}</span>
+              </div>
+              <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').ranges?.length" class="text-12px mb-4px">
+                <span class="text-gray-400">颜色映射:</span>
+                <span class="text-blue-400 ml-4px">{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').ranges.length }} 条规则</span>
+              </div>
+              <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').actions?.length" class="text-12px mb-4px">
+                <span class="text-gray-400">动作:</span>
+                <span class="text-orange-400 ml-4px">{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').actions.length }} 条规则</span>
+              </div>
             </div>
-            <div v-if="JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').actions?.length" class="text-12px mb-4px">
-              <span class="text-gray-400">动作:</span>
-              <span class="text-orange-400 ml-4px">{{ JSON.parse(selectedObj.getAttribute('data-value-process') || '{}').actions.length }} 条规则</span>
-            </div>
+            <div v-else class="text-11px text-gray-500">未配置值处理</div>
           </div>
-          <div v-else class="text-11px text-gray-500">未配置值处理</div>
         </template>
 
         <div v-else class="text-13px text-gray-400 text-center py-40px">
@@ -783,21 +850,26 @@ onUnmounted(() => {
 
         <ElDivider />
 
-        <div class="text-14px font-600 mb-12px">画布设置</div>
-        <ElForm label-width="70px" size="small">
-          <ElFormItem label="名称">
-            <ElInput v-model="page.name" />
-          </ElFormItem>
-          <ElFormItem label="宽度">
-            <ElInputNumber v-model="page.width" :min="800" :max="3840" :step="100" class="w-full" />
-          </ElFormItem>
-          <ElFormItem label="高度">
-            <ElInputNumber v-model="page.height" :min="600" :max="2160" :step="100" class="w-full" />
-          </ElFormItem>
-          <ElFormItem label="背景色">
-            <ElColorPicker v-model="page.background" />
-          </ElFormItem>
-        </ElForm>
+        <!-- ═══ 画布设置 ═══ -->
+        <div class="prop-section">
+          <div class="prop-section-title">画布设置</div>
+          <ElForm label-width="60px" size="small" class="compact-form">
+            <ElFormItem label="名称">
+              <ElInput v-model="page.name" />
+            </ElFormItem>
+            <div class="grid grid-cols-2 gap-4px">
+              <ElFormItem label="宽度" label-width="36px">
+                <ElInputNumber v-model="page.width" :min="800" :max="3840" :step="100" :controls="false" class="w-full" />
+              </ElFormItem>
+              <ElFormItem label="高度" label-width="36px">
+                <ElInputNumber v-model="page.height" :min="600" :max="2160" :step="100" :controls="false" class="w-full" />
+              </ElFormItem>
+            </div>
+            <ElFormItem label="背景色">
+              <ElColorPicker v-model="page.background" />
+            </ElFormItem>
+          </ElForm>
+        </div>
       </div>
     </div>
 

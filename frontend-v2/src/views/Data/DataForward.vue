@@ -4,7 +4,7 @@ import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton, ElTable, ElTableColumn, ElTag, ElDialog, ElForm, ElFormItem,
   ElInput, ElInputNumber, ElSwitch, ElSelect, ElOption, ElMessage,
-  ElMessageBox, ElAlert, ElEmpty, ElDivider, ElTooltip
+  ElMessageBox, ElAlert, ElEmpty, ElDivider
 } from 'element-plus'
 import {
   getDataForwardRules, createDataForwardRule, updateDataForwardRule,
@@ -355,7 +355,7 @@ onMounted(fetchList)
       </ElForm>
 
       <template #footer>
-        <ElButton @click="dialogVisible.value = false">取消</ElButton>
+        <ElButton @click="dialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="submit">确定</ElButton>
       </template>
     </ElDialog>
