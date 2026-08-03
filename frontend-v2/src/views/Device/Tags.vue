@@ -20,11 +20,9 @@ import {
   ElPagination,
   ElTooltip,
   ElTabs,
-  ElTabPane,
-  ElCheckbox
+  ElTabPane
 } from 'element-plus'
 import {
-  getDevices,
   getAllDevices,
   getAllTags,
   getDeviceTags,
@@ -51,7 +49,7 @@ const list = ref<any[]>([])
 // ── 批量选择 ──
 const selectedRows = ref<any[]>([])
 const batchUnit = ref('')
-const batchWritable = ref<boolean | null>(null)
+const batchWritable = ref<boolean | ''>('')
 const batchLoading = ref(false)
 const onSelectionChange = (rows: any[]) => { selectedRows.value = rows }
 
@@ -246,17 +244,6 @@ const onKeywordClear = () => {
   fetchTags()
 }
 
-// ── 对话框：设备搜索（已改用本地 filterable，保留备用） ──
-const remoteSearchDialogDevices = async (query: string) => {
-  try {
-    const params: any = { page: 1, page_size: 50 }
-    if (query) params.search = query
-    dialogDeviceOptions.value = unwrapList(await getDevices(params)).list
-  } catch {
-    dialogDeviceOptions.value = []
-  }
-}
-
 // 对话框中选择设备变化时的显式处理
 const onDialogDeviceChange = (_deviceId: number) => {
   // dialogDeviceId 已通过 v-model 自动更新
@@ -442,7 +429,7 @@ const batchModify = async () => {
     ElMessage.warning('请先勾选要修改的点位')
     return
   }
-  const hasChange = batchUnit.value !== '' || batchWritable.value !== null
+  const hasChange = batchUnit.value !== '' || batchWritable.value !== ''
   if (!hasChange) {
     ElMessage.warning('请至少设置一项要修改的字段')
     return
@@ -460,14 +447,14 @@ const batchModify = async () => {
     const promises = selectedRows.value.map((row) => {
       const payload: any = { ...row }
       if (batchUnit.value !== '') payload.unit = batchUnit.value
-      if (batchWritable.value !== null) payload.writable = batchWritable.value
+      if (batchWritable.value !== '') payload.writable = batchWritable.value
       delete payload.id
       return updateTag(row.id, payload)
     })
     await Promise.all(promises)
     ElMessage.success(`批量修改 ${selectedRows.value.length} 个点位成功`)
     batchUnit.value = ''
-    batchWritable.value = null
+    batchWritable.value = ''
     fetchTags()
   } catch (e: any) {
     ElMessage.error(e?.message || '批量修改失败')
