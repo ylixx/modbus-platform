@@ -1,35 +1,26 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import { ElTable, ElTableColumn, ElPagination, ElInput, ElButton, ElTag, ElMessage, ElEmpty } from 'element-plus'
-import { getAuditLogs, unwrapList } from '@/api/modbus'
+import { getAuditLogs } from '@/api/modbus'
 import { formatTime } from '@/utils/modbus'
+import { usePagination } from '@/hooks/web/usePagination'
 
 defineOptions({ name: 'Audit' })
 
-const loading = ref(false)
-const list = ref<any[]>([])
-const total = ref(0)
-const query = reactive({ page: 1, page_size: 15, keyword: '' })
+const keyword = ref('')
 
-const fetchList = async () => {
-  loading.value = true
-  try {
-    const res = await getAuditLogs({
-      page: query.page,
-      page_size: query.page_size,
-      keyword: query.keyword || undefined
-    })
-    const { list: l, total: t } = unwrapList(res)
-    list.value = l
-    total.value = t
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取审计日志失败')
-  } finally {
-    loading.value = false
-  }
-}
-onMounted(fetchList)
+const { list, total, loading, page, page_size, onPageChange, onSizeChange, resetPage } = usePagination(
+  async (q) => {
+    try {
+      return await getAuditLogs({ page: q.page, page_size: q.page_size, keyword: keyword.value || undefined })
+    } catch (e: any) {
+      ElMessage.error(e?.message || '获取审计日志失败')
+      throw e
+    }
+  },
+  { pageSize: 15 }
+)
 </script>
 
 <template>
@@ -37,13 +28,13 @@ onMounted(fetchList)
     <template #header>
       <div class="flex-grow flex justify-end">
         <ElInput
-          v-model="query.keyword"
+          v-model="keyword"
           placeholder="搜索用户/操作"
           clearable
           class="!w-220px mr-10px"
-          @keyup.enter="((query.page = 1), fetchList())"
+          @keyup.enter="resetPage"
         />
-        <ElButton type="primary" @click="((query.page = 1), fetchList())">查询</ElButton>
+        <ElButton type="primary" @click="resetPage">查询</ElButton>
       </div>
     </template>
     <ElTable v-loading="loading" :data="list" border stripe>
@@ -64,13 +55,13 @@ onMounted(fetchList)
     </ElTable>
     <div class="flex justify-end mt-16px">
       <ElPagination
-        v-model:current-page="query.page"
-        v-model:page-size="query.page_size"
+        v-model:current-page="page"
+        v-model:page-size="page_size"
         :total="total"
         :page-sizes="[15, 30, 50]"
         layout="total, sizes, prev, pager, next"
-        @current-change="fetchList"
-        @size-change="((query.page = 1), fetchList())"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
       />
     </div>
   </ContentWrap>

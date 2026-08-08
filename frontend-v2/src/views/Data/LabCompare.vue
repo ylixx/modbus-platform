@@ -25,7 +25,6 @@ import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 import type { OrgPath } from '@/api/hierarchy'
 import {
   getDevices,
-  getDeviceTags,
   getLabData,
   createLabData,
   deleteLabData,
@@ -33,6 +32,7 @@ import {
   unwrap,
   unwrapList
 } from '@/api/modbus'
+import { useDeviceTags } from '@/hooks/web/useDeviceTags'
 
 defineOptions({ name: 'LabCompare' })
 
@@ -52,7 +52,7 @@ const onPathChange = (path: OrgPath | null) => {
 // ── 设备/点位 ──
 const deviceOptions = ref<any[]>([])
 const loadingDevices = ref(false)
-const tags = ref<any[]>([])
+const { tags, loadTags } = useDeviceTags()
 const currentDevice = ref<number | undefined>(undefined)
 const currentTag = ref<number | undefined>(undefined)
 
@@ -74,15 +74,7 @@ const remoteSearchDevices = async (query: string) => {
 
 const onDeviceChange = async (deviceId: number) => {
   currentTag.value = undefined
-  tags.value = []
-  if (!deviceId) return
-  try {
-    const res = await getDeviceTags(deviceId)
-    const body = unwrap(res)
-    tags.value = Array.isArray(body) ? body : unwrapList(res).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取点位列表失败')
-  }
+  await loadTags(deviceId)
 }
 
 // ── 默认列表（所有化验数据，按设备分组 + 分页） ──

@@ -18,13 +18,13 @@ import {
   ElDescriptions,
   ElDescriptionsItem
 } from 'element-plus'
-import { getDeviceTags, writeDevice, unwrap, unwrapList } from '@/api/modbus'
+import { writeDevice } from '@/api/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
+import { useDeviceTags } from '@/hooks/web/useDeviceTags'
 
 defineOptions({ name: 'Control' })
 
-const tags = ref<any[]>([])
-const tagsLoading = ref(false)
+const { tags, tagsLoading, loadTags } = useDeviceTags()
 const form = reactive<any>({ device_id: null, tag_id: null, value: null })
 
 const writableTags = computed(() => tags.value.filter((t) => t.writable))
@@ -40,18 +40,7 @@ const onDeviceSelect = (val: number | null, obj: any) => {
 
 const onDeviceChange = async () => {
   form.tag_id = null
-  tags.value = []
-  if (form.device_id == null) return
-  tagsLoading.value = true
-  try {
-    const res = await getDeviceTags(form.device_id)
-    const body = unwrap(res)
-    tags.value = Array.isArray(body) ? body : unwrapList(res).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取点位列表失败')
-  } finally {
-    tagsLoading.value = false
-  }
+  await loadTags(form.device_id)
 }
 
 // ── 二次确认 ──
