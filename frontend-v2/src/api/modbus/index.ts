@@ -223,4 +223,25 @@ export const createLabData = (data: any) => request.post({ url: '/lab-data', dat
 export const updateLabData = (id: number, data: any) => request.put({ url: `/lab-data/${id}`, data })
 export const deleteLabData = (id: number) => request.delete({ url: `/lab-data/${id}` })
 export const compareLabData = (params: any) => request.get({ url: '/lab-data/compare', params })
+
+// ============ System Settings ============
+export const getRuntimeConfig = () => request.get({ url: '/system/runtime-config' })
+export const updateRuntimeConfig = (data: any) => request.put({ url: '/system/runtime-config', data })
+export const getEngineStatus = () => request.get({ url: '/system/engine-status' })
+export const getNotificationConfig = () => request.get({ url: '/system/notifications' })
+export const updateNotificationConfig = (data: any) =>
+  request.put({ url: '/system/notifications', data })
+export const testNotification = (channel: string) =>
+  request.post({ url: '/system/notifications/test', data: { channel } })
+
+// ============ Config Transfer (全量配置导出/导入) ============
+export const exportPlatformConfig = () =>
+  request.get({ url: '/config/export', responseType: 'blob' })
+export const importPlatformConfig = (formData: FormData, overwrite = false) =>
+  request.post({
+    url: '/config/import',
+    data: formData,
+    params: { overwrite },
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
 export const getAggregate = (params: any) => request.get({ url: '/lab-data/aggregate', params })

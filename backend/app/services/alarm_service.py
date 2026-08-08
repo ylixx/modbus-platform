@@ -378,6 +378,9 @@ class AlarmService:
 
     def _handle_mqtt_publish(self, event: str, record: AlarmRecord, db: Session):
         """Publish alarm event to external MQTT brokers (async, non-blocking)."""
+        from app.services.config_service import is_feature_enabled
+        if not is_feature_enabled("alarm_mqtt"):
+            return
         try:
             from app.services.alarm_mqtt_publisher import alarm_mqtt_publisher
             # Enrich alarm data with device/tag names for template rendering

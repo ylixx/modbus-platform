@@ -485,6 +485,16 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
           icon: 'vi-ant-design:lock-outlined',
           permission: 'rbac.read'
         }
+      },
+      {
+        path: 'settings',
+        component: () => import('@/views/System/Settings.vue'),
+        name: 'SystemSettings',
+        meta: {
+          title: '系统设置',
+          icon: 'vi-ant-design:control-outlined',
+          permission: 'config.read'
+        }
       }
     ]
   }

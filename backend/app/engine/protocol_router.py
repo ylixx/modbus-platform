@@ -24,13 +24,36 @@ class ProtocolRouter:
 
     def start_all(self):
         self.init()
-        # 每个引擎单独启动，一个引擎失败不影响其他
-        for name, engine in [("Modbus", self._modbus), ("MQTT", self._mqtt), ("OPC-UA", self._opcua)]:
+        from app.services.config_service import is_engine_enabled
+        # 每个引擎独立开关：runtime_config.engines.*（配置后重启生效），
+        # 单个引擎启动失败不影响其他
+        for name, engine, key in [("Modbus", self._modbus, "modbus"),
+                                  ("MQTT", self._mqtt, "mqtt"),
+                                  ("OPC-UA", self._opcua, "opcua")]:
+            if not is_engine_enabled(key):
+                logger.info(f"Engine {name} disabled by runtime config, skipped")
+                continue
             try:
                 engine.start()
                 logger.info(f"Engine {name} started successfully")
             except Exception as e:
                 logger.error(f"Engine {name} start failed: {e}, other engines will continue")
+
+    def get_status(self) -> dict:
+        """Return enabled/running status of each protocol engine."""
+        from app.services.config_service import is_engine_enabled
+        engines = {}
+        for name, engine, key in [("Modbus", self._modbus, "modbus"),
+                                  ("MQTT", self._mqtt, "mqtt"),
+                                  ("OPC-UA", self._opcua, "opcua")]:
+            if engine is None:
+                continue
+            engines[key] = {
+                "name": name,
+                "enabled": is_engine_enabled(key),
+                "running": bool(getattr(engine, "_running", False)),
+            }
+        return {"engines": engines}
 
     def stop_all(self):
         if self._modbus:
@@ -40,11 +63,26 @@ class ProtocolRouter:
         if self._opcua:
             self._opcua.stop()
 
+    @staticmethod
+    def _protocol_key(protocol) -> str:
+        if protocol == ProtocolType.MQTT:
+            return "mqtt"
+        if protocol == ProtocolType.OPC_UA:
+            return "opcua"
+        return "modbus"
+
+    def _engine_enabled(self, protocol) -> bool:
+        from app.services.config_service import is_engine_enabled
+        return is_engine_enabled(self._protocol_key(protocol))
+
     def reload_device(self, device_id: int, protocol: str = None):
         """Stop old session, then start a new one for the device."""
         if not protocol:
             protocol = self._get_protocol(device_id)
         if not protocol:
+            return
+        if not self._engine_enabled(protocol):
+            logger.info(f"Engine {self._protocol_key(protocol)} disabled, skip reload_device({device_id})")
             return
 
         try:
@@ -64,6 +102,9 @@ class ProtocolRouter:
             protocol = self._get_protocol(device_id)
         if not protocol:
             return
+        if not self._engine_enabled(protocol):
+            logger.info(f"Engine {self._protocol_key(protocol)} disabled, skip stop_device({device_id})")
+            return
 
         try:
             with self._lock:
@@ -79,6 +120,9 @@ class ProtocolRouter:
     def write_value(self, device_id: int, tag: DeviceTag, value, protocol: str = None) -> bool:
         if not protocol:
             protocol = self._get_protocol(device_id)
+        if not self._engine_enabled(protocol):
+            logger.info(f"Engine {self._protocol_key(protocol)} disabled, reject write to device {device_id}")
+            return False
 
         if protocol == ProtocolType.MQTT:
             return self._mqtt.write_value(device_id, tag, value)
