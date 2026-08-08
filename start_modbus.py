@@ -27,6 +27,10 @@ FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend-v2")
 BACKEND_PORT = 8000
 FRONTEND_PORT = 3001
 
+# vite 冷启动/依赖预构建可能超过 1 分钟（本机实测 ~140s），前端等待上限放宽
+BACKEND_WAIT_SECONDS = 60
+FRONTEND_WAIT_SECONDS = 240
+
 # 在 WorkBuddy 终端内运行时会注入这些变量，需清除以免 safe-delete 拦截删除
 SAFE_DELETE_VARS = [
     "CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR",
@@ -184,11 +188,11 @@ def main():
     start_frontend(node, vite_js)
 
     log("步骤3: 等待后端就绪 (:%d)..." % BACKEND_PORT)
-    b_ok = wait_port(BACKEND_PORT, 60)
+    b_ok = wait_port(BACKEND_PORT, BACKEND_WAIT_SECONDS)
     log("   后端: " + ("就绪 OK" if b_ok else "未就绪 (查 backend/logs/backend.log)"))
 
-    log("步骤4: 等待前端就绪 (:%d)..." % FRONTEND_PORT)
-    f_ok = wait_port(FRONTEND_PORT, 60)
+    log("步骤4: 等待前端就绪 (:%d，最多 %d 秒)..." % (FRONTEND_PORT, FRONTEND_WAIT_SECONDS))
+    f_ok = wait_port(FRONTEND_PORT, FRONTEND_WAIT_SECONDS)
     log("   前端: " + ("就绪 OK" if f_ok else "未就绪 (查 frontend-v2/logs/frontend.log)"))
 
     if f_ok:
