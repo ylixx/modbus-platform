@@ -16,13 +16,14 @@ import {
   ElRadioGroup,
   ElRadioButton
 } from 'element-plus'
-import { getDeviceTags, getHistory, unwrap, unwrapList } from '@/api/modbus'
+import { getHistory, unwrapList } from '@/api/modbus'
 import { formatTime } from '@/utils/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
+import { useDeviceTags } from '@/hooks/web/useDeviceTags'
 
 defineOptions({ name: 'History' })
 
-const tags = ref<any[]>([])
+const { tags, loadTags } = useDeviceTags()
 const loading = ref(false)
 const list = ref<any[]>([])
 const total = ref(0)
@@ -56,15 +57,7 @@ const onIntervalChange = () => {
 
 const onDeviceChange = async () => {
   query.tag_id = null
-  tags.value = []
-  if (query.device_id == null) return
-  try {
-    const res = await getDeviceTags(query.device_id)
-    const body = unwrap(res)
-    tags.value = Array.isArray(body) ? body : unwrapList(res).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取点位列表失败')
-  }
+  await loadTags(query.device_id)
 }
 const fetchList = async () => {
   if (query.device_id == null) {

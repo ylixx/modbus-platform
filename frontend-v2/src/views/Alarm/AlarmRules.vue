@@ -29,22 +29,27 @@ import {
   deleteAlarmRule,
   getEscalationConfig,
   updateEscalationConfig,
-  getDeviceTags,
-  unwrap,
-  unwrapList
+  unwrap
 } from '@/api/modbus'
+import { useDeviceTags } from '@/hooks/web/useDeviceTags'
+import { usePagination } from '@/hooks/web/usePagination'
 
 defineOptions({ name: 'AlarmRules' })
 
 const activeTab = ref('rules')
-const loading = ref(false)
-const list = ref<any[]>([])
-const deviceTags = ref<any[]>([])
+const { tags: deviceTags, loadTags } = useDeviceTags()
 
 // ── 分页 ──
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
+const { list, total, loading, page, page_size: pageSize, fetchList, onPageChange, onSizeChange } = usePagination(
+  async (q) => {
+    try {
+      return await getAlarmRules(q)
+    } catch (e: any) {
+      ElMessage.error(e?.message || '获取报警规则失败')
+      throw e
+    }
+  }
+)
 
 // ── 报警类型选项 ──
 const alarmTypes = [
@@ -67,40 +72,10 @@ const alarmTypeLabel = (t?: string) => alarmTypes.find((a) => a.value === t)?.la
 const alarmLevelType = (l?: string) => alarmLevels.find((a) => a.value === l)?.type || 'info'
 const alarmLevelLabel = (l?: string) => alarmLevels.find((a) => a.value === l)?.label || l || '—'
 
-const fetchList = async () => {
-  loading.value = true
-  try {
-    const res = unwrapList(await getAlarmRules({ page: page.value, page_size: pageSize.value }))
-    list.value = res.list
-    total.value = res.total
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取报警规则失败')
-  } finally {
-    loading.value = false
-  }
-}
-const onPageChange = (p: number) => {
-  page.value = p
-  fetchList()
-}
-const onSizeChange = (s: number) => {
-  pageSize.value = s
-  page.value = 1
-  fetchList()
-}
-
 // ── 设备 → 点位联动 ──
 const onFormDeviceChange = async (deviceId: number) => {
   form.tag_id = null
-  deviceTags.value = []
-  if (!deviceId) return
-  try {
-    const res = await getDeviceTags(deviceId)
-    const body = unwrap(res)
-    deviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取点位列表失败')
-  }
+  await loadTags(deviceId)
 }
 
 // ── 表单 ──
