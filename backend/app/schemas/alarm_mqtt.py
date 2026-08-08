@@ -1,12 +1,14 @@
 """Alarm MQTT publish configuration schemas."""
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
+
+AlarmMqttPresetLiteral = Literal["standard", "thingsboard_device", "thingsboard_gateway"]
 
 
 class AlarmMqttConfigCreate(BaseModel):
     name: str
-    preset_mode: str = "standard"  # standard / thingsboard_device / thingsboard_gateway
+    preset_mode: AlarmMqttPresetLiteral = "standard"
     broker: str = ""
     port: int = 1883
     username: str = ""
@@ -28,7 +30,7 @@ class AlarmMqttConfigCreate(BaseModel):
 
 class AlarmMqttConfigUpdate(BaseModel):
     name: Optional[str] = None
-    preset_mode: Optional[str] = None
+    preset_mode: Optional[AlarmMqttPresetLiteral] = None
     broker: Optional[str] = None
     port: Optional[int] = None
     username: Optional[str] = None

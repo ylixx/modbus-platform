@@ -5,6 +5,8 @@ from datetime import datetime
 
 ProtocolTypeLiteral = Literal["modbus_tcp", "modbus_rtu", "mqtt", "opc_ua"]
 OpcSecurityModeLiteral = Literal["None", "Basic256Sha256", "Basic256", "Basic128Rsa15"]
+ParityLiteral = Literal["none", "even", "odd"]
+MqttPayloadFormatLiteral = Literal["plain", "json", "thingsboard"]
 
 
 # ── Device Group ──
@@ -189,7 +191,7 @@ class DeviceCreate(BaseModel):
     # Modbus RTU
     serial_port: str = ""
     baudrate: int = 9600
-    parity: str = "none"
+    parity: ParityLiteral = "none"
     data_bits: int = 8
     stop_bits: int = 1
 
@@ -206,7 +208,7 @@ class DeviceCreate(BaseModel):
     mqtt_publish_topic: str = ""
     mqtt_publish_qos: int = 0
     mqtt_publish_interval: float = 5.0
-    mqtt_payload_format: str = "json"    # plain | json | thingsboard
+    mqtt_payload_format: MqttPayloadFormatLiteral = "json"    # plain | json | thingsboard
     mqtt_payload_template: str = ""      # 自定义发布模板
     mqtt_is_gateway: bool = False
 
@@ -247,7 +249,7 @@ class DeviceUpdate(BaseModel):
 
     serial_port: Optional[str] = None
     baudrate: Optional[int] = None
-    parity: Optional[str] = None
+    parity: Optional[ParityLiteral] = None
     data_bits: Optional[int] = None
     stop_bits: Optional[int] = None
 
@@ -263,7 +265,7 @@ class DeviceUpdate(BaseModel):
     mqtt_publish_topic: Optional[str] = None
     mqtt_publish_qos: Optional[int] = None
     mqtt_publish_interval: Optional[float] = None
-    mqtt_payload_format: Optional[str] = None
+    mqtt_payload_format: Optional[MqttPayloadFormatLiteral] = None
     mqtt_payload_template: Optional[str] = None
     mqtt_is_gateway: Optional[bool] = None
 
