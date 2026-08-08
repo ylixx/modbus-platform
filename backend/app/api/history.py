@@ -19,20 +19,21 @@ def _parse_time(time_str: str, param_name: str) -> datetime:
     """解析 ISO 时间字符串，支持多种格式。"""
     if not time_str:
         raise HTTPException(status_code=400, detail=f"{param_name} 不能为空")
-    # 尝试多种格式
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(time_str[:len(fmt)], fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except ValueError:
-            continue
-    # 尝试 ISO 格式（含时区）
+    # 优先尝试完整 ISO 格式（含时区偏移 / Z），避免丢失时区信息
     try:
-        return datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except ValueError:
         pass
+    # 无时区标记时，回退到常见格式，并统一视为 UTC
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(time_str, fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
     raise HTTPException(status_code=400, detail=f"{param_name} 格式无效，请使用 ISO 格式如 2026-01-01T00:00:00")
 
 

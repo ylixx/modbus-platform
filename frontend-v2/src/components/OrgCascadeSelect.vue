@@ -1,37 +1,63 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElButton, ElTag, ElSelect, ElOption } from 'element-plus'
 import { getOrgTreeApi, OrgLevel, OrgNode, OrgDevice, OrgPath } from '@/api/hierarchy'
 import { getDevices, unwrapList } from '@/api/modbus'
 
-// v-model: 选中的设备 ID 列表；v-model:path: 选中的层级路径（用于表格筛选）
+// 单选模式（single=true）：
+//   v-model 为单个设备 ID (number | null)；设备框单选，选中即 emit 'change'(id, obj)
+// 多选模式（默认）：
+//   v-model 为设备 ID 列表 (number[])；配合 showDeviceActions / search 使用
+// 两种模式都保留「组织架构级联 + 远程搜索」，与设备管理页一致。
 // emit 'search': 用户点击「搜索」按钮，宿主页面据此刷新设备列表
 const props = withDefaults(
   defineProps<{
-    modelValue?: number[]
+    modelValue?: number | number[] | null
     path?: OrgPath | null
-    // 是否显示「设备名称」多选框；为 false 时（如设备管理页改用表格行勾选）
-    // 不再加载并渲染全量设备，避免大数据量下卡顿
+    // 单选模式：v-model 为单个设备 ID；选中即 emit change(id, obj)
+    single?: boolean
+    // 是否显示「设备名称」选择框（含级联范围内的远程搜索）；
+    // 为 false 时（如设备管理页）不加载设备下拉，仅作组织层级筛选
     showDeviceSelect?: boolean
     // footer 是否显示「已选 N 台 / 全选当前 / 清空已选」操作；
     // 设备管理页在自身工具栏放置了这些按钮，故传 false 关闭，避免重复
     showDeviceActions?: boolean
     // 设备下拉/搜索是否只返回「含可写点位」的设备（批量控制等写值场景用）
     writableOnly?: boolean
+    // 设备下拉选项是否仅含已启用设备
+    enabledOnly?: boolean
+    // 是否显示「搜索 / 重置」按钮（表格类宿主需要；表单单选场景可关闭）
+    showActions?: boolean
   }>(),
   {
-    modelValue: () => [],
+    modelValue: null,
     path: null,
+    single: false,
     showDeviceSelect: true,
     showDeviceActions: true,
-    writableOnly: false
+    writableOnly: false,
+    enabledOnly: false,
+    showActions: true
   }
 )
 const emit = defineEmits<{
-  'update:modelValue': [number[]]
+  'update:modelValue': [number | number[] | null]
   'update:path': [OrgPath | null]
   search: []
+  change: [number | null, any | null]
 }>()
+
+// 模块级共享缓存：多个实例（如批量控制表格每行）共用同一份组织树，避免重复请求
+let sharedTreePromise: Promise<{ levels: OrgLevel[]; tree: OrgNode[] }> | null = null
+function loadOrgTree() {
+  if (!sharedTreePromise) {
+    sharedTreePromise = getOrgTreeApi({ with_devices: false }).then((res) => ({
+      levels: res.data.levels,
+      tree: res.data.tree
+    }))
+  }
+  return sharedTreePromise
+}
 
 const loading = ref(false)
 const levels = ref<OrgLevel[]>([])
@@ -45,9 +71,16 @@ const loadingDevices = ref(false)
 // OrgPath 类型已在 @/api/hierarchy.ts 中统一导出
 
 const groupLevels = computed<OrgLevel[]>(() => levels.value.slice(0, -1))
+// 单选时 modelValue 为单个 id，多选为数组；内部统一按数组处理
 const selectedIds = computed<number[]>({
-  get: () => props.modelValue,
-  set: (v) => emit('update:modelValue', v)
+  get: () => (props.single ? (props.modelValue == null ? [] : [props.modelValue as number]) : (props.modelValue as number[]) || []),
+  set: (v) => {
+    if (props.single) {
+      emit('update:modelValue', v.length ? v[v.length - 1] : null)
+    } else {
+      emit('update:modelValue', v)
+    }
+  }
 })
 // 是否已选择至少一个层级（决定设备框是否可用）
 const hasCascade = computed(() => selections.value.some((s) => s != null))
@@ -79,6 +112,7 @@ function onGroupChange(index: number, val: string | null) {
   if (props.showDeviceSelect) {
     selectedIds.value = []
     deviceOptions.value = []
+    if (props.single) emit('change', null, null)
   }
 }
 
@@ -97,7 +131,8 @@ async function remoteSearch(query: string) {
       page_size: 50,
       org_node_id: p?.org_node_id ?? undefined,
       search: query || undefined,
-      writable: props.writableOnly || undefined
+      writable: props.writableOnly || undefined,
+      enabled: props.enabledOnly || undefined
     })
     const { list } = unwrapList(res)
     deviceOptions.value = list
@@ -108,6 +143,27 @@ async function remoteSearch(query: string) {
 
 // 设备多选 change：支持手动输入（allow-create）与逗号分隔
 // 选中值可能是 设备ID（number）或 用户输入的文本（string，可能逗号分隔多个设备名）
+// 预置选中值回填：单选模式下，若外部已设定设备 ID（如编辑告警规则），
+// 需要按 id 拉取设备对象以展示名称
+watch(
+  () => props.modelValue,
+  async (v) => {
+    if (!props.single) return
+    const id = typeof v === 'number' ? v : null
+    if (id == null) return
+    if (deviceOptions.value.some((d) => d.id === id)) return
+    try {
+      const res = await getDevices({ page: 1, page_size: 50, ids: String(id) })
+      const { list } = unwrapList(res)
+      const known = new Set(deviceOptions.value.map((d) => d.id))
+      deviceOptions.value = [...deviceOptions.value, ...list.filter((d) => !known.has(d.id))]
+    } catch {
+      /* ignore */
+    }
+  },
+  { immediate: true }
+)
+
 function onDeviceChange(val: (number | string)[]) {
   const nameMap = new Map(deviceOptions.value.map((d) => [d.name.toLowerCase(), d.id]))
   const ids = new Set<number>()
@@ -124,9 +180,20 @@ function onDeviceChange(val: (number | string)[]) {
     }
   }
   selectedIds.value = Array.from(ids)
+  // 单选模式：emit 完整设备对象供宿主（如加载点位）使用
+  if (props.single) {
+    const id = ids.size ? Array.from(ids)[0] : null
+    emit('change', id, pickDevice(id))
+  }
+}
+
+function pickDevice(id: number | null): any {
+  if (id == null) return null
+  return deviceOptions.value.find((d) => d.id === id) || null
 }
 
 function selectAllVisible() {
+  if (props.single) return
   const set = new Set(selectedIds.value)
   deviceOptions.value.forEach((d) => set.add(d.id))
   selectedIds.value = Array.from(set)
@@ -144,6 +211,7 @@ function resetAll() {
   deviceOptions.value = []
   selectedIds.value = []
   emit('update:path', null)
+  if (props.single) emit('change', null, null)
   emit('search') // 重置后展示全部设备
 }
 
@@ -163,10 +231,10 @@ function statusOf(s: string) {
 onMounted(async () => {
   loading.value = true
   try {
-    // 仅拉取层级结构（不带设备），降低负载
-    const res = await getOrgTreeApi({ with_devices: false })
-    levels.value = res.data.levels
-    tree.value = res.data.tree
+    // 仅拉取层级结构（不带设备），降低负载；多实例共享同一份缓存
+    const data = await loadOrgTree()
+    levels.value = data.levels
+    tree.value = data.tree
     selections.value = levels.value.slice(0, -1).map(() => null)
   } finally {
     loading.value = false
@@ -206,7 +274,7 @@ defineExpose({ clearPath, clearSelection, resetAll, selectAllVisible, deviceOpti
         :remote-method="remoteSearch"
         remote-show-suffix
         :placeholder="hasCascade ? '输入设备名/主机搜索' : '输入设备名/主机搜索（不限层级）'"
-        multiple
+        :multiple="!single"
         filterable
         collapse-tags
         collapse-tags-tooltip
@@ -225,12 +293,12 @@ defineExpose({ clearPath, clearSelection, resetAll, selectAllVisible, deviceOpti
         </ElOption>
       </ElSelect>
 
-      <ElButton type="primary" @click="emit('search')">搜索</ElButton>
-      <ElButton @click="resetAll">重置</ElButton>
+      <ElButton v-if="showActions" type="primary" @click="emit('search')">搜索</ElButton>
+      <ElButton v-if="showActions" @click="resetAll">重置</ElButton>
     </div>
 
-    <!-- 底部摘要 + 批量快捷操作（showDeviceActions 控制，设备管理页关闭） -->
-    <div v-if="showDeviceActions && showDeviceSelect" class="oc-footer">
+    <!-- 底部摘要 + 批量快捷操作（showDeviceActions 控制，设备管理页关闭；单选模式隐藏） -->
+    <div v-if="showDeviceActions && showDeviceSelect && !single" class="oc-footer">
       <span v-if="selectedIds.length" class="oc-sel"
         >已选 <b>{{ selectedIds.length }}</b> 台设备</span
       >

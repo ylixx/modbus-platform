@@ -198,10 +198,27 @@ def list_devices(
 
 
 @router.get("/all", response_model=List[DeviceOut])
-def list_all_devices(db: Session = Depends(get_db), current_user: User = Depends(require_permission("device.read"))):
+def list_all_devices(
+    search: str = Query(""),
+    org_node_id: int = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("device.read")),
+):
+    """返回设备列表（按组织权限过滤）。
+
+    用于下拉框等场景。设备量大时请优先使用带分页的 GET /devices 并配合 org_node_id + search；
+    本端点默认限制 500 条，可传 search / org_node_id 收窄范围。
+    """
     q = apply_device_org_filter(db.query(Device), db, current_user)
+    if org_node_id:
+        from app.services.org_service import get_descendant_ids
+        ids = get_descendant_ids(db, org_node_id)
+        q = q.filter(Device.org_node_id.in_(ids))
+    if search and search.strip():
+        q = q.filter(Device.name.ilike(f"%{search.strip()}%"))
     pmap = _org_path_map(db)
-    return [_device_out(i, pmap) for i in q.order_by(Device.id).limit(500).all()]
+    return [_device_out(i, pmap) for i in q.order_by(Device.id).limit(limit).all()]
 
 
 # ============ Tags（必须在 /{device_id} 之前注册，否则 /tags/all 会被路径参数吞掉） ============

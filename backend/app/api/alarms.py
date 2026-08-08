@@ -82,7 +82,14 @@ def list_alarm_rules(
         q = q.filter(AlarmRule.enabled == enabled)
     total = q.count()
     items = q.order_by(AlarmRule.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return PageResponse(total=total, page=page, page_size=page_size, data=[AlarmRuleOut.model_validate(i) for i in items])
+    device_map, tag_map = _load_name_maps(db, items)
+    out = []
+    for i in items:
+        o = AlarmRuleOut.model_validate(i)
+        o.device_name = device_map.get(i.device_id, "")
+        o.tag_name = tag_map.get(i.tag_id, "")
+        out.append(o)
+    return PageResponse(total=total, page=page, page_size=page_size, data=out)
 
 
 @router.get("/rules/all", response_model=List[AlarmRuleOut])

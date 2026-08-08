@@ -1,5 +1,6 @@
 """Hierarchy configuration API."""
 import json, logging
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -144,6 +145,9 @@ def get_hierarchy_tree(
 @router.get("/org-tree")
 def get_org_cascade_tree(
     with_devices: bool = True,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("hierarchy.read")),
 ):
@@ -151,9 +155,10 @@ def get_org_cascade_tree(
 
     返回嵌套树，前端可将其逐层展开为多个关联列表框，并在最后一级列出设备名称。
 
-    - with_devices=true（默认）：设备作为叶子节点返回，便于纵览整体结构（演示/详情页用）。
+    - with_devices=true（默认）：设备作为叶子节点返回，按用户组织权限过滤、按 search
+      关键字过滤、并按页截断（page/page_size 控制叶子数，避免设备量大时一次性加载）。
     - with_devices=false：仅返回层级结构（厂区/班/站/位置），不带设备，负载小；设备由前端按层级
-      范围单独查询 /devices 填充下拉框，避免设备量大时一次性加载全部。
+      范围单独查询 /devices 填充下拉框。
     """
     levels = [
         {"key": "factory",         "label": "厂区", "field": "factory",         "icon": "🏭"},
@@ -163,10 +168,11 @@ def get_org_cascade_tree(
         {"key": "device",          "label": "设备名称", "field": "_device",     "icon": "📡"},
     ]
     if with_devices:
-        # 组织架构展示设备，按用户组织权限过滤
-        devices = apply_device_org_filter(
-            db.query(Device), db, user
-        ).order_by(Device.id).all()
+        # 组织架构展示设备，按用户组织权限过滤 + 关键字过滤 + 分页
+        q = apply_device_org_filter(db.query(Device), db, user)
+        if search:
+            q = q.filter(Device.name.ilike(f"%{search}%"))
+        devices = q.order_by(Device.id).offset((page - 1) * page_size).limit(page_size).all()
         tree = _build_tree(devices, levels)
     else:
         # 仅层级结构：用 DISTINCT 取 厂区/区/班/位置 的组合，按用户组织权限过滤

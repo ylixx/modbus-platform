@@ -24,6 +24,7 @@ class AlarmService:
         self._last_values: dict[str, tuple[float, float]] = {}  # key -> (value, timestamp)
         self._trigger_timers: dict[int, tuple[datetime, datetime]] = {}  # rule_id -> (start_time, now)
         self._sms_cooldowns: dict[int, tuple[datetime, datetime]] = {}  # rule_id -> (sent_time, now)
+        self._active_rules: set[int] = set()  # rule_ids currently in an alarm state (for hysteresis)
         self._lock = threading.Lock()
 
     def _maybe_cleanup(self):
@@ -135,30 +136,57 @@ class AlarmService:
         threshold = 0.0
         message = ""
 
+        active = rule.id in self._active_rules
+        deadband = rule.deadband if rule.deadband is not None else 0.0
+
         if rule.alarm_type == AlarmType.THRESHOLD_HIGH:
             if rule.high_limit is not None:
                 threshold = rule.high_limit
-                if value > threshold + rule.deadband:
-                    triggered = True
-                    message = f"[上限报警] {tag_name} = {value} > {threshold}"
+                if active:
+                    # Release only when value drops back below the limit
+                    if value > threshold:
+                        triggered = True
+                        message = f"[上限报警] {tag_name} = {value} > {threshold}"
+                else:
+                    # Trigger when value exceeds limit by the deadband
+                    if value > threshold + deadband:
+                        triggered = True
+                        message = f"[上限报警] {tag_name} = {value} > {threshold}"
 
         elif rule.alarm_type == AlarmType.THRESHOLD_LOW:
             if rule.low_limit is not None:
                 threshold = rule.low_limit
-                if value < threshold - rule.deadband:
-                    triggered = True
-                    message = f"[下限报警] {tag_name} = {value} < {threshold}"
+                if active:
+                    # Release only when value rises back above the limit
+                    if value < threshold:
+                        triggered = True
+                        message = f"[下限报警] {tag_name} = {value} < {threshold}"
+                else:
+                    if value < threshold - deadband:
+                        triggered = True
+                        message = f"[下限报警] {tag_name} = {value} < {threshold}"
 
         elif rule.alarm_type == AlarmType.THRESHOLD_RANGE:
             if rule.high_limit is not None and rule.low_limit is not None:
-                if value > rule.high_limit + rule.deadband:
-                    triggered = True
-                    threshold = rule.high_limit
-                    message = f"[上限报警] {tag_name} = {value} > {threshold}"
-                elif value < rule.low_limit - rule.deadband:
-                    triggered = True
-                    threshold = rule.low_limit
-                    message = f"[下限报警] {tag_name} = {value} < {threshold}"
+                if active:
+                    # Release only when back inside the limits
+                    if value > rule.high_limit:
+                        triggered = True
+                        threshold = rule.high_limit
+                        message = f"[上限报警] {tag_name} = {value} > {threshold}"
+                    elif value < rule.low_limit:
+                        triggered = True
+                        threshold = rule.low_limit
+                        message = f"[下限报警] {tag_name} = {value} < {threshold}"
+                else:
+                    if value > rule.high_limit + deadband:
+                        triggered = True
+                        threshold = rule.high_limit
+                        message = f"[上限报警] {tag_name} = {value} > {threshold}"
+                    elif value < rule.low_limit - deadband:
+                        triggered = True
+                        threshold = rule.low_limit
+                        message = f"[下限报警] {tag_name} = {value} < {threshold}"
 
         elif rule.alarm_type == AlarmType.RATE_OF_CHANGE:
             if rule.rate_limit is not None:
@@ -182,7 +210,7 @@ class AlarmService:
 
         elif rule.alarm_type == AlarmType.STATUS:
             if rule.status_value is not None:
-                if value == rule.status_value:
+                if abs(value - rule.status_value) <= 1e-9:
                     triggered = True
                     threshold = rule.status_value
                     message = f"[状态报警] {tag_name} = {value} (目标值: {threshold})"
@@ -194,6 +222,7 @@ class AlarmService:
                 if key not in self._trigger_timers:
                     # First trigger — start the delay timer
                     self._trigger_timers[key] = (datetime.now(timezone.utc), datetime.now(timezone.utc))
+                    self._active_rules.add(key)
                     return  # Don't trigger yet, wait for delay
                 elapsed = (datetime.now(timezone.utc) - self._trigger_timers[key][0]).total_seconds()
                 if elapsed < rule.delay_seconds:
@@ -206,6 +235,11 @@ class AlarmService:
             # Value returned to normal — clear any pending delay timer
             with self._lock:
                 self._trigger_timers.pop(rule.id, None)
+                self._active_rules.discard(rule.id)
+        else:
+            # No delay configured — track active state for hysteresis
+            with self._lock:
+                self._active_rules.add(rule.id)
 
         if triggered:
             self._create_or_update_alarm(db, rule, tag_id, tag_name, value, threshold, message)

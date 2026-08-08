@@ -50,6 +50,8 @@ class AlarmRuleOut(BaseModel):
     description: str
     device_id: int
     tag_id: Optional[int]
+    device_name: Optional[str] = None
+    tag_name: Optional[str] = None
     alarm_type: str
     alarm_level: str
     high_limit: Optional[float]
