@@ -1,7 +1,4 @@
 <script setup lang="ts">
-/**
- * 图元库页面 — 适配新 svg-templates 系统
- */
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ContentWrap } from '@/components/ContentWrap'
@@ -21,7 +18,7 @@ import {
   ElUpload
 } from 'element-plus'
 import { getScadaWidgets, deleteScadaWidget, uploadScadaWidget, unwrapList } from '@/api/modbus'
-import { GAUGE_CATEGORIES } from './svg-templates'
+import { svgWidgetCategories, getSvgWidgetsByCategory } from './widgets/svg-widgets'
 
 defineOptions({ name: 'ScadaWidgets' })
 
@@ -51,14 +48,17 @@ const uploadFile = ref<File | null>(null)
 
 const beforeUpload = (file: File) => {
   uploadFile.value = file
-  if (!uploadForm.value.name)
+  if (!uploadForm.value.name) {
     uploadForm.value.name = file.name.replace(/\.(svg|png|jpg|jpeg)$/i, '')
-  return false
+  }
+  return false // 阻止自动上传
 }
+
 const resetUploadForm = () => {
   uploadFile.value = null
   uploadForm.value = { name: '', category: 'custom', description: '' }
 }
+
 const doUpload = async () => {
   if (!uploadFile.value) {
     ElMessage.warning('请选择文件')
@@ -69,6 +69,7 @@ const doUpload = async () => {
   fd.append('name', uploadForm.value.name)
   fd.append('category', uploadForm.value.category)
   fd.append('description', uploadForm.value.description)
+
   try {
     await uploadScadaWidget(fd)
     ElMessage.success('上传成功')
@@ -89,19 +90,26 @@ onMounted(fetchList)
     <template #header>
       <div class="flex-grow flex justify-end gap-8px">
         <ElButton @click="router.push('/scada/pages')">返回画面</ElButton>
-        <ElButton v-hasPermi="['scada.write']" type="success" @click="uploadDialogVisible = true"
-          >上传图元</ElButton
+        <ElButton
+          v-hasPermi="['scada.write']"
+          type="success"
+          @click="uploadDialogVisible = true"
         >
+          上传图元
+        </ElButton>
       </div>
     </template>
 
-    <!-- 内置图元 -->
-    <div v-for="cat in GAUGE_CATEGORIES" :key="cat.key" class="mb-24px">
-      <div class="text-16px font-700 mb-12px">{{ cat.label }}</div>
-      <ElRow :gutter="16">
+    <!-- 内置图元（SVG 缩略图） -->
+    <div class="text-16px font-700 mb-12px">内置工业图元</div>
+    <ElRow :gutter="16" class="mb-24px">
+      <template v-for="cat in svgWidgetCategories()" :key="cat">
+        <ElCol :span="24" class="mb-8px">
+          <div class="text-14px font-600 text-gray-500">{{ cat }}</div>
+        </ElCol>
         <ElCol
-          v-for="w in cat.defs"
-          :key="w.typeTag"
+          v-for="w in getSvgWidgetsByCategory(cat)"
+          :key="w.name"
           :xs="12"
           :sm="8"
           :md="6"
@@ -109,14 +117,14 @@ onMounted(fetchList)
           class="mb-16px"
         >
           <ElCard shadow="hover" class="h-full text-center widget-preview-card">
-            <div class="widget-icon-large">{{ w.icon }}</div>
-            <div class="text-14px font-600 mb-4px">{{ w.label }}</div>
+            <div class="svg-thumb-wrap mb-8px" v-html="w.thumbnail"></div>
+            <div class="text-14px font-600 mb-4px">{{ w.name }}</div>
             <div class="text-12px text-gray-400">{{ w.defaultWidth }}×{{ w.defaultHeight }}</div>
             <div class="text-10px text-gray-500 mt-2px">{{ w.typeTag }}</div>
           </ElCard>
         </ElCol>
-      </ElRow>
-    </div>
+      </template>
+    </ElRow>
 
     <!-- 自定义图元 -->
     <div class="text-16px font-700 mb-12px">自定义图元</div>
@@ -139,30 +147,26 @@ onMounted(fetchList)
               type="danger"
               size="small"
               @click="remove(w)"
-              >删除</ElButton
             >
+              删除
+            </ElButton>
           </div>
         </ElCard>
       </ElCol>
     </ElRow>
 
     <!-- 上传对话框 -->
-    <ElDialog
-      v-model="uploadDialogVisible"
-      title="上传自定义图元"
-      width="480px"
-      @close="resetUploadForm"
-    >
+    <ElDialog v-model="uploadDialogVisible" title="上传自定义图元" width="480px" @close="resetUploadForm">
       <ElForm label-width="80px">
-        <ElFormItem label="名称"
-          ><ElInput v-model="uploadForm.name" placeholder="图元名称"
-        /></ElFormItem>
-        <ElFormItem label="分类"
-          ><ElInput v-model="uploadForm.category" placeholder="如：custom、阀门"
-        /></ElFormItem>
-        <ElFormItem label="描述"
-          ><ElInput v-model="uploadForm.description" type="textarea" :rows="2"
-        /></ElFormItem>
+        <ElFormItem label="名称">
+          <ElInput v-model="uploadForm.name" placeholder="图元名称" />
+        </ElFormItem>
+        <ElFormItem label="分类">
+          <ElInput v-model="uploadForm.category" placeholder="如：custom、阀门" />
+        </ElFormItem>
+        <ElFormItem label="描述">
+          <ElInput v-model="uploadForm.description" type="textarea" :rows="2" />
+        </ElFormItem>
         <ElFormItem label="文件">
           <ElUpload
             :show-file-list="true"
@@ -172,9 +176,9 @@ onMounted(fetchList)
             :limit="1"
           >
             <ElButton type="primary">选择文件</ElButton>
-            <template #tip
-              ><div class="text-12px text-gray-400">支持 SVG / PNG / JPG 格式</div></template
-            >
+            <template #tip>
+              <div class="text-12px text-gray-400">支持 SVG / PNG / JPG 格式</div>
+            </template>
           </ElUpload>
         </ElFormItem>
       </ElForm>
@@ -187,10 +191,20 @@ onMounted(fetchList)
 </template>
 
 <style scoped>
-.widget-icon-large {
-  font-size: 36px;
-  line-height: 1;
-  margin-bottom: 4px;
+.svg-thumb-wrap {
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  background: #0d1117;
+  border-radius: 4px;
+  padding: 4px;
+}
+.svg-thumb-wrap :deep(svg) {
+  max-width: 70px;
+  max-height: 70px;
 }
 .widget-preview-card {
   min-height: 140px;

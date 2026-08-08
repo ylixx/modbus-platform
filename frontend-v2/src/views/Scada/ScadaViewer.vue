@@ -1,12 +1,10 @@
 <script setup lang="ts">
 /**
- * SCADA 运行查看器 — 照搬 FUXA fuxa-view.component.ts
- *
- * 核心流程（FUXA 运行时链路）：
- * 1. innerHTML = svgcontent → SVG 注入 DOM
- * 2. SVG.adopt → DOM 元素转为 SVG.js 对象
- * 3. loadWatch → 遍历 items，绑定信号和事件
- * 4. handleSignal → 信号到达 → 查找绑定图元 → processValue
+ * SCADA 运行查看器 - FUXA 风格 SVG 画布
+ * - 加载 SVG 画布配置并渲染
+ * - 通过 WebSocket 接收实时数据并更新绑定图元
+ * - 全屏模式
+ * - 管道流动动画 + 旋转动画
  */
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -30,7 +28,21 @@ let unsubFns: (() => void)[] = []
 
 const wsConnected = computed(() => wsStore.connected)
 
-// ── 加载画面 ──
+// ── 绑定信息缓存 ──
+interface BindingInfo {
+  elementId: string
+  bindTarget: string
+  deviceId: number
+  tagId: number
+  tagName: string
+  prop: string
+}
+
+const parseBindingsFromCanvas = (): BindingInfo[] => {
+  if (!canvasRef.value) return []
+  return canvasRef.value.getAllBindings()
+}
+
 const fetchPage = async () => {
   const body = unwrap(await getScadaPage(Number(id)))
   page.value = body || {}
@@ -45,56 +57,44 @@ const fetchPage = async () => {
       console.warn('Failed to load SCADA config:', e)
     }
   }
-
-  // 加载完成后初始化运行时绑定（照搬 FUXA loadWatch）
-  canvasRef.value?.initRuntimeBindings()
 }
 
-// ── WebSocket 实时数据（照搬 FUXA handleSignal） ──
+// ── WebSocket 实时数据更新 ──
 const onLiveValue = (msg: any) => {
   const d = msg.data as WsLiveValue
   if (!d) return
 
-  const bindings = canvasRef.value?.getAllBindings() || []
+  const bindings = parseBindingsFromCanvas()
 
   for (const binding of bindings) {
     if (binding.deviceId === d.device_id && binding.tagName === d.tag_name) {
       let updateValue: any = d.value
 
+      // 根据绑定目标决定更新方式（FUXA processValue 风格）
       if (binding.bindTarget === 'state') {
+        // 状态绑定：根据值映射颜色
         updateValue = d.value > 0 ? '#00ff00' : '#ff0000'
         canvasRef.value?.updateBoundValue(binding.elementId, 'state', updateValue, 'fill')
       } else if (['fill', 'stroke'].includes(binding.prop)) {
-        canvasRef.value?.updateBoundValue(
-          binding.elementId,
-          binding.bindTarget,
-          updateValue,
-          binding.prop
-        )
+        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, updateValue, binding.prop)
       } else if (binding.bindTarget === 'level') {
+        // 液位绑定
         canvasRef.value?.updateBoundValue(binding.elementId, 'level', d.value, 'height')
+        // 同时更新数值文本
         canvasRef.value?.updateBoundValue(binding.elementId, 'level', d.value.toFixed(1), 'text')
       } else if (binding.bindTarget === 'value') {
         const displayValue = typeof d.value === 'number' ? d.value.toFixed(1) : String(d.value)
         canvasRef.value?.updateBoundValue(binding.elementId, 'value', displayValue, 'text')
       } else if (['red', 'yellow', 'green'].includes(binding.bindTarget)) {
+        // 信号灯颜色绑定
+        updateValue = d.value > 0 ? '#00ff00' : '#003a00'
         if (binding.bindTarget === 'red') updateValue = d.value > 0 ? '#ff0000' : '#3a0000'
         if (binding.bindTarget === 'yellow') updateValue = d.value > 0 ? '#ffff00' : '#3a3a00'
         if (binding.bindTarget === 'green') updateValue = d.value > 0 ? '#00ff00' : '#003a00'
-        canvasRef.value?.updateBoundValue(
-          binding.elementId,
-          binding.bindTarget,
-          updateValue,
-          'fill'
-        )
+        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, updateValue, 'fill')
       } else {
         const displayValue = typeof d.value === 'number' ? d.value.toFixed(1) : String(d.value)
-        canvasRef.value?.updateBoundValue(
-          binding.elementId,
-          binding.bindTarget,
-          displayValue,
-          'text'
-        )
+        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, displayValue, 'text')
       }
     }
   }
@@ -123,6 +123,7 @@ const onFullscreenChange = () => {
 
 onMounted(() => {
   fetchPage().then(() => {
+    // 加载完成后启动动画
     canvasRef.value?.startFlowAnimation()
   })
   unsubFns.push(wsManager.on('live_value', onLiveValue))
@@ -142,19 +143,26 @@ onUnmounted(() => {
       <div class="flex items-center">
         <span class="text-16px font-600 mr-12px">{{ page.name || 'SCADA 运行' }}</span>
         <ElBadge :type="wsConnected ? 'success' : 'danger'" is-dot>
-          <span class="text-12px text-gray-400">{{ wsConnected ? '实时数据' : '离线' }}</span>
+          <span class="text-12px text-gray-400">
+            {{ wsConnected ? '实时数据' : '离线' }}
+          </span>
         </ElBadge>
       </div>
       <div class="flex items-center gap-8px">
-        <ElButton size="small" @click="toggleFullscreen">{{
-          isFullscreen ? '退出全屏' : '全屏'
-        }}</ElButton>
-        <ElButton size="small" type="primary" @click="router.push(`/scada/editor/${id}`)"
-          >编辑</ElButton
+        <ElButton size="small" @click="toggleFullscreen">
+          {{ isFullscreen ? '退出全屏' : '全屏' }}
+        </ElButton>
+        <ElButton
+          size="small"
+          type="primary"
+          @click="router.push(`/scada/editor/${id}`)"
         >
+          编辑
+        </ElButton>
         <ElButton size="small" @click="router.push('/scada/pages')">返回</ElButton>
       </div>
     </div>
+
     <div class="viewer-canvas">
       <SvgCanvas
         ref="canvasRef"

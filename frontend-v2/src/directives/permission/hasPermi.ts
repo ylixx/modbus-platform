@@ -11,10 +11,7 @@ const hasPermission = (value: string | string[]): boolean => {
 }
 
 // 存储被移除元素的占位注释节点，用于权限恢复时重新插入
-const placeholderMap = new WeakMap<
-  HTMLElement,
-  { parent: Node; comment: Comment; nextSibling: Node | null }
->()
+const placeholderMap = new WeakMap<HTMLElement, { parent: Node; comment: Comment; nextSibling: Node | null }>()
 
 function applyPermission(el: HTMLElement, binding: DirectiveBinding) {
   const value = binding.value

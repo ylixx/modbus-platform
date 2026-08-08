@@ -15,7 +15,8 @@ import {
   ElSwitch,
   ElInput,
   ElCollapse,
-  ElCollapseItem
+  ElCollapseItem,
+  ElTooltip
 } from 'element-plus'
 import { getAllDevices, getDeviceLive, getDeviceTags, unwrap } from '@/api/modbus'
 import { useWsStore } from '@/store/modules/websocket'
@@ -51,6 +52,7 @@ const updatedAt = ref('')
 // ── 筛选 ──
 const filterQuality = ref('all') // all | good | bad | unknown
 const searchKey = ref('')
+const groupBy = ref<'device' | 'quality'>('device')
 
 // ── 刷新 ──
 const autoRefresh = ref(true)

@@ -29,8 +29,8 @@
   },
   "dependencies": {
     "@iconify/iconify": "^3.1.1",
-    "@iconify/json": "^2.2.293",
     "@svgdotjs/svg.js": "^3.2.7",
+    "@iconify/json": "^2.2.293",
     "@iconify/vue": "^4.3.0",
     "@vueuse/core": "^12.3.0",
     "@wangeditor/editor": "^5.1.23",
@@ -44,6 +44,7 @@
     "echarts": "^5.6.0",
     "echarts-wordcloud": "^2.1.0",
     "element-plus": "2.9.2",
+    "fabric": "^6.4.3",
     "lodash-es": "^4.17.21",
     "mitt": "^3.0.1",
     "monaco-editor": "^0.52.2",

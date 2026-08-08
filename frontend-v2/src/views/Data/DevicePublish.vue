@@ -9,7 +9,8 @@ import {
   ElEmpty,
   ElTooltip,
   ElSelect,
-  ElOption
+  ElOption,
+  ElBadge
 } from 'element-plus'
 import { getDevicePublishStatus, triggerDevicePublish, unwrap } from '@/api/modbus'
 import { ElMessage } from 'element-plus'
@@ -133,7 +134,7 @@ watch(refreshInterval, (val) => {
       </ElTableColumn>
       <ElTableColumn label="模式" width="90">
         <template #default="{ row }">
-          <ElTag size="small" :type="row.mode === 'standard' ? 'info' : 'primary'">{{ modeLabel(row.mode) }}</ElTag>
+          <ElTag size="small" :type="row.mode === 'standard' ? 'info' : ''">{{ modeLabel(row.mode) }}</ElTag>
         </template>
       </ElTableColumn>
       <ElTableColumn prop="interval" label="间隔(秒)" width="85" align="center" />

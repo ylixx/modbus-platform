@@ -20,6 +20,7 @@ import {
   ElInputNumber,
   ElMessage,
   ElMessageBox,
+  ElDivider,
   ElSwitch,
   ElAlert,
   ElTooltip
