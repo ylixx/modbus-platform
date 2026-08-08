@@ -180,12 +180,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 cd modbus-platform/frontend-v2
 
 pnpm install   # 首次
-pnpm dev       # Vite 默认 http://localhost:3001
+pnpm dev       # Vite 默认 http://localhost:3000
 ```
 
 #### 4. 访问
 
-- 前端界面：http://localhost:3001
+- 前端界面：http://localhost:3000
 - API 文档（Swagger）：http://localhost:8000/docs
 - 默认账号：**admin / admin123**
 - 登录接口：`POST /api/v1/auth/login`
@@ -242,7 +242,7 @@ pnpm dev
 
 #### 5. 访问
 
-- 前端：http://localhost:3001
+- 前端：http://localhost:3000
 - API 文档：http://localhost:8000/docs
 - 默认账号：admin / admin123
 

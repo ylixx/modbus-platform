@@ -40,13 +40,13 @@ pnpm install --silent
 echo "[4/4] 启动前端服务..."
 nohup pnpm dev > ../logs/frontend.log 2>&1 &
 echo $! > ../logs/frontend.pid
-echo "  前端已启动: http://localhost:3001"
+echo "  前端已启动: http://localhost:3000"
 cd ..
 
 echo ""
 echo "========================================="
 echo " 启动完成！"
-echo " 前端: http://localhost:3001"
+echo " 前端: http://localhost:3000"
 echo " 后端: http://localhost:8000"
 echo " API 文档: http://localhost:8000/docs"
 echo " 默认账号: admin / admin123"

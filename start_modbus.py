@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Modbus 平台一键启动器 (Windows)
-- 清理 8000 / 3001 端口占用
+- 清理 8000 / 3000 端口占用
 - 启动后端 (uvicorn, 自动探测 venv / 系统 python)
-- 启动前端 (frontend-v2, 直启 vite, 端口 3001; 缓存指向系统临时目录)
+- 启动前端 (frontend-v2, 直启 vite, 端口 3000; 缓存指向系统临时目录)
 - 轮询端口就绪后打开浏览器
 
 用法:
@@ -25,7 +25,7 @@ BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend-v2")
 
 BACKEND_PORT = 8000
-FRONTEND_PORT = 3001
+FRONTEND_PORT = 3000
 
 # vite 冷启动/依赖预构建可能超过 1 分钟（本机实测 ~140s），前端等待上限放宽
 BACKEND_WAIT_SECONDS = 60
@@ -163,6 +163,24 @@ def wait_port(port, timeout=60):
     return False
 
 
+def wait_unocss_ready(port, timeout):
+    """等待 vite 首次 unocss 全量扫描完成（页面秒开的前置条件）。"""
+    import urllib.request
+    url = "http://127.0.0.1:%d/src/plugins/unocss/index.ts" % port
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            t0 = time.time()
+            with urllib.request.urlopen(url, timeout=30) as r:
+                r.read()
+            if time.time() - t0 < 1.0:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
 def main():
     log("=" * 52)
     log("         Modbus 平台一键启动")
@@ -193,7 +211,10 @@ def main():
 
     log("步骤4: 等待前端就绪 (:%d，最多 %d 秒)..." % (FRONTEND_PORT, FRONTEND_WAIT_SECONDS))
     f_ok = wait_port(FRONTEND_PORT, FRONTEND_WAIT_SECONDS)
-    log("   前端: " + ("就绪 OK" if f_ok else "未就绪 (查 frontend-v2/logs/frontend.log)"))
+    if f_ok:
+        log("   前端: 端口就绪，等待 unocss 首扫完成（确保页面秒开）...")
+        f_ok = wait_unocss_ready(FRONTEND_PORT, FRONTEND_WAIT_SECONDS)
+        log("   前端: " + ("就绪 OK" if f_ok else "unocss 预热超时，仍可访问"))
 
     if f_ok:
         time.sleep(1)
