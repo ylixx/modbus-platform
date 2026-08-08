@@ -1,12 +1,15 @@
 """Data forward rule schemas."""
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
+
+DataForwardPresetLiteral = Literal["standard", "thingsboard_device", "thingsboard_gateway"]
+AggregateModeLiteral = Literal["single", "per_device", "all_in_one"]
 
 
 class DataForwardRuleCreate(BaseModel):
     name: str
-    preset_mode: str = "standard"
+    preset_mode: DataForwardPresetLiteral = "standard"
     broker: str = ""
     port: int = 1883
     username: str = ""
@@ -20,13 +23,13 @@ class DataForwardRuleCreate(BaseModel):
     qos: int = 0
     device_ids: str = ""
     tag_ids: str = ""
-    aggregate_mode: str = "per_device"
+    aggregate_mode: AggregateModeLiteral = "per_device"
     enabled: bool = True
 
 
 class DataForwardRuleUpdate(BaseModel):
     name: Optional[str] = None
-    preset_mode: Optional[str] = None
+    preset_mode: Optional[DataForwardPresetLiteral] = None
     broker: Optional[str] = None
     port: Optional[int] = None
     username: Optional[str] = None
@@ -40,7 +43,7 @@ class DataForwardRuleUpdate(BaseModel):
     qos: Optional[int] = None
     device_ids: Optional[str] = None
     tag_ids: Optional[str] = None
-    aggregate_mode: Optional[str] = None
+    aggregate_mode: Optional[AggregateModeLiteral] = None
     enabled: Optional[bool] = None
 
 
