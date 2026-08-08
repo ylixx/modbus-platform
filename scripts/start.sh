@@ -1,5 +1,5 @@
 #!/bin/bash
-# Modbus Data Acquisition Platform - Start Script
+# Modbus Data Acquisition Platform - Start Script (frontend-v2)
 set -e
 
 echo "========================================="
@@ -7,8 +7,9 @@ echo " Modbus 数据采集平台 启动脚本"
 echo "========================================="
 
 # Check dependencies
-command -v python3 >/dev/null 2>&1 || { echo "需要安装 Python 3.8+"; exit 1; }
-command -v node >/dev/null 2>&1 || { echo "需要安装 Node.js 16+"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "需要安装 Python 3.10+"; exit 1; }
+command -v node >/dev/null 2>&1 || { echo "需要安装 Node.js 18+"; exit 1; }
+command -v pnpm >/dev/null 2>&1 || { echo "需要安装 pnpm"; exit 1; }
 
 # === Backend ===
 echo ""
@@ -30,22 +31,22 @@ echo "  后端已启动: http://localhost:8000"
 echo "  API 文档: http://localhost:8000/docs"
 cd ..
 
-# === Frontend ===
+# === Frontend (V2) ===
 echo ""
 echo "[3/4] 安装前端依赖..."
-cd frontend
-npm install --silent
+cd frontend-v2
+pnpm install --silent
 
 echo "[4/4] 启动前端服务..."
-nohup npm run dev > ../logs/frontend.log 2>&1 &
+nohup pnpm dev > ../logs/frontend.log 2>&1 &
 echo $! > ../logs/frontend.pid
-echo "  前端已启动: http://localhost:3000"
+echo "  前端已启动: http://localhost:3001"
 cd ..
 
 echo ""
 echo "========================================="
 echo " 启动完成！"
-echo " 前端: http://localhost:3000"
+echo " 前端: http://localhost:3001"
 echo " 后端: http://localhost:8000"
 echo " API 文档: http://localhost:8000/docs"
 echo " 默认账号: admin / admin123"

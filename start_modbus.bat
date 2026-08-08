@@ -1,14 +1,12 @@
-@echo on
-rem chcp 65001 >nul 2>&1
+@echo off
+REM 一键启动 Modbus 平台：调起 start_modbus.py（脚本自动探测 venv / 依赖 / 端口）
 setlocal
-REM 一键启动 Modbus 平台：用托管 Python 调起 start_modbus.py
-set "PYTHON=C:\Users\liyan\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
 set "SCRIPT=%~dp0start_modbus.py"
 
-if not exist "%PYTHON%" (
-  where py >nul 2>&1 && set "PYTHON=py"
-  if errorlevel 1 set "PYTHON=python"
+where py >nul 2>&1
+if %errorlevel%==0 (
+  py "%SCRIPT%"
+) else (
+  python "%SCRIPT%"
 )
-
-"%PYTHON%" "%SCRIPT%"
 pause
