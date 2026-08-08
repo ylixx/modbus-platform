@@ -114,6 +114,8 @@ def test_rule(
 
     from app.engine.mqtt_connection_pool import mqtt_pool
     from app.engine.mqtt_preset_renderer import preset_renderer
+    from datetime import datetime, timezone
+    import time
 
     mode = rule.preset_mode or "standard"
     broker = rule.broker
@@ -151,8 +153,6 @@ def test_rule(
             "timestamp_ms": str(int(time.time() * 1000)),
             "values_json": json.dumps(test_values),
         }
-        from datetime import datetime, timezone
-        import time
 
         topic = preset_renderer.render_topic(mode, rule.topic_template, context)
         payload = preset_renderer.render_payload(

@@ -1,7 +1,10 @@
 """Device schemas — supports Modbus / MQTT / OPC-UA."""
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
+
+ProtocolTypeLiteral = Literal["modbus_tcp", "modbus_rtu", "mqtt", "opc_ua"]
+OpcSecurityModeLiteral = Literal["None", "Basic256Sha256", "Basic256", "Basic128Rsa15"]
 
 
 # ── Device Group ──
@@ -166,7 +169,7 @@ class DeviceCreate(BaseModel):
     description: str = ""
     group_id: Optional[int] = None
     org_node_id: Optional[int] = None
-    protocol: str = "modbus_tcp"  # modbus_tcp | mqtt | opc_ua
+    protocol: ProtocolTypeLiteral = "modbus_tcp"
 
     # Location
     factory: str = ""
@@ -209,7 +212,7 @@ class DeviceCreate(BaseModel):
 
     # OPC-UA
     opc_endpoint: str = ""
-    opc_security_mode: str = "None"
+    opc_security_mode: OpcSecurityModeLiteral = "None"
     opc_username: str = ""
     opc_password: str = ""
     opc_certificate: str = ""
@@ -227,7 +230,7 @@ class DeviceUpdate(BaseModel):
     description: Optional[str] = None
     group_id: Optional[int] = None
     org_node_id: Optional[int] = None
-    protocol: Optional[str] = None
+    protocol: Optional[ProtocolTypeLiteral] = None
 
     factory: Optional[str] = None
     workshop: Optional[str] = None
@@ -265,7 +268,7 @@ class DeviceUpdate(BaseModel):
     mqtt_is_gateway: Optional[bool] = None
 
     opc_endpoint: Optional[str] = None
-    opc_security_mode: Optional[str] = None
+    opc_security_mode: Optional[OpcSecurityModeLiteral] = None
     opc_username: Optional[str] = None
     opc_password: Optional[str] = None
     opc_certificate: Optional[str] = None
