@@ -140,6 +140,27 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
     },
     server: {
       port: 3001,
+      // dev 模式下按需编译导致冷启动后首次访问页面很慢，
+      // 启动时后台预编译核心页面依赖树，登录/跳转秒开
+      warmup: {
+        clientFiles: [
+          './src/main.ts',
+          './src/views/Login/index.vue',
+          './src/views/Dashboard/Workplace.vue',
+          './src/views/Dashboard/Analysis.vue',
+          './src/views/Monitor/Realtime.vue',
+          './src/views/Monitor/LiveDashboard.vue',
+          './src/views/Device/Devices.vue',
+          './src/views/Device/DeviceDetail.vue',
+          './src/views/Device/Tags.vue',
+          './src/views/Alarm/Alarms.vue',
+          './src/views/Alarm/AlarmRules.vue',
+          './src/views/Data/History.vue',
+          './src/views/Scada/Scada.vue',
+          './src/views/System/Scripts.vue',
+          './src/views/System/Rbac.vue'
+        ]
+      },
       proxy: {
         // WebSocket 代理
         '/api/v1/ws': {
