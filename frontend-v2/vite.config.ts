@@ -11,7 +11,6 @@ import ServerUrlCopy from 'vite-plugin-url-copy'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import { createSvgIconsPlugin } from 'vite-plugin-svg-icons'
 import { createStyleImportPlugin, ElementPlusResolve } from 'vite-plugin-style-import'
-import UnoCSS from 'unocss/vite'
 import { visualizer } from 'rollup-plugin-visualizer'
 
 // https://vitejs.dev/config/
@@ -94,8 +93,7 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
         : undefined,
       ViteEjsPlugin({
         title: env.VITE_APP_TITLE
-      }),
-      UnoCSS()
+      })
     ],
 
     css: {
@@ -144,11 +142,14 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
       cssTarget: ['chrome31']
     },
     server: {
-      port: 3001,
+      port: 3000,
       // dev 模式下按需编译导致冷启动后首次访问页面很慢，
       // 启动时后台预编译核心页面依赖树（登录/仪表盘/实时/设备/报警），其余页面按需编译
       warmup: {
         clientFiles: [
+          // unocss 已固化为静态 CSS（uno.generated.css），无首次全量扫描
+          './src/plugins/unocss/index.ts',
+          './src/utils/loadIcons.ts',
           './src/main.ts',
           './src/views/Login/index.vue',
           './src/views/Dashboard/Workplace.vue',
