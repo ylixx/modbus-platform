@@ -108,7 +108,8 @@ class ScriptEngine:
 
             worker = threading.Thread(target=_run, daemon=True)
             worker.start()
-            finished = worker.join(timeout=timeout_ms / 1000.0)
+            worker.join(timeout=timeout_ms / 1000.0)
+            finished = not worker.is_alive()
 
             if not finished:
                 # Worker thread is still running — it timed out.
