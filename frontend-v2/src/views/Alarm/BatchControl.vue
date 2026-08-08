@@ -30,7 +30,6 @@ import {
   ElCard
 } from 'element-plus'
 import {
-  getAllDevices,
   getDeviceTags,
   getDeviceLive,
   batchWriteDevices,
@@ -42,20 +41,9 @@ import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 defineOptions({ name: 'BatchControl' })
 
 // ── 设备/点位数据 ──
+// 不预读全量设备/点位，按需从远程搜索接口加载
 const devicesLoading = ref(false)
-const devices = ref<any[]>([])
 const allTags = ref<Record<number, any[]>>({}) // deviceId -> tags
-
-const fetchDevices = async () => {
-  devicesLoading.value = true
-  try {
-    devices.value = unwrapList(await getAllDevices()).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取设备列表失败')
-  } finally {
-    devicesLoading.value = false
-  }
-}
 
 const fetchTags = async (deviceId: number) => {
   if (allTags.value[deviceId]) return
@@ -111,48 +99,30 @@ const selectedIds = ref<number[]>([])
 const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
 
 // 当前加载范围：级联未选 -> 全部设备；级联选中 -> 仅选中设备
-const targetDeviceIds = computed(() => {
-  if (selectedIds.value.length) return selectedIds.value
-  return devices.value.map((d) => d.id)
-})
-
-// 仅含可写点位的设备（无写点位的设备自动排除，不显示/不被搜索）
-const writableDeviceIds = computed(() => {
-  const set = new Set<number>()
-  for (const [id, tags] of Object.entries(allTags.value)) {
-    if (Array.isArray(tags) && tags.some((t) => t.writable)) set.add(Number(id))
-  }
-  return set
-})
-const writableDevices = computed(() => devices.value.filter((d) => writableDeviceIds.value.has(d.id)))
+const targetDeviceIds = computed(() => selectedIds.value)
 
 const scopeLabel = computed(() => {
   return selectedIds.value.length
     ? `已选 ${selectedIds.value.length} 台设备`
-    : `全部 ${writableDevices.value.length} 台设备（均含可写点位）`
+    : '请通过上方级联框选择要控制的设备'
 })
 
 // 自动拉取设备的可写点位，生成为指令行展示（按设备+点位去重）
-// 级联为空默认列出全部设备的可写点位；级联选中则只列选中设备
+// 需先在级联框中选中设备（不再默认遍历全部设备，避免设备量大时逐台拉点位）
 const loadWritablePoints = async () => {
   const ids = targetDeviceIds.value
   if (!ids.length) {
-    ElMessage.info('当前没有可控制的设备')
+    ElMessage.info('请先在上方级联框中选择要控制的设备')
     return
   }
   try {
   // 并发拉取所有目标设备点位
   await Promise.all(ids.map((id) => fetchTags(id)))
 
-  if (selectedIds.value.length) {
-    // 级联选中时：清掉不在选中设备集合内的旧指令，让表格精确反映筛选范围
-    instructions.value = instructions.value.filter((i) =>
-      selectedIds.value.includes(i.device_id as number)
-    )
-  } else {
-    // 默认范围（全部设备）：清掉残留的占位/无效空行，按范围重建，避免空设备行
-    instructions.value = instructions.value.filter((i) => i.device_id && i.tag_id)
-  }
+  // 级联选中时：清掉不在选中设备集合内的旧指令，让表格精确反映筛选范围
+  instructions.value = instructions.value.filter((i) =>
+    selectedIds.value.includes(i.device_id as number)
+  )
 
   let added = 0
   for (const deviceId of ids) {
@@ -306,7 +276,7 @@ const clearInstructions = () => {
 }
 
 // 设备选择变更
-const onDeviceChange = async (idx: number, deviceId: number) => {
+const onDeviceChange = async (idx: number, deviceId: number | null) => {
   instructions.value[idx].tag_id = null
   instructions.value[idx].status = 'pending'
   instructions.value[idx].resultMsg = ''
@@ -403,15 +373,10 @@ const stats = computed(() => {
 })
 
 onMounted(async () => {
-  try {
-    await fetchDevices()
-    // 级联未选时默认列出全部设备的可写点位
-    await loadWritablePoints()
-    // 初始拉取实时值，让「当前值 / 回读值」列首屏即有数据
-    await fetchLiveForDevices(targetDeviceIds.value)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '初始化失败')
-  }
+  // 不再默认加载全部设备/点位：由用户通过级联框选择范围后按需加载
+  instructions.value = [
+    { id: genId(), device_id: null, tag_id: null, value: '', status: 'pending' }
+  ]
 })
 </script>
 
@@ -482,17 +447,18 @@ onMounted(async () => {
     <ElTable v-loading="devicesLoading" :data="instructions" border stripe>
       <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
       <ElTableColumn label="#" width="50" type="index" />
-      <ElTableColumn label="设备" min-width="180">
+      <ElTableColumn label="设备" min-width="200">
         <template #default="{ row, $index }">
-          <ElSelect
+          <OrgCascadeSelect
             v-model="row.device_id"
+            single
+            :show-device-actions="false"
+            :show-actions="false"
+            :writable-only="true"
             class="w-full"
-            placeholder="选择设备"
-            filterable
-            @change="onDeviceChange($index, $event)"
-          >
-            <ElOption v-for="d in writableDevices" :key="d.id" :label="d.name" :value="d.id" />
-          </ElSelect>
+            placeholder="搜索选择设备"
+            @change="onDeviceChange($index, row.device_id)"
+          />
         </template>
       </ElTableColumn>
       <ElTableColumn label="可写点位" min-width="180">
@@ -571,16 +537,14 @@ onMounted(async () => {
     <ElDialog v-model="batchDialogVisible" title="批量添加指令（同点多设备）" width="560px" @close="resetBatchForm">
       <ElForm label-width="90px">
         <ElFormItem label="目标设备">
-          <ElSelect
+          <OrgCascadeSelect
             v-model="batchForm.device_ids"
             class="w-full"
-            multiple
-            filterable
-            placeholder="选择多个设备"
+            :writable-only="true"
+            :show-actions="false"
+            placeholder="选择组织层级后搜索多个设备"
             @change="onBatchDeviceChange"
-          >
-            <ElOption v-for="d in writableDevices" :key="d.id" :label="d.name" :value="d.id" />
-          </ElSelect>
+          />
         </ElFormItem>
         <ElFormItem label="可写点位">
           <ElSelect

@@ -9,7 +9,7 @@ from app.models.user import User
 from app.models.device import Device
 from app.models.org import OrgNode
 from app.schemas.common import ResponseModel
-from app.services.org_service import expand_org_subtree, get_user_org_scope
+from app.services.org_service import expand_org_subtree, get_user_org_scope, apply_device_org_filter
 from app.services.audit_service import log_action
 import json, logging
 
@@ -124,15 +124,20 @@ def get_org_tree(
 @router.get("/cascade")
 def get_org_cascade(
     with_devices: bool = True,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("org.read")),
 ):
     """组织架构级联数据（关联列表框）：厂→区→班→站→位置→设备名称。
 
     返回与前端 OrgCascadeSelect 兼容的 {levels, tree} 形状：
-    - with_devices=true（默认）：设备在所属组织节点下作为叶子返回（演示/详情页用）。
+    - with_devices=true（默认）：设备在所属组织节点下作为叶子返回，并按 org 数据范围
+      过滤、按 search 关键字过滤、按页截断（page/page_size 控制每节点设备叶子数，
+      避免设备量大时全表加载）。
     - with_devices=false：仅返回组织节点结构（不含设备），设备由前端按 org_node_id
-      单独查询 /devices?org_node_id=<节点id>（自动展开子树），避免设备量大时一次性加载。
+      单独查询 /devices?org_node_id=<节点id>（自动展开子树）。
     树节点带 id，便于前端按选中节点做子树筛选。
     """
     nodes = db.query(OrgNode).all()
@@ -143,11 +148,29 @@ def get_org_cascade(
         by_parent.setdefault(n.parent_id, []).append(n.id)
 
     devices_by_node: dict = {}
-    for d in db.query(Device).all():
-        if d.org_node_id is not None:
-            devices_by_node.setdefault(d.org_node_id, []).append(d)
+    total_by_node: dict = {}
+    if with_devices:
+        q = apply_device_org_filter(db.query(Device), db, current_user)
+        if search:
+            q = q.filter(Device.name.ilike(f"%{search}%"))
+        offset = (page - 1) * page_size
+        idx_by_node: dict = {}
+        for d in q.order_by(Device.id).with_entities(Device.id, Device.name, Device.org_node_id,
+                                 Device.protocol, Device.status, Device.factory,
+                                 Device.workshop, Device.production_line,
+                                 Device.installation, Device.group_id, Device.host,
+                                 Device.port, Device.mqtt_broker, Device.opc_endpoint).all():
+            nid = d.org_node_id
+            if nid is None:
+                continue
+            idx = idx_by_node.get(nid, 0)
+            idx_by_node[nid] = idx + 1
+            total_by_node[nid] = total_by_node.get(nid, 0) + 1
+            # 分页：只保留当前页切片，避免把全量设备塞进内存
+            if offset <= idx < offset + page_size:
+                devices_by_node.setdefault(nid, []).append(d)
 
-    def device_leaf(d: Device):
+    def device_leaf(d):
         return {
             "label": d.name,
             "type": "device",
@@ -181,7 +204,7 @@ def get_org_cascade(
         if with_devices:
             for d in devices_by_node.get(nid, []):
                 children.append(device_leaf(d))
-        return {
+        node_data = {
             "id": n.id,
             "label": n.name,
             "type": "level",
@@ -189,6 +212,9 @@ def get_org_cascade(
             "icon": NODE_ICONS.get(n.node_type, "🏢"),
             "children": children,
         }
+        if with_devices:
+            node_data["device_total"] = total_by_node.get(nid, 0)
+        return node_data
 
     roots = [r for nid in by_parent.get(None, []) if (r := build(nid)) is not None]
     levels = [

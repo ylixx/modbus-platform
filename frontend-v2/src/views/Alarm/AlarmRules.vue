@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
+import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 import {
   ElButton,
   ElTable,
@@ -28,7 +29,6 @@ import {
   deleteAlarmRule,
   getEscalationConfig,
   updateEscalationConfig,
-  getAllDevices,
   getDeviceTags,
   unwrap,
   unwrapList
@@ -39,7 +39,6 @@ defineOptions({ name: 'AlarmRules' })
 const activeTab = ref('rules')
 const loading = ref(false)
 const list = ref<any[]>([])
-const devices = ref<any[]>([])
 const deviceTags = ref<any[]>([])
 
 // ── 分页 ──
@@ -88,13 +87,6 @@ const onSizeChange = (s: number) => {
   pageSize.value = s
   page.value = 1
   fetchList()
-}
-const fetchDevices = async () => {
-  try {
-    devices.value = unwrapList(await getAllDevices()).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取设备列表失败')
-  }
 }
 
 // ── 设备 → 点位联动 ──
@@ -301,7 +293,6 @@ const escalationItems = computed(() => [
 
 onMounted(() => {
   fetchList()
-  fetchDevices()
   fetchEscalationConfig()
 })
 </script>
@@ -325,7 +316,7 @@ onMounted(() => {
       <ElTableColumn sortable prop="name" label="规则名称" min-width="140" show-overflow-tooltip />
       <ElTableColumn label="设备" min-width="120" show-overflow-tooltip>
         <template #default="{ row }">
-          {{ devices.find((d) => d.id === row.device_id)?.name || `#${row.device_id}` }}
+          {{ row.device_name || `#${row.device_id}` }}
         </template>
       </ElTableColumn>
       <ElTableColumn label="点位" min-width="100" show-overflow-tooltip>
@@ -435,14 +426,15 @@ onMounted(() => {
         <ElDivider content-position="left">监控目标</ElDivider>
 
         <ElFormItem label="设备" prop="device_id">
-          <ElSelect
+          <OrgCascadeSelect
             v-model="form.device_id"
+            single
+            :show-device-actions="false"
+            :show-actions="false"
             class="w-full"
-            placeholder="选择设备"
+            placeholder="选择组织层级后搜索设备"
             @change="onFormDeviceChange"
-          >
-            <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
-          </ElSelect>
+          />
         </ElFormItem>
         <ElFormItem label="点位" prop="tag_id">
           <ElSelect

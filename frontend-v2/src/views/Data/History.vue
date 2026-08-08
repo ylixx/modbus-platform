@@ -16,12 +16,12 @@ import {
   ElRadioGroup,
   ElRadioButton
 } from 'element-plus'
-import { getAllDevices, getDeviceTags, getHistory, unwrap, unwrapList } from '@/api/modbus'
+import { getDeviceTags, getHistory, unwrap, unwrapList } from '@/api/modbus'
 import { formatTime } from '@/utils/modbus'
+import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
 defineOptions({ name: 'History' })
 
-const devices = ref<any[]>([])
 const tags = ref<any[]>([])
 const loading = ref(false)
 const list = ref<any[]>([])
@@ -54,13 +54,6 @@ const onIntervalChange = () => {
   searchTimer = setTimeout(() => fetchList(), 300)
 }
 
-const fetchDevices = async () => {
-  try {
-    devices.value = unwrapList(await getAllDevices()).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取设备列表失败')
-  }
-}
 const onDeviceChange = async () => {
   query.tag_id = null
   tags.value = []
@@ -119,21 +112,21 @@ const fetchList = async () => {
   }
 }
 
-onMounted(fetchDevices)
+onMounted(() => {})
 </script>
 
 <template>
   <ContentWrap title="历史数据">
     <ElForm :inline="true" :model="query" class="mb-8px">
       <ElFormItem label="设备">
-        <ElSelect
+        <OrgCascadeSelect
           v-model="query.device_id"
-          class="!w-180px"
-          placeholder="选择设备"
+          single
+          :show-device-actions="false"
+          :show-actions="false"
+          placeholder="选择组织层级后搜索设备"
           @change="onDeviceChange"
-        >
-          <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
-        </ElSelect>
+        />
       </ElFormItem>
       <ElFormItem label="点位">
         <ElSelect

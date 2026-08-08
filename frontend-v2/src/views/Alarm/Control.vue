@@ -18,27 +18,26 @@ import {
   ElDescriptions,
   ElDescriptionsItem
 } from 'element-plus'
-import { getAllDevices, getDeviceTags, writeDevice, unwrap, unwrapList } from '@/api/modbus'
+import { getDeviceTags, writeDevice, unwrap, unwrapList } from '@/api/modbus'
+import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 
 defineOptions({ name: 'Control' })
 
-const devices = ref<any[]>([])
 const tags = ref<any[]>([])
 const tagsLoading = ref(false)
 const form = reactive<any>({ device_id: null, tag_id: null, value: null })
 
 const writableTags = computed(() => tags.value.filter((t) => t.writable))
 
-const selectedDevice = computed(() => devices.value.find((d) => d.id === form.device_id))
+const selectedDevice = ref<any>(null)
 const selectedTag = computed(() => tags.value.find((t) => t.id === form.tag_id))
 
-const fetchDevices = async () => {
-  try {
-    devices.value = unwrapList(await getAllDevices()).list
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取设备列表失败')
-  }
+const onDeviceSelect = (val: number | null, obj: any) => {
+  selectedDevice.value = obj
+  form.device_id = val
+  onDeviceChange()
 }
+
 const onDeviceChange = async () => {
   form.tag_id = null
   tags.value = []
@@ -91,7 +90,7 @@ const confirmAndWrite = async () => {
   }
 }
 
-onMounted(fetchDevices)
+onMounted(() => {})
 </script>
 
 <template>
@@ -105,14 +104,15 @@ onMounted(fetchDevices)
 
     <ElForm :model="form" label-width="90px" class="max-w-560px">
       <ElFormItem label="目标设备">
-        <ElSelect
+        <OrgCascadeSelect
           v-model="form.device_id"
+          single
+          :show-device-actions="false"
+          :show-actions="false"
           class="w-full"
-          placeholder="请选择设备"
-          @change="onDeviceChange"
-        >
-          <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
-        </ElSelect>
+          placeholder="选择组织层级后搜索设备"
+          @change="onDeviceSelect"
+        />
       </ElFormItem>
       <ElFormItem label="控制点位">
         <ElSelect

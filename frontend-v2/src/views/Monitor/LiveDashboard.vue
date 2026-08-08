@@ -16,9 +16,9 @@ import {
   ElInput,
   ElCollapse,
   ElCollapseItem,
-  ElTooltip
+  ElPagination
 } from 'element-plus'
-import { getAllDevices, getDeviceLive, getDeviceTags, unwrap } from '@/api/modbus'
+import { getDevices, getDeviceLive, getDeviceTags, unwrap, unwrapList } from '@/api/modbus'
 import { useWsStore } from '@/store/modules/websocket'
 import { wsManager } from '@/utils/websocket'
 import type { WsLiveValue } from '@/utils/websocket'
@@ -49,10 +49,14 @@ const devices = ref<DeviceBlock[]>([])
 const loading = ref(false)
 const updatedAt = ref('')
 
+// ── 分页（不再一次加载全部设备，避免设备量大时全量加载）──
+const page = ref(1)
+const pageSize = ref(10)
+const totalDevices = ref(0)
+
 // ── 筛选 ──
 const filterQuality = ref('all') // all | good | bad | unknown
 const searchKey = ref('')
-const groupBy = ref<'device' | 'quality'>('device')
 
 // ── 刷新 ──
 const autoRefresh = ref(true)
@@ -74,10 +78,16 @@ const QUALITY_MAP: Record<string, { text: string; type: string; color: string }>
 const fetchAll = async (showLoading = true) => {
   if (showLoading) loading.value = true
   try {
-    const res = await getAllDevices()
-    const list: any[] = unwrap(res) || []
+    // 分页拉取当前页设备（服务端搜索 + 分页），不再一次全量
+    const res = await getDevices({
+      page: page.value,
+      page_size: pageSize.value,
+      search: searchKey.value || undefined
+    })
+    const { list, total } = unwrapList(res)
+    totalDevices.value = total ?? list.length
     const blocks: DeviceBlock[] = []
-    // 并发加载每台设备的点位和实时值
+    // 并发加载当前页每台设备的点位和实时值
     const concurrency = 6
     let idx = 0
     const next = async (): Promise<void> => {
@@ -119,6 +129,13 @@ const fetchAll = async (showLoading = true) => {
     if (showLoading) loading.value = false
   }
 }
+
+// 分页 / 搜索变化时重新加载
+watch(page, () => fetchAll(true))
+watch(searchKey, () => {
+  page.value = 1
+  fetchAll(true)
+})
 
 // 仅刷新实时值（轻量，不重新加载点位定义）
 const refreshLiveOnly = async () => {
@@ -302,7 +319,7 @@ onUnmounted(() => {
     <div class="flex flex-wrap items-center gap-8px mb-16px">
       <ElInput
         v-model="searchKey"
-        placeholder="搜索设备/点位名称/地址"
+        placeholder="搜索设备名称（服务端检索）"
         clearable
         style="width: 220px"
         size="small"
@@ -323,6 +340,20 @@ onUnmounted(() => {
       <ElSwitch v-model="autoRefresh" @change="setupPolling" />
       <ElButton size="small" @click="refreshLiveOnly">手动刷新</ElButton>
       <ElButton size="small" type="primary" plain @click="fetchAll(true)">重新加载</ElButton>
+      <span class="text-12px text-gray-400 ml-8px">共 {{ totalDevices }} 台</span>
+    </div>
+
+    <!-- 分页 -->
+    <div class="flex justify-end mb-12px">
+      <ElPagination
+        v-model:current-page="page"
+        :page-size="pageSize"
+        :total="totalDevices"
+        :page-sizes="[10, 20, 50]"
+        layout="total, sizes, prev, pager, next"
+        @current-change="fetchAll(true)"
+        @size-change="page = 1; fetchAll(true)"
+      />
     </div>
 
     <!-- 设备卡片列表 -->

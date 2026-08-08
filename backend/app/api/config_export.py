@@ -56,9 +56,11 @@ def export_config(request: Request, db: Session = Depends(get_db), user: User = 
 
     # Device groups
     for g in db.query(DeviceGroup).order_by(DeviceGroup.id).all():
+        parent = db.query(DeviceGroup).filter(DeviceGroup.id == g.parent_id).first() if g.parent_id else None
         data["device_groups"].append({
             "name": g.name, "description": g.description,
-            "parent_id": g.parent_id, "sort_order": g.sort_order,
+            "parent_name": parent.name if parent else None,
+            "sort_order": g.sort_order,
         })
 
     # Devices
@@ -211,6 +213,14 @@ async def import_config(
             existing.sort_order = g.get("sort_order", 0)
             stats["groups"] += 1
         db.flush()
+        # Resolve parent_id by name after all groups are created
+        group_map = {g.name: g.id for g in db.query(DeviceGroup).all()}
+        for g in data.get("device_groups", []):
+            existing = db.query(DeviceGroup).filter(DeviceGroup.name == g["name"]).first()
+            if not existing:
+                continue
+            parent_name = g.get("parent_name")
+            existing.parent_id = group_map.get(parent_name) if parent_name else None
 
         # Devices
         group_map = {g.name: g.id for g in db.query(DeviceGroup).all()}
@@ -223,6 +233,7 @@ async def import_config(
                 db.add(existing)
             for key in ["description", "protocol", "host", "port", "slave_id", "timeout", "retries",
                         "poll_interval", "factory", "workshop", "production_line", "installation",
+                        "longitude", "latitude",
                         "mqtt_broker", "mqtt_port", "mqtt_client_id",
                         "mqtt_topic_prefix", "mqtt_use_tls", "mqtt_payload_format", "mqtt_is_gateway",
                         "mqtt_publish_enabled", "mqtt_publish_topic", "mqtt_publish_qos", "mqtt_publish_interval",
@@ -234,9 +245,23 @@ async def import_config(
             stats["devices"] += 1
         db.flush()
 
+        # Scripts (import before tags so script bindings can be resolved)
+        for s in data.get("scripts", []):
+            existing = db.query(Script).filter(Script.name == s["name"]).first()
+            if existing and not overwrite:
+                continue
+            if not existing:
+                existing = Script(name=s["name"])
+                db.add(existing)
+            for key in ["description", "language", "code", "default_params", "timeout_ms", "max_history", "enabled"]:
+                if key in s:
+                    setattr(existing, key, s[key])
+            stats["scripts"] += 1
+        db.flush()
+        script_map = {s.name: s.id for s in db.query(Script).all()}
+
         # Tags
         device_map = {d.name: d.id for d in db.query(Device).all()}
-        script_map = {s.name: s.id for s in db.query(Script).all()}
         for t in data.get("tags", []):
             device_id = device_map.get(t.get("device_name"))
             if not device_id:
@@ -260,6 +285,7 @@ async def import_config(
                 existing.script_id = script_map.get(t["script_name"])
             stats["tags"] += 1
         db.flush()
+        tag_map = {(tag.device_id, tag.name): tag.id for tag in db.query(DeviceTag).all()}
 
         # Alarm rules
         for r in data.get("alarm_rules", []):
@@ -279,20 +305,11 @@ async def import_config(
                         "auto_clear", "enabled", "sms_enabled"]:
                 if key in r:
                     setattr(existing, key, r[key])
+            # Resolve tag binding
+            tag_name = r.get("tag_name")
+            if tag_name and isinstance(tag_name, str):
+                existing.tag_id = tag_map.get((device_id, tag_name))
             stats["rules"] += 1
-
-        # Scripts
-        for s in data.get("scripts", []):
-            existing = db.query(Script).filter(Script.name == s["name"]).first()
-            if existing and not overwrite:
-                continue
-            if not existing:
-                existing = Script(name=s["name"])
-                db.add(existing)
-            for key in ["description", "language", "code", "default_params", "timeout_ms", "max_history", "enabled"]:
-                if key in s:
-                    setattr(existing, key, s[key])
-            stats["scripts"] += 1
 
         db.commit()
         log_action(action="config.import", resource_type="config", resource_id=0,
