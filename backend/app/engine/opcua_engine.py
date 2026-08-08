@@ -323,8 +323,13 @@ class OpcUaEngine:
     def __init__(self):
         self._sessions: dict[int, OpcUaDeviceSession] = {}
         self._lock = threading.Lock()
+        self._running = False
 
     def start(self):
+        if self._running:
+            logger.info("OPC-UA engine already running")
+            return
+        self._running = True
         logger.info("OPC-UA engine starting...")
         db = SessionLocal()
         try:
@@ -347,6 +352,7 @@ class OpcUaEngine:
             db.close()
 
     def stop(self):
+        self._running = False
         logger.info("OPC-UA engine stopping...")
         for session in self._sessions.values():
             session.stop()

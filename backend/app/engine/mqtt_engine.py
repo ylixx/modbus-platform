@@ -22,8 +22,13 @@ class MqttEngine:
         self._gateways: dict[int, MqttGatewaySession] = {}
         self._device_to_gateway: dict[int, int] = {}
         self._lock = threading.Lock()
+        self._running = False
 
     def start(self):
+        if self._running:
+            logger.info("MQTT engine already running")
+            return
+        self._running = True
         logger.info("MQTT engine starting...")
         db = SessionLocal()
         try:
@@ -71,6 +76,7 @@ class MqttEngine:
             db.close()
 
     def stop(self):
+        self._running = False
         logger.info("MQTT engine stopping...")
         for s in self._sessions.values():
             s.stop()

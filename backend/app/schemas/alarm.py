@@ -1,7 +1,13 @@
 """Alarm schemas."""
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
+
+AlarmTypeLiteral = Literal[
+    "threshold_high", "threshold_low", "threshold_range",
+    "rate_of_change", "status", "disconnect",
+]
+AlarmLevelLiteral = Literal["info", "warning", "critical", "emergency"]
 
 
 class AlarmRuleCreate(BaseModel):
@@ -9,8 +15,8 @@ class AlarmRuleCreate(BaseModel):
     description: str = ""
     device_id: int
     tag_id: Optional[int] = None
-    alarm_type: str  # threshold_high | threshold_low | threshold_range | rate_of_change | status | disconnect
-    alarm_level: str = "warning"
+    alarm_type: AlarmTypeLiteral
+    alarm_level: AlarmLevelLiteral = "warning"
     high_limit: Optional[float] = None
     low_limit: Optional[float] = None
     deadband: float = 0.0
@@ -25,8 +31,8 @@ class AlarmRuleCreate(BaseModel):
 class AlarmRuleUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    alarm_type: Optional[str] = None
-    alarm_level: Optional[str] = None
+    alarm_type: Optional[AlarmTypeLiteral] = None
+    alarm_level: Optional[AlarmLevelLiteral] = None
     high_limit: Optional[float] = None
     low_limit: Optional[float] = None
     deadband: Optional[float] = None

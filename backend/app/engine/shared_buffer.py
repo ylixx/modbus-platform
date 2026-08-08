@@ -210,6 +210,16 @@ class WsBatchPusher:
 
 
 def _get_event_loop():
+    """Return the running main event loop (captured at startup).
+
+    Broadcasts are fired from background threads, so we must schedule
+    them on the *actual running* loop via ws_broadcast's stored loop.
+    """
+    try:
+        from app.engine.ws_broadcast import _get_event_loop as _get_main_loop
+        return _get_main_loop()
+    except Exception:
+        pass
     try:
         loop = asyncio.get_event_loop()
         return loop if not loop.is_closed() else None

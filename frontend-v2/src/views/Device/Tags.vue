@@ -32,6 +32,7 @@ import {
   createTag,
   updateTag,
   deleteTag,
+  getScripts,
   exportTagsCsv,
   importTags,
   unwrap,
@@ -282,6 +283,7 @@ const emptyForm = () => ({
   unit: '',
   scale_factor: 1,
   writable: false,
+  script_id: null,
   readback_tag_id: null
 })
 const form = reactive<any>(emptyForm())
@@ -322,6 +324,7 @@ const openEdit = (row: any) => {
     unit: row.unit || '',
     scale_factor: row.scale_factor ?? 1,
     writable: !!row.writable,
+    script_id: row.script_id ?? null,
     readback_tag_id: row.readback_tag_id ?? null
   })
   dialogDeviceId.value = row.device_id
@@ -502,9 +505,24 @@ const batchRemove = async () => {
   }
 }
 
+// ── 脚本绑定（点位处理后处理脚本） ──
+const scripts = ref<any[]>([])
+const scriptName = (id?: number | null) =>
+  scripts.value.find((s) => s.id === id)?.name || ''
+
+const fetchScripts = async () => {
+  try {
+    const res = await getScripts({ page: 1, page_size: 200, enabled_only: true })
+    scripts.value = unwrapList(res).list
+  } catch {
+    scripts.value = []
+  }
+}
+
 onMounted(() => {
   fetchDevices()
   fetchTags()
+  fetchScripts()
   // 订阅 WebSocket 实时推送
   wsManager.on('live_value', onLiveValue)
   wsManager.on('batch_live', onBatchLive)
@@ -671,6 +689,12 @@ onUnmounted(() => {
             <span class="text-12px">{{ row.scale_factor ?? 1 }}</span>
           </template>
         </ElTableColumn>
+        <ElTableColumn label="处理脚本" min-width="110">
+          <template #default="{ row }">
+            <ElTag v-if="row.script_id" type="success" size="small">{{ scriptName(row.script_id) || `#${row.script_id}` }}</ElTag>
+            <span v-else class="text-gray-300 text-12px">—</span>
+          </template>
+        </ElTableColumn>
         <ElTableColumn label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <ElButton v-hasPermi="['tag.write']" link type="primary" @click="openEdit(row)"
@@ -831,6 +855,21 @@ onUnmounted(() => {
         </ElFormItem>
         <ElFormItem label="可写">
           <ElSwitch v-model="form.writable" />
+        </ElFormItem>
+        <ElFormItem label="处理脚本">
+          <ElSelect
+            v-model="form.script_id"
+            class="w-full"
+            clearable
+            placeholder="绑定脚本处理该点位的值（可选）"
+          >
+            <ElOption
+              v-for="s in scripts"
+              :key="s.id"
+              :label="`${s.name}（${s.description || '无描述'}）`"
+              :value="s.id"
+            />
+          </ElSelect>
         </ElFormItem>
         <ElFormItem label="回读寄存器">
           <ElSelect

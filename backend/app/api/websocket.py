@@ -66,7 +66,6 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
                 if msg.get("type") == "ping":
                     await websocket.send_text('{"type":"pong"}')
                     # Record activity for heartbeat tracking
-                    from app.engine.websocket_manager import ws_manager
                     ws_manager._ws_last_active[id(websocket)] = _time.time()
                 # auth 消息在认证阶段已处理，忽略后续
             except json.JSONDecodeError:

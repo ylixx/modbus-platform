@@ -11,7 +11,7 @@ from app.api import (
     auth, users, devices, alarms, alarm_mqtt, sms, history, dashboard,
     audit, exports, websocket, hierarchy, permissions, scada,
     archive, imports, templates, scripts, config_export, orgs,
-    lab_data, data_forward, mqtt_health, device_publish,
+    lab_data, data_forward, mqtt_health, device_publish, system,
 )
 
 
@@ -59,24 +59,43 @@ async def lifespan(app: FastAPI):
 
     # Start data forward service
     try:
-        from app.services.data_forward_service import data_forward_service
-        data_forward_service.start()
+        from app.services.config_service import is_feature_enabled
+        if is_feature_enabled("data_forward"):
+            from app.services.data_forward_service import data_forward_service
+            data_forward_service.start()
+        else:
+            logger.info("DataForwardService disabled by runtime config")
     except Exception as e:
         logger.error(f"DataForwardService start error: {e}")
 
     # Start per-device MQTT publish (works for ALL protocols)
     try:
-        from app.services.device_publish_service import device_publish_service
-        device_publish_service.start()
+        from app.services.config_service import is_feature_enabled
+        if is_feature_enabled("device_publish"):
+            from app.services.device_publish_service import device_publish_service
+            device_publish_service.start()
+        else:
+            logger.info("DevicePublishService disabled by runtime config")
     except Exception as e:
         logger.error(f"DevicePublishService start error: {e}")
 
-    # Initialize WebSocket broadcast (Redis pub/sub for multi-worker)
+    # Capture the main event loop so background threads can schedule
+    # WebSocket broadcasts. Required even in single-worker mode.
     try:
-        from app.engine.ws_broadcast import init_redis_broadcast, set_main_loop
+        from app.engine.ws_broadcast import set_main_loop
         import asyncio
         set_main_loop(asyncio.get_running_loop())
-        init_redis_broadcast()
+    except Exception as e:
+        logger.error(f"WS main loop capture error: {e}")
+
+    # Initialize WebSocket broadcast (Redis pub/sub, multi-worker only)
+    try:
+        from app.services.config_service import is_feature_enabled
+        if is_feature_enabled("redis_broadcast"):
+            from app.engine.ws_broadcast import init_redis_broadcast
+            init_redis_broadcast()
+        else:
+            logger.info("Redis broadcast disabled by runtime config (single worker mode)")
     except Exception as e:
         logger.error(f"Redis broadcast init error: {e}")
 
@@ -357,6 +376,7 @@ app.include_router(lab_data.router, prefix=prefix)
 app.include_router(data_forward.router, prefix=prefix)
 app.include_router(mqtt_health.router, prefix=prefix)
 app.include_router(device_publish.router, prefix=prefix)
+app.include_router(system.router, prefix=prefix)
 app.include_router(websocket.router)          # 兼容 v1 前端: /ws
 app.include_router(websocket.router, prefix=prefix)  # v2 前端: /api/v1/ws
 
