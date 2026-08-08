@@ -23,7 +23,9 @@ venv/
 # Build output
 dist/
 build/
-frontend/dist/
+
+# Temp files
+.temp/
 
 # IDE / OS
 .idea/
@@ -35,4 +37,7 @@ frontend/dist/
 
 # Logs
 *.log
+*.log.err
 /backend/logs/
+/frontend-v2/logs/
+
