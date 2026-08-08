@@ -58,12 +58,17 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
             ]
           })
         : undefined,
-      EslintPlugin({
-        cache: false,
-        failOnWarning: false,
-        failOnError: false,
-        include: ['src/**/*.vue', 'src/**/*.ts', 'src/**/*.tsx'] // 检查的文件
-      }),
+      // dev 模式禁用 eslint（每个模块编译都 lint 会拖慢冷启动），仅生产构建时检查
+      ...(isBuild
+        ? [
+            EslintPlugin({
+              cache: false,
+              failOnWarning: false,
+              failOnError: false,
+              include: ['src/**/*.vue', 'src/**/*.ts', 'src/**/*.tsx'] // 检查的文件
+            })
+          ]
+        : []),
       VueI18nPlugin({
         runtimeOnly: true,
         compositionOnly: true,
@@ -141,7 +146,7 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
     server: {
       port: 3001,
       // dev 模式下按需编译导致冷启动后首次访问页面很慢，
-      // 启动时后台预编译核心页面依赖树，登录/跳转秒开
+      // 启动时后台预编译核心页面依赖树（登录/仪表盘/实时/设备/报警），其余页面按需编译
       warmup: {
         clientFiles: [
           './src/main.ts',
@@ -151,14 +156,8 @@ export default ({ command, mode }: ConfigEnv): UserConfig => {
           './src/views/Monitor/Realtime.vue',
           './src/views/Monitor/LiveDashboard.vue',
           './src/views/Device/Devices.vue',
-          './src/views/Device/DeviceDetail.vue',
           './src/views/Device/Tags.vue',
-          './src/views/Alarm/Alarms.vue',
-          './src/views/Alarm/AlarmRules.vue',
-          './src/views/Data/History.vue',
-          './src/views/Scada/Scada.vue',
-          './src/views/System/Scripts.vue',
-          './src/views/System/Rbac.vue'
+          './src/views/Alarm/Alarms.vue'
         ]
       },
       proxy: {
