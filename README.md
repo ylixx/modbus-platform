@@ -63,7 +63,7 @@
 
 ### SCADA 画面
 
-- Fabric.js 画布编辑器，拖拽放置工业组件
+- 原生 SVG 画布编辑器（FUXA 风格），拖拽放置工业组件
 - 20+ 内置组件：储罐/立式罐/球阀/蝶阀/电机/离心泵/管道/表盘/温度计/进度条/指示灯/报警灯/按钮/开关
 - 自定义图元上传（SVG/PNG），批量上传
 - 数据绑定：Tag → 组件属性实时刷新
@@ -129,7 +129,7 @@
 
 | 组件 | 技术 |
 |------|------|
-| 前端 | Vue 3.4 + Element Plus 2.8 + ECharts 5.5 + Fabric.js 6.4 |
+| 前端 | Vue 3 + TypeScript + Element Plus + ECharts 5 + SVG 画布（frontend-v2） |
 | 后端 | Python FastAPI + SQLAlchemy |
 | Modbus | pymodbus 3.7 |
 | MQTT | paho-mqtt 1.6 |
@@ -174,18 +174,18 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 > 未配置 Redis 时，WebSocket 自动降级为单进程内广播（单 worker 正常），多 worker 才需要 Redis。
 
-#### 3. 前端
+#### 3. 前端（V2）
 
 ```bash
-cd modbus-platform/frontend
+cd modbus-platform/frontend-v2
 
-npm install      # 首次
-npm run dev      # Vite 默认 http://localhost:3000
+pnpm install   # 首次
+pnpm dev       # Vite 默认 http://localhost:3001
 ```
 
 #### 4. 访问
 
-- 前端界面：http://localhost:3000
+- 前端界面：http://localhost:3001
 - API 文档（Swagger）：http://localhost:8000/docs
 - 默认账号：**admin / admin123**
 - 登录接口：`POST /api/v1/auth/login`
@@ -228,21 +228,21 @@ python ../scripts/init_db.py
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-#### 4. 前端
+#### 4. 前端（V2）
 
 ```bash
-cd modbus-platform/frontend
+cd modbus-platform/frontend-v2
 
 # 安装依赖
-npm install
+pnpm install
 
 # 启动开发服务器
-npm run dev
+pnpm dev
 ```
 
 #### 5. 访问
 
-- 前端：http://localhost:3000
+- 前端：http://localhost:3001
 - API 文档：http://localhost:8000/docs
 - 默认账号：admin / admin123
 
@@ -793,7 +793,7 @@ modbus-platform/
 │   ├── tests/                  # 单元测试
 │   ├── requirements.txt
 │   └── .env.example
-├── frontend/
+├── frontend-v2/
 │   ├── src/
 │   │   ├── api/                # HTTP 请求
 │   │   ├── components/         # 公共组件
@@ -802,7 +802,7 @@ modbus-platform/
 │   │   ├── router/             # 路由
 │   │   ├── stores/             # 状态管理
 │   │   ├── utils/              # 工具函数
-│   │   └── views/              # 页面（27 个）
+│   │   └── views/              # 页面（Device/Alarm/Monitor/Scada/Data/System 等模块）
 ├── scripts/                    # 启停脚本/初始化
 ├── docker/                     # Docker 配置
 └── README.md
@@ -873,7 +873,7 @@ git pull
 
 # 3. 更新依赖
 cd backend && pip install -r requirements.txt
-cd ../frontend && npm install
+cd ../frontend-v2 && pnpm install
 
 # 4. 重启服务
 # 5. 如有新表，运行 python ../scripts/init_db.py

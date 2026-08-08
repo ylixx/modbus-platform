@@ -92,13 +92,7 @@ onMounted(fetchList)
       <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
       <ElTableColumn sortable prop="id" label="ID" width="70" />
       <ElTableColumn sortable prop="name" label="画面名称" min-width="160" show-overflow-tooltip />
-      <ElTableColumn
-        sortable
-        prop="description"
-        label="描述"
-        min-width="200"
-        show-overflow-tooltip
-      />
+      <ElTableColumn sortable prop="description" label="描述" min-width="200" show-overflow-tooltip />
       <ElTableColumn sortable prop="updated_at" label="更新时间" width="180" />
       <ElTableColumn label="操作" width="280" fixed="right">
         <template #default="{ row }">
@@ -122,12 +116,7 @@ onMounted(fetchList)
       </ElTableColumn>
     </ElTable>
 
-    <ElDialog
-      v-model="dialogVisible"
-      title="新建 SCADA 画面"
-      width="460px"
-      @close="formRef?.resetFields()"
-    >
+    <ElDialog v-model="dialogVisible" title="新建 SCADA 画面" width="460px" @close="formRef?.resetFields()">
       <ElForm ref="formRef" :model="form" :rules="rules" label-width="80px">
         <ElFormItem label="名称" prop="name">
           <ElInput v-model="form.name" placeholder="请输入画面名称" />
