@@ -86,7 +86,7 @@ const buildOrgPath = (d: any) =>
 const fetchDevices = async () => {
   loading.value = true
   try {
-  const params: any = { page: 1, page_size: 100 }
+  const params: any = { page: 1, page_size: 100, enabled: true }
   if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
   if (selectedIds.value.length) params.ids = selectedIds.value.join(',')
   const list: any[] = []
@@ -338,7 +338,7 @@ watch(wsConnected, (connected) => {
 
     <!-- 组织架构级联筛选（与设备列表页一致） -->
     <div class="mb-16px">
-      <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" @search="fetchDevices" />
+      <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" enabled-only @search="fetchDevices" />
     </div>
 
     <ElTable v-loading="loading" :data="deviceRows" row-key="id" border stripe @expand-change="onExpand">

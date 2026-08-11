@@ -12,6 +12,7 @@ from app.models.scada import ScadaPage, CustomWidget
 from app.models.script import Script
 from app.models.org import OrgNode, RoleOrgScope
 from app.models.data_forward import DataForwardRule
+from app.models.template import DeviceTemplate, DeviceTemplateBinding
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "ScadaPage", "CustomWidget", "Script",
     "OrgNode", "RoleOrgScope",
     "DataForwardRule",
+    "DeviceTemplate", "DeviceTemplateBinding",
 ]

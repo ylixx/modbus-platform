@@ -60,7 +60,7 @@ const currentTag = ref<number | undefined>(undefined)
 const remoteSearchDevices = async (query: string) => {
   loadingDevices.value = true
   try {
-    const params: any = { page: 1, page_size: 50, has_lab_data: true }
+    const params: any = { page: 1, page_size: 50, has_lab_data: true, enabled: true }
     if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
     if (query) params.search = query
     const res = await getDevices(params)

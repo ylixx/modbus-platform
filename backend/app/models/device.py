@@ -154,6 +154,7 @@ class Device(Base):
 
     group = relationship("DeviceGroup", back_populates="devices", lazy="select")
     tags = relationship("DeviceTag", back_populates="device", cascade="all,delete-orphan", lazy="select")
+    template_binding = relationship("DeviceTemplateBinding", back_populates="device", cascade="all,delete-orphan", lazy="select")
 
 
 class DeviceTag(Base):

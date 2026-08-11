@@ -115,6 +115,7 @@ onMounted(() => {})
         <OrgCascadeSelect
           v-model="query.device_id"
           single
+          enabled-only
           :show-device-actions="false"
           :show-actions="false"
           placeholder="选择组织层级后搜索设备"

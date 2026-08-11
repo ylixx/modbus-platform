@@ -42,6 +42,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Admin/permissions setup error: {e}")
 
+    # Seed builtin device templates (idempotent)
+    try:
+        from app.api.templates import seed_builtin_templates
+        from app.core.database import SessionLocal
+        with SessionLocal() as s:
+            seed_builtin_templates(s)
+    except Exception as e:
+        logger.error(f"Builtin template seed error: {e}")
+
     # Start shared write buffer and WebSocket pusher
     try:
         from app.engine.shared_buffer import write_buffer, ws_pusher

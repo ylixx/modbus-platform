@@ -1,347 +1,284 @@
 <script setup lang="ts">
 /**
- * 批量远程控制
+ * 批量远程控制（可写点位操作面板）
  *
- * 功能：
- * 1. 编辑指令列表（每条：设备 + 点位 + 值）
- * 2. 从模板快速添加（同一点位 → 多设备）
- * 3. 一键执行全部指令，实时显示每条结果
- * 4. 保存/加载常用指令组
+ * 参照「采集点位」页设计：以点位为表格行、组织级联+关键词筛选、
+ * 行多选+工具栏批量操作。控制的是设备的点位，故不再让用户逐行选设备+点位。
+ *
+ * - 单独控制：表格行内「写入值」输入框 + 行尾「写入」按钮
+ * - 批量控制：勾选多行 → 工具栏统一填写值 → 「执行所选/执行全部」
  */
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
   ElButton,
   ElTable,
   ElTableColumn,
   ElTag,
-  ElSelect,
-  ElOption,
   ElInput,
-  ElDialog,
-  ElForm,
-  ElFormItem,
   ElMessage,
   ElMessageBox,
   ElAlert,
   ElSwitch,
   ElEmpty,
   ElProgress,
-  ElCard
+  ElCard,
+  ElPagination,
+  ElTooltip,
+  ElSelect,
+  ElOption
 } from 'element-plus'
-import {
-  getDeviceTags,
-  getDeviceLive,
-  batchWriteDevices,
-  unwrap,
-  unwrapList
-} from '@/api/modbus'
+import { getAllTags, getDeviceLive, writeDevice, batchWriteDevices, unwrap, unwrapList } from '@/api/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
+import type { WsLiveValue } from '@/utils/websocket'
+import { wsManager } from '@/utils/websocket'
 
 defineOptions({ name: 'BatchControl' })
 
-// ── 设备/点位数据 ──
-// 不预读全量设备/点位，按需从远程搜索接口加载
-const devicesLoading = ref(false)
-const allTags = ref<Record<number, any[]>>({}) // deviceId -> tags
+// ── 组织级联范围 + 关键词 ──
+const selectedIds = ref<number[]>([])
+const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
+const searchKeyword = ref('')
 
-const fetchTags = async (deviceId: number) => {
-  if (allTags.value[deviceId]) return
+const scopeLabel = computed(() => {
+  if (orgPath.value?.labels?.length) return orgPath.value.labels.join(' / ')
+  return selectedIds.value.length ? `已选 ${selectedIds.value.length} 台设备` : '全部设备'
+})
+
+// ── 点位列表（分页） ──
+const loading = ref(false)
+const rows = ref<any[]>([]) // 点位行：扩展 value / status / resultMsg / readbackValue
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(50)
+
+const fetchRows = async () => {
+  loading.value = true
   try {
-    const res = await getDeviceTags(deviceId)
-    const body = unwrap(res)
-    allTags.value[deviceId] = Array.isArray(body) ? body : unwrapList(res).list
+    const params: any = {
+      page: page.value,
+      page_size: pageSize.value,
+      writable: true,
+      device_enabled: true
+    }
+    if (orgPath.value?.org_node_id) params.org_node_id = orgPath.value.org_node_id
+    if (selectedIds.value.length) params.device_ids = selectedIds.value.join(',')
+    if (searchKeyword.value.trim()) params.search = searchKeyword.value.trim()
+    const res = await getAllTags(params)
+    const { list: l, total: t } = unwrapList(res)
+    rows.value = l
+      .filter((tag: any) => tag.writable)
+      .map((tag: any) => ({
+      ...tag,
+      value: '',
+      status: 'pending',
+      resultMsg: '',
+      readbackValue: undefined,
+      readbackTagId: tag.readback_tag_id,
+      readbackTagName: tag.readback_tag_name || ''
+    }))
+    total.value = t
+    // 拉完点位立刻刷新实时值
+    refreshLive()
   } catch (e: any) {
-    ElMessage.error(e?.message || '获取点位列表失败')
+    ElMessage.error(e?.message || '获取可写点位失败')
+  } finally {
+    loading.value = false
   }
 }
 
-const getWritableTags = (deviceId: number) => {
-  return (allTags.value[deviceId] || []).filter((t) => t.writable)
+const onPageChange = (p: number) => {
+  page.value = p
+  fetchRows()
+}
+const onSizeChange = (s: number) => {
+  pageSize.value = s
+  page.value = 1
+  fetchRows()
 }
 
-// 实时值缓存：deviceId -> { tagId: { value, quality, time } }，用于「当前值 / 回读值」列
-const liveMap = ref<Record<number, Record<number, any>>>({})
+// 级联 / 搜索变化 → 回到第一页刷新
+watch(selectedIds, () => {
+  page.value = 1
+  fetchRows()
+})
+const onPathChange = (_path: { org_node_id: number | null; labels: string[] } | null) => {
+  page.value = 1
+  fetchRows()
+}
+const onKeywordSearch = () => {
+  page.value = 1
+  fetchRows()
+}
 
-const fetchLiveForDevices = async (ids: number[]) => {
+// ── 实时值（当前值列） ──
+const liveMap = ref<Record<number, Record<number, { value: any; quality: string; time: string }>>>({})
+
+const refreshLive = async () => {
+  const deviceIds = [...new Set(rows.value.map((r) => r.device_id))]
   await Promise.all(
-    ids.map(async (id) => {
+    deviceIds.map(async (id) => {
       try {
         const body = unwrap(await getDeviceLive(id))
         const values =
-          body && typeof body === 'object' && !Array.isArray(body) && body.values
-            ? body.values
-            : {}
+          body && typeof body === 'object' && !Array.isArray(body) && body.values ? body.values : {}
         liveMap.value[id] = values
       } catch {
-        // 实时拉取失败（如设备离线）：保留已有值，不阻塞界面
         if (!liveMap.value[id]) liveMap.value[id] = {}
       }
     })
   )
 }
 
-// 在已加载点位中查找某 tag
-const findTag = (deviceId: number | null, tagId: number | null) => {
-  if (!deviceId || !tagId) return null
-  return (allTags.value[deviceId] || []).find((t) => t.id === tagId) || null
+const onLiveValue = (msg: any) => {
+  const d = msg.data as WsLiveValue
+  if (!d) return
+  if (!liveMap.value[d.device_id]) liveMap.value[d.device_id] = {}
+  liveMap.value[d.device_id][d.tag_id] = {
+    value: d.value,
+    quality: d.quality,
+    time: new Date().toISOString()
+  }
 }
 
-// 返回某点位绑定的「回读寄存器」tag（未配置则返回 null）
-const readbackTagOf = (deviceId: number | null, tagId: number | null) => {
-  const t = findTag(deviceId, tagId)
-  if (!t || !t.readback_tag_id) return null
-  return findTag(deviceId, t.readback_tag_id)
-}
+// ── 行操作：单独控制 ──
+const writingRow = ref<number | null>(null) // 正在写入的行 id
 
-// 组织架构级联筛选（同实时数据页）：选中设备后自动拉取其可写点位
-const selectedIds = ref<number[]>([])
-const orgPath = ref<{ org_node_id: number | null; labels: string[] } | null>(null)
-
-// 当前加载范围：级联未选 -> 全部设备；级联选中 -> 仅选中设备
-const targetDeviceIds = computed(() => selectedIds.value)
-
-const scopeLabel = computed(() => {
-  return selectedIds.value.length
-    ? `已选 ${selectedIds.value.length} 台设备`
-    : '请通过上方级联框选择要控制的设备'
-})
-
-// 自动拉取设备的可写点位，生成为指令行展示（按设备+点位去重）
-// 需先在级联框中选中设备（不再默认遍历全部设备，避免设备量大时逐台拉点位）
-const loadWritablePoints = async () => {
-  const ids = targetDeviceIds.value
-  if (!ids.length) {
-    ElMessage.info('请先在上方级联框中选择要控制的设备')
+const writeRow = async (row: any) => {
+  if (row.value === '' || row.value == null) {
+    ElMessage.warning('请先填写写入值')
     return
   }
   try {
-  // 并发拉取所有目标设备点位
-  await Promise.all(ids.map((id) => fetchTags(id)))
-
-  // 级联选中时：清掉不在选中设备集合内的旧指令，让表格精确反映筛选范围
-  instructions.value = instructions.value.filter((i) =>
-    selectedIds.value.includes(i.device_id as number)
-  )
-
-  let added = 0
-  for (const deviceId of ids) {
-    for (const t of getWritableTags(deviceId)) {
-      const exists = instructions.value.some(
-        (i) => i.device_id === deviceId && i.tag_id === t.id
-      )
-      if (!exists) {
-        instructions.value.push({
-          id: genId(),
-          device_id: deviceId,
-          tag_id: t.id,
-          value: '',
-          status: 'pending'
-        })
-        added++
-      }
-    }
-  }
-
-  executed.value = false
-  const validCount = instructions.value.filter((i) => i.device_id && i.tag_id).length
-  if (!validCount) {
-    // 当前范围内确实没有可写点位：保留一条占位行，方便用户手动添加
-    instructions.value = [
-      { id: genId(), device_id: null, tag_id: null, value: '', status: 'pending' }
-    ]
-    ElMessage.warning('当前范围内没有可写点位，可手动添加指令')
-    fetchLiveForDevices(ids).catch(() => {})
-    return
-  }
-  ElMessage.success(
-    `已加载可写点位：${scopeLabel.value}，共 ${validCount} 条（新增 ${added} 条）`
-  )
-  // 同步刷新实时值，保证「当前值 / 回读值」列随筛选范围更新
-  fetchLiveForDevices(ids).catch(() => {})
-  } catch (e: any) {
-    ElMessage.error(e?.message || '加载可写点位失败')
-  }
-}
-
-// 级联选择变化时自动按新范围刷新列表
-watch(selectedIds, () => {
-  loadWritablePoints()
-})
-
-// ── 指令列表 ──
-interface Instruction {
-  id: string
-  device_id: number | null
-  tag_id: number | null
-  value: string
-  // 执行结果
-  status?: 'pending' | 'success' | 'error' | 'skipped'
-  resultMsg?: string
-  // 写后即时回读值（来自写接口返回，作为首屏即时反馈；随后由实时刷新接管）
-  readbackValue?: any
-}
-
-let nextId = 1
-const genId = () => `inst_${nextId++}`
-
-const instructions = ref<Instruction[]>([])
-
-const stopOnError = ref(false)
-const executing = ref(false)
-const executed = ref(false)
-
-// 添加指令
-const addInstruction = () => {
-  instructions.value.push({
-    id: genId(),
-    device_id: null,
-    tag_id: null,
-    value: '',
-    status: 'pending'
-  })
-}
-
-// 从选中设备批量添加（同一点位）
-const batchDialogVisible = ref(false)
-const batchForm = reactive({
-  device_ids: [] as number[],
-  tag_id: undefined as number | undefined,
-  value: ''
-})
-const batchTagOptions = ref<any[]>([])
-
-const openBatchAdd = () => {
-  batchForm.device_ids = []
-  batchForm.tag_id = undefined
-  batchForm.value = ''
-  batchTagOptions.value = []
-  batchDialogVisible.value = true
-}
-
-const onBatchDeviceChange = async () => {
-  if (!batchForm.device_ids.length) {
-    batchTagOptions.value = []
-    return
-  }
-  try {
-  // 用第一个设备的点位作为参考（假设同类型设备点位一致）
-  const firstDeviceId = batchForm.device_ids[0]
-  await fetchTags(firstDeviceId)
-  batchTagOptions.value = getWritableTags(firstDeviceId)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取点位列表失败')
-  }
-}
-
-const confirmBatchAdd = () => {
-  if (!batchForm.device_ids.length || !batchForm.tag_id) {
-    ElMessage.warning('请选择设备和点位')
-    return
-  }
-  for (const deviceId of batchForm.device_ids) {
-    instructions.value.push({
-      id: genId(),
-      device_id: deviceId,
-      tag_id: batchForm.tag_id,
-      value: batchForm.value,
-      status: 'pending'
-    })
-  }
-  batchDialogVisible.value = false
-  ElMessage.success(`已添加 ${batchForm.device_ids.length} 条指令`)
-}
-
-const resetBatchForm = () => {
-  batchForm.device_ids = []
-  batchForm.tag_id = undefined
-  batchForm.value = ''
-  batchTagOptions.value = []
-}
-
-// 删除指令
-const removeInstruction = async (idx: number) => {
-  try {
-    await ElMessageBox.confirm('确认删除该指令？', '提示', { type: 'warning' })
-    instructions.value.splice(idx, 1)
+    await ElMessageBox.confirm(
+      `确认向「${row.device_name}」的点位「${row.name}」写入值 ${row.value}${row.unit ? ' ' + row.unit : ''}？`,
+      '写入确认',
+      { type: 'warning', confirmButtonText: '确认写入' }
+    )
   } catch {
-    // cancelled
-  }
-}
-
-// 清空指令
-const clearInstructions = () => {
-  instructions.value = [{ id: genId(), device_id: null, tag_id: null, value: '', status: 'pending' }]
-  executed.value = false
-}
-
-// 设备选择变更
-const onDeviceChange = async (idx: number, deviceId: number | null) => {
-  instructions.value[idx].tag_id = null
-  instructions.value[idx].status = 'pending'
-  instructions.value[idx].resultMsg = ''
-  try {
-    if (deviceId) await fetchTags(deviceId)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '获取点位列表失败')
-  }
-}
-
-// ── 执行 ──
-const executeAll = async () => {
-  // 校验
-  const validInstructions = instructions.value.filter(
-    (inst) => inst.device_id && inst.tag_id && inst.value !== '' && inst.value != null
-  )
-  if (!validInstructions.length) {
-    ElMessage.warning('没有有效的指令')
     return
   }
+  writingRow.value = row.id
+  row.status = 'pending'
+  row.resultMsg = ''
+  row.readbackValue = undefined
+  try {
+    const res: any = await writeDevice(row.device_id, { tag_id: row.id, value: Number(row.value) })
+    row.status = 'success'
+    row.resultMsg = '写入成功'
+    const body = res?.data || res
+    if (body?.readback_tag_id != null) {
+      row.readbackTagId = body.readback_tag_id
+      row.readbackTagName = body.readback_tag_name || row.readbackTagName || ''
+    }
+    if (body?.readback_value != null) {
+      row.readbackValue = body.readback_value
+      row.resultMsg += `，回读 ${body.readback_value}`
+    }
+    row.value = ''
+    refreshLive()
+  } catch (e: any) {
+    row.status = 'error'
+    row.resultMsg = e?.message || '写入失败'
+  } finally {
+    writingRow.value = null
+  }
+}
 
-  await ElMessageBox.confirm(
-    `确认执行 ${validInstructions.length} 条控制指令？`,
-    '批量控制确认',
-    { type: 'warning', confirmButtonText: '确认执行' }
-  )
+// ── 批量控制 ──
+const selectedRows = ref<any[]>([])
+const onSelectionChange = (rowsSel: any[]) => {
+  selectedRows.value = rowsSel
+}
+const batchValue = ref('')
+
+// 统一值应用到所选行
+const applyBatchValue = () => {
+  if (!selectedRows.value.length) {
+    ElMessage.warning('请先勾选点位')
+    return
+  }
+  if (batchValue.value === '') {
+    ElMessage.warning('请先输入要写入的值')
+    return
+  }
+  selectedRows.value.forEach((row) => {
+    row.value = batchValue.value
+  })
+  ElMessage.success(`已应用到 ${selectedRows.value.length} 个点位`)
+}
+
+// 执行：默认执行全部已填值的行；若勾选则只执行勾选行
+const execute = async (scope: 'selected' | 'all') => {
+  let targets: any[]
+  if (scope === 'selected') {
+    if (!selectedRows.value.length) {
+      ElMessage.warning('请先勾选点位')
+      return
+    }
+    targets = selectedRows.value
+  } else {
+    targets = rows.value
+  }
+  const valid = targets.filter((r) => r.value !== '' && r.value != null)
+  if (!valid.length) {
+    ElMessage.warning('没有已填写值的点位')
+    return
+  }
+  const title = scope === 'selected' ? '批量执行确认（所选点位）' : '批量执行确认（全部已填值点位）'
+  const detail = valid
+    .slice(0, 10)
+    .map((r) => `· ${r.device_name} / ${r.name} → ${r.value}`)
+    .join('\n')
+  const overflow = valid.length > 10 ? `\n...及其余 ${valid.length - 10} 个点位` : ''
+  try {
+    await ElMessageBox.confirm(
+      `确认向 ${valid.length} 个点位下发写入指令？\n\n${detail}${overflow}`,
+      title,
+      {
+        type: 'warning',
+        confirmButtonText: '确认执行',
+        cancelButtonText: '取消',
+        center: false
+      }
+    )
+  } catch {
+    return
+  }
 
   executing.value = true
-  executed.value = true
+
+  const items = valid.map((r) => ({
+    device_id: r.device_id,
+    tag_id: r.id,
+    value: Number(r.value)
+  }))
 
   // 重置状态
-  instructions.value.forEach((inst) => {
-    inst.status = 'pending'
-    inst.resultMsg = ''
-    inst.readbackValue = undefined
+  valid.forEach((r) => {
+    r.status = 'pending'
+    r.resultMsg = ''
+    r.readbackValue = undefined
   })
 
   try {
-    const items = validInstructions.map((inst) => ({
-      device_id: inst.device_id!,
-      tag_id: inst.tag_id!,
-      value: Number(inst.value)
-    }))
-
-    const res: any = await batchWriteDevices({
-      items,
-      stop_on_error: stopOnError.value
-    })
-
+    const res: any = await batchWriteDevices({ items, stop_on_error: stopOnError.value })
     const body = res?.data || res
     const results = body?.results || []
-
-    // 回填结果
     for (const r of results) {
-      const inst = validInstructions[r.index]
-      if (inst) {
-        inst.status = r.success ? 'success' : 'error'
-        inst.resultMsg = r.message
-        if (r.readback_value != null) inst.readbackValue = r.readback_value
+      const target = valid[r.index]
+      if (target) {
+        target.status = r.success ? 'success' : 'error'
+        target.resultMsg = r.message
+        if (r.success) target.value = ''
+        if (r.readback_tag_id != null) target.readbackTagId = r.readback_tag_id
+        if (r.readback_value != null) {
+          target.readbackValue = r.readback_value
+          target.resultMsg += `，回读 ${r.readback_value}`
+        }
       }
     }
-
-    // 执行后刷新所有相关设备的实时值：回读列同步回读寄存器最新状态（WS/轮询亦持续更新）
-    await fetchLiveForDevices(validInstructions.map((i) => i.device_id as number))
-
+    refreshLive()
     const successCount = body?.success ?? 0
     const failCount = body?.failed ?? 0
     if (failCount === 0) {
@@ -351,10 +288,10 @@ const executeAll = async () => {
     }
   } catch (e: any) {
     ElMessage.error(e?.message || '批量执行失败')
-    instructions.value.forEach((inst) => {
-      if (inst.status === 'pending') {
-        inst.status = 'error'
-        inst.resultMsg = '请求失败'
+    valid.forEach((r) => {
+      if (r.status === 'pending') {
+        r.status = 'error'
+        r.resultMsg = '请求失败'
       }
     })
   } finally {
@@ -362,214 +299,237 @@ const executeAll = async () => {
   }
 }
 
-// 统计
+const clearValues = () => {
+  rows.value.forEach((r) => {
+    r.value = ''
+    r.status = 'pending'
+    r.resultMsg = ''
+  })
+  selectedRows.value.forEach((r) => {
+    r.value = ''
+    r.status = 'pending'
+    r.resultMsg = ''
+  })
+  batchValue.value = ''
+}
+
+const stopOnError = ref(false)
+const executing = ref(false)
+
 const stats = computed(() => {
-  const total = instructions.value.filter(
-    (i) => i.device_id && i.tag_id && i.value !== ''
-  ).length
-  const success = instructions.value.filter((i) => i.status === 'success').length
-  const error = instructions.value.filter((i) => i.status === 'error').length
-  return { total, success, error }
+  const totalValid = rows.value.filter((r) => r.value !== '' && r.value != null).length
+  const success = rows.value.filter((r) => r.status === 'success').length
+  const error = rows.value.filter((r) => r.status === 'error').length
+  return { totalValid, success, error }
 })
 
-onMounted(async () => {
-  // 不再默认加载全部设备/点位：由用户通过级联框选择范围后按需加载
-  instructions.value = [
-    { id: genId(), device_id: null, tag_id: null, value: '', status: 'pending' }
-  ]
+// 自动刷新（可选）
+const REFRESH_OPTIONS = [
+  { label: '5秒', value: 5 },
+  { label: '10秒', value: 10 },
+  { label: '30秒', value: 30 },
+  { label: '关闭', value: 0 }
+]
+const refreshInterval = ref(10)
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+const setupAutoRefresh = () => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+  if (refreshInterval.value > 0) {
+    refreshTimer = setInterval(() => refreshLive(), refreshInterval.value * 1000)
+  }
+}
+
+onMounted(() => {
+  fetchRows()
+  wsManager.on('live_value', onLiveValue)
+  setupAutoRefresh()
+})
+
+onUnmounted(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
 })
 </script>
 
 <template>
   <ContentWrap title="批量远程控制">
     <ElAlert
-      title="批量控制可同时向多个设备下发写入指令。请仔细核对每条指令的设备、点位和数值。"
+      title="控制的是设备的可写点位：表格中填写「写入值」后执行。可单行写入，也可勾选多行批量写入。"
       type="warning"
       :closable="false"
       class="mb-16px"
     />
 
-    <!-- 组织架构级联筛选（与实时数据页一致）：选择被控制的设备 -->
-    <div class="mb-16px flex items-center gap-12px flex-wrap">
-      <OrgCascadeSelect v-model="selectedIds" v-model:path="orgPath" :writable-only="true" @search="loadWritablePoints" />
-      <ElTag type="info" effect="plain">当前范围：{{ scopeLabel }}</ElTag>
+    <!-- 组织架构级联筛选（同采集点位页） -->
+    <div class="mb-12px">
+      <OrgCascadeSelect
+        v-model="selectedIds"
+        v-model:path="orgPath"
+        :writable-only="true"
+        :enabled-only="true"
+        @search="onKeywordSearch"
+        @update:path="onPathChange"
+      />
     </div>
 
-    <!-- 操作栏 -->
-    <div class="flex items-center justify-between mb-12px">
-      <div class="flex items-center gap-8px">
-        <ElButton type="primary" @click="loadWritablePoints">加载可写点位（按当前范围）</ElButton>
-        <ElButton type="primary" plain @click="addInstruction">+ 添加指令</ElButton>
-        <ElButton @click="openBatchAdd">批量添加（同点多设备）</ElButton>
-        <ElButton type="danger" plain @click="clearInstructions">清空</ElButton>
-      </div>
-      <div class="flex items-center gap-12px">
-        <span class="text-13px text-gray-500">遇错停止</span>
-        <ElSwitch v-model="stopOnError" />
-        <ElButton
-          type="danger"
-          :loading="executing"
-          :disabled="!instructions.length"
-          @click="executeAll"
-        >
-          ▶ 执行全部指令
-        </ElButton>
-      </div>
+    <!-- 工具栏：搜索 + 批量操作 -->
+    <div class="flex items-center mb-12px flex-wrap gap-8px">
+      <ElInput
+        v-model="searchKeyword"
+        placeholder="搜索设备名/点位名"
+        clearable
+        style="max-width: 220px"
+        @keyup.enter="onKeywordSearch"
+        @clear="onKeywordSearch"
+      />
+      <ElButton type="primary" @click="onKeywordSearch">搜索</ElButton>
+      <span class="text-12px text-gray-500 ml-4px">当前范围：{{ scopeLabel }}</span>
+
+      <span class="flex-grow" />
+
+      <!-- 批量写入区（勾选行后出现） -->
+      <template v-if="selectedRows.length">
+        <span class="text-12px text-gray-500">已选 {{ selectedRows.length }} 项</span>
+        <ElInput
+          v-model="batchValue"
+          placeholder="统一写入值"
+          style="width: 120px"
+          size="small"
+          @keyup.enter="applyBatchValue"
+        />
+        <ElButton size="small" type="primary" plain @click="applyBatchValue">应用</ElButton>
+        <ElButton size="small" type="danger" @click="execute('selected')">执行所选</ElButton>
+        <span class="text-gray-300 mx-4px">|</span>
+      </template>
+
+      <span class="text-13px text-gray-500">遇错停止</span>
+      <ElSwitch v-model="stopOnError" />
+      <ElButton type="danger" :loading="executing" @click="execute('all')">▶ 执行全部</ElButton>
+      <ElButton @click="clearValues">清空</ElButton>
+
+      <!-- 自动刷新 -->
+      <span class="text-13px text-gray-500 ml-8px">刷新</span>
+      <ElSelect v-model="refreshInterval" style="width: 90px" @change="setupAutoRefresh">
+        <ElOption v-for="opt in REFRESH_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </ElSelect>
+      <ElButton link @click="refreshLive">
+        <ElTooltip content="立即刷新实时值" placement="top">
+          <span style="font-size: 16px">↻</span>
+        </ElTooltip>
+      </ElButton>
     </div>
 
     <!-- 执行结果统计 -->
-    <div v-if="executed" class="mb-12px">
-      <ElCard shadow="never">
-        <div class="flex items-center gap-24px">
-          <div>
-            <span class="text-12px text-gray-500">有效指令</span>
-            <div class="text-20px font-700">{{ stats.total }}</div>
-          </div>
-          <div>
-            <span class="text-12px text-gray-500">成功</span>
-            <div class="text-20px font-700 text-green-500">{{ stats.success }}</div>
-          </div>
-          <div>
-            <span class="text-12px text-gray-500">失败</span>
-            <div class="text-20px font-700 text-red-500">{{ stats.error }}</div>
-          </div>
-          <ElProgress
-            v-if="stats.total > 0"
-            :percentage="Math.round((stats.success / stats.total) * 100)"
-            :status="stats.error > 0 ? 'exception' : 'success'"
-            class="flex-1"
-          />
+    <ElCard v-if="stats.success > 0 || stats.error > 0" shadow="never" class="mb-12px">
+      <div class="flex items-center gap-24px">
+        <div>
+          <span class="text-12px text-gray-500">已填值</span>
+          <div class="text-20px font-700">{{ stats.totalValid }}</div>
         </div>
-      </ElCard>
-    </div>
+        <div>
+          <span class="text-12px text-gray-500">成功</span>
+          <div class="text-20px font-700 text-green-500">{{ stats.success }}</div>
+        </div>
+        <div>
+          <span class="text-12px text-gray-500">失败</span>
+          <div class="text-20px font-700 text-red-500">{{ stats.error }}</div>
+        </div>
+        <ElProgress
+          v-if="stats.totalValid > 0"
+          :percentage="Math.round((stats.success / stats.totalValid) * 100)"
+          :status="stats.error > 0 ? 'exception' : 'success'"
+          class="flex-1"
+        />
+      </div>
+    </ElCard>
 
-    <!-- 指令列表 -->
-    <ElTable v-loading="devicesLoading" :data="instructions" border stripe>
-      <template #empty><ElEmpty description="暂无数据" :image-size="80" /></template>
-      <ElTableColumn label="#" width="50" type="index" />
-      <ElTableColumn label="设备" min-width="200">
-        <template #default="{ row, $index }">
-          <OrgCascadeSelect
-            v-model="row.device_id"
-            single
-            :show-device-actions="false"
-            :show-actions="false"
-            :writable-only="true"
-            class="w-full"
-            placeholder="搜索选择设备"
-            @change="onDeviceChange($index, row.device_id)"
+    <!-- 可写点位表格 -->
+    <ElTable v-loading="loading" :data="rows" border stripe @selection-change="onSelectionChange">
+      <template #empty><ElEmpty description="当前筛选条件下没有可写点位" :image-size="80" /></template>
+      <ElTableColumn type="selection" width="45" />
+      <ElTableColumn sortable prop="device_name" label="设备" min-width="130" show-overflow-tooltip />
+      <ElTableColumn sortable prop="name" label="点位" min-width="120" show-overflow-tooltip />
+      <ElTableColumn label="地址" width="80">
+        <template #default="{ row }">{{ row.address ?? '—' }}</template>
+      </ElTableColumn>
+      <ElTableColumn label="单位" width="70">
+        <template #default="{ row }">{{ row.unit || '—' }}</template>
+      </ElTableColumn>
+      <ElTableColumn label="当前值" width="150" align="center">
+        <template #default="{ row }">
+          <template v-if="liveMap[row.device_id] && liveMap[row.device_id][row.id] != null">
+            <span class="text-15px font-700 tabular-nums">{{ liveMap[row.device_id][row.id].value }}</span>
+          </template>
+          <span v-else class="text-12px text-gray-400">—</span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="写入值" width="140">
+        <template #default="{ row }">
+          <ElInput
+            v-model="row.value"
+            placeholder="数值"
+            size="default"
+            @keyup.enter="writeRow(row)"
           />
         </template>
       </ElTableColumn>
-      <ElTableColumn label="可写点位" min-width="180">
-        <template #default="{ row }">
-          <ElSelect
-            v-model="row.tag_id"
-            class="w-full"
-            placeholder="选择点位"
-            filterable
-            :disabled="!row.device_id"
-          >
-            <ElOption
-              v-for="t in getWritableTags(row.device_id)"
-              :key="t.id"
-              :label="`${t.name} (${t.address})`"
-              :value="t.id"
-            />
-          </ElSelect>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn label="写入值" width="150">
-        <template #default="{ row }">
-          <ElInput v-model="row.value" placeholder="数值" />
-        </template>
-      </ElTableColumn>
-      <ElTableColumn label="状态" width="120">
+      <ElTableColumn label="状态" width="90">
         <template #default="{ row }">
           <ElTag v-if="row.status === 'success'" type="success" size="small">✓ 成功</ElTag>
           <ElTag v-else-if="row.status === 'error'" type="danger" size="small">✗ 失败</ElTag>
-          <ElTag v-else-if="row.status === 'skipped'" type="info" size="small">跳过</ElTag>
           <ElTag v-else type="info" size="small">待执行</ElTag>
         </template>
       </ElTableColumn>
-      <ElTableColumn label="结果" min-width="160" show-overflow-tooltip>
+      <ElTableColumn label="回读确认" min-width="170" show-overflow-tooltip>
         <template #default="{ row }">
-          <span :class="row.status === 'success' ? 'text-green-500' : 'text-red-500'">
+          <template v-if="row.readbackTagName">
+            <div class="text-12px text-gray-400">{{ row.readbackTagName }}</div>
+            <span
+              v-if="row.readbackValue != null"
+              class="text-15px font-700 text-green-600 tabular-nums"
+              >{{ row.readbackValue }}</span
+            >
+            <span
+              v-else-if="liveMap[row.device_id] && liveMap[row.device_id][row.readbackTagId] != null"
+              class="text-13px tabular-nums"
+              >{{ liveMap[row.device_id][row.readbackTagId].value }}</span
+            >
+            <span v-else class="text-12px text-gray-400">—</span>
+          </template>
+          <span v-else class="text-12px text-gray-400">未关联</span>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="结果" min-width="150" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span :class="row.status === 'success' ? 'text-green-500' : row.status === 'error' ? 'text-red-500' : 'text-gray-400'">
             {{ row.resultMsg || '' }}
           </span>
         </template>
       </ElTableColumn>
-      <ElTableColumn label="当前值" min-width="110">
+      <ElTableColumn label="操作" width="80" fixed="right">
         <template #default="{ row }">
-          <template v-if="row.device_id && row.tag_id && liveMap[row.device_id] && liveMap[row.device_id][row.tag_id] != null">
-            <span class="text-15px font-700">
-              {{ liveMap[row.device_id][row.tag_id].value }}
-            </span>
-            <span class="text-12px text-gray-400 ml-2px">{{ findTag(row.device_id, row.tag_id)?.unit || '' }}</span>
-          </template>
-          <span v-else class="text-12px text-gray-400">—</span>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn label="回读值" min-width="140">
-        <template #default="{ row }">
-          <template v-if="row.device_id && row.tag_id">
-            <template v-if="readbackTagOf(row.device_id, row.tag_id)">
-              <span class="text-15px font-700 text-blue-500">
-                {{ (liveMap[row.device_id] && liveMap[row.device_id][readbackTagOf(row.device_id, row.tag_id).id] != null)
-                  ? liveMap[row.device_id][readbackTagOf(row.device_id, row.tag_id).id].value
-                  : (row.readbackValue ?? '—') }}
-              </span>
-              <div class="text-12px text-gray-400">← {{ readbackTagOf(row.device_id, row.tag_id).name }}</div>
-            </template>
-            <span v-else class="text-12px text-gray-400">未配置</span>
-          </template>
-          <span v-else class="text-12px text-gray-400">—</span>
-        </template>
-      </ElTableColumn>
-      <ElTableColumn label="操作" width="70" fixed="right">
-        <template #default="{ $index }">
-          <ElButton link type="danger" @click="removeInstruction($index)">删除</ElButton>
+          <ElButton link type="primary" :loading="writingRow === row.id" @click="writeRow(row)"
+            >写入</ElButton
+          >
         </template>
       </ElTableColumn>
     </ElTable>
 
-    <!-- 批量添加对话框 -->
-    <ElDialog v-model="batchDialogVisible" title="批量添加指令（同点多设备）" width="560px" @close="resetBatchForm">
-      <ElForm label-width="90px">
-        <ElFormItem label="目标设备">
-          <OrgCascadeSelect
-            v-model="batchForm.device_ids"
-            class="w-full"
-            :writable-only="true"
-            :show-actions="false"
-            placeholder="选择组织层级后搜索多个设备"
-            @change="onBatchDeviceChange"
-          />
-        </ElFormItem>
-        <ElFormItem label="可写点位">
-          <ElSelect
-            v-model="batchForm.tag_id"
-            class="w-full"
-            filterable
-            placeholder="选择点位（取第一个设备的点位列表）"
-            :disabled="!batchForm.device_ids.length"
-          >
-            <ElOption
-              v-for="t in batchTagOptions"
-              :key="t.id"
-              :label="`${t.name} (地址 ${t.address})`"
-              :value="t.id"
-            />
-          </ElSelect>
-        </ElFormItem>
-        <ElFormItem label="写入值">
-          <ElInput v-model="batchForm.value" placeholder="要写入的值" />
-        </ElFormItem>
-      </ElForm>
-      <template #footer>
-        <ElButton @click="batchDialogVisible = false">取消</ElButton>
-        <ElButton type="primary" @click="confirmBatchAdd">添加</ElButton>
-      </template>
-    </ElDialog>
+    <div class="flex justify-end mt-12px">
+      <ElPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :total="total"
+        layout="total, sizes, prev, pager, next"
+        :page-sizes="[20, 50, 100, 200]"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
+      />
+    </div>
   </ContentWrap>
 </template>

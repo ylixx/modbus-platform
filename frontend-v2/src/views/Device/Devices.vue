@@ -23,7 +23,8 @@ import {
   ElDivider,
   ElSwitch,
   ElAlert,
-  ElTooltip
+  ElTooltip,
+  ElCheckbox
 } from 'element-plus'
 import {
   getDevices,
@@ -33,10 +34,15 @@ import {
   duplicateDevice,
   getOrgTree,
   unwrapList,
+  unwrap,
+  getDeviceTemplates,
+  getDeviceTemplate,
+  createFromTemplate,
   exportDevicesCsv,
   getImportTemplateDevices,
   importDevices,
-  getDevicePublishStatus
+  getDevicePublishStatus,
+  saveDeviceAsTemplate
 } from '@/api/modbus'
 import OrgCascadeSelect from '@/components/OrgCascadeSelect.vue'
 import { saveBlob, deviceStatusType, deviceStatusText, concurrentRun } from '@/utils/modbus'
@@ -214,6 +220,58 @@ const protocols = [
 
 const protocolLabel = (p?: string) => protocols.find((pr) => pr.value === p)?.label || p || '—'
 
+// ── 模板选择（新增设备时可选，走模板创建链路） ──
+const templates = ref<any[]>([])
+const templateId = ref<any>(null)
+const templateDetail = ref<any>(null)
+const tplBind = ref(true)
+const tplAlarm = ref(true)
+
+const fetchTemplates = async () => {
+  try {
+    const { list: l } = unwrapList(await getDeviceTemplates())
+    templates.value = l
+  } catch {
+    templates.value = []
+  }
+}
+
+const onTemplateChange = async (id: number | null) => {
+  templateDetail.value = null
+  if (!id) return
+  try {
+    const detail = unwrap(await getDeviceTemplate(id))
+    templateDetail.value = detail
+    const cfg = detail.config || {}
+    form.protocol = detail.protocol
+    // 用模板连接参数默认值预填表单
+    form.host = cfg.host || ''
+    form.port = cfg.port ?? 502
+    form.slave_id = cfg.slave_id ?? 1
+    form.serial_port = cfg.serial_port || ''
+    form.baudrate = cfg.baudrate ?? 9600
+    form.parity = cfg.parity || 'none'
+    form.data_bits = cfg.data_bits ?? 8
+    form.stop_bits = cfg.stop_bits ?? 1
+    form.mqtt_broker = cfg.mqtt_broker || ''
+    form.mqtt_topic_prefix = cfg.mqtt_topic_prefix || ''
+    form.mqtt_username = cfg.mqtt_username || ''
+    form.mqtt_password = cfg.mqtt_password || ''
+    form.mqtt_client_id = cfg.mqtt_client_id || ''
+    form.mqtt_use_tls = !!cfg.mqtt_use_tls
+    form.mqtt_is_gateway = !!cfg.mqtt_is_gateway
+    form.mqtt_ca_cert = cfg.mqtt_ca_cert || ''
+    form.opc_endpoint = cfg.opc_endpoint || ''
+    form.opc_namespace = cfg.opc_namespace ?? 2
+    form.opc_security_mode = cfg.opc_security_mode || 'None'
+    form.poll_interval = cfg.poll_interval ?? 5
+    formTab.value = 'basic'
+  } catch (e: any) {
+    ElMessage.error(e?.message || '模板加载失败')
+    templateId.value = null
+  }
+}
+
 // ── 表单 ──
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增设备')
@@ -322,6 +380,10 @@ const openCreate = () => {
     has_lab_data: false,
     description: ''
   })
+  templateId.value = null
+  templateDetail.value = null
+  tplBind.value = true
+  tplAlarm.value = true
   dialogVisible.value = true
   formTab.value = 'basic'
 }
@@ -362,6 +424,8 @@ const openEdit = (row: any) => {
     has_lab_data: !!row.has_lab_data,
     description: row.description || ''
   })
+  templateId.value = null
+  templateDetail.value = null
   dialogVisible.value = true
   formTab.value = 'basic'
 }
@@ -424,6 +488,47 @@ const submit = async () => {
   if (form.id) {
     await updateDevice(form.id, payload)
     ElMessage.success('更新成功')
+  } else if (templateId.value && templateDetail.value) {
+    // 模板创建链路：自动生成点位 + 可选绑定 + 可选告警规则
+    const tplPayload: any = {
+      name: form.name,
+      org_node_id: form.org_node_id ?? null,
+      description: form.description,
+      bind: tplBind.value,
+      include_alarm_rules: tplAlarm.value,
+      config: {}
+    }
+    const cfg: any = {}
+    if (templateDetail.value.protocol === 'modbus_tcp') {
+      tplPayload.host = form.host
+      cfg.port = form.port
+      cfg.slave_id = form.slave_id
+    } else if (templateDetail.value.protocol === 'modbus_rtu') {
+      tplPayload.serial_port = form.serial_port
+      cfg.baudrate = form.baudrate
+      cfg.parity = form.parity
+      cfg.data_bits = form.data_bits
+      cfg.stop_bits = form.stop_bits
+      cfg.slave_id = form.slave_id
+    } else if (templateDetail.value.protocol === 'mqtt') {
+      tplPayload.mqtt_broker = form.mqtt_broker
+      cfg.mqtt_topic_prefix = form.mqtt_topic_prefix
+      cfg.mqtt_username = form.mqtt_username
+      cfg.mqtt_password = form.mqtt_password
+      cfg.mqtt_client_id = form.mqtt_client_id
+      cfg.mqtt_use_tls = form.mqtt_use_tls
+      cfg.mqtt_is_gateway = form.mqtt_is_gateway
+      cfg.mqtt_ca_cert = form.mqtt_ca_cert
+    } else if (templateDetail.value.protocol === 'opc_ua') {
+      tplPayload.opc_endpoint = form.opc_endpoint
+      cfg.opc_namespace = form.opc_namespace
+      cfg.opc_security_mode = form.opc_security_mode
+    }
+    cfg.poll_interval = form.poll_interval
+    tplPayload.config = cfg
+    const res: any = await createFromTemplate(templateId.value, tplPayload)
+    const body = res?.data || res
+    ElMessage.success(body?.message || '从模板创建设备成功')
   } else {
     await createDevice(payload)
     ElMessage.success('创建成功')
@@ -465,6 +570,36 @@ const doDuplicate = async () => {
   }
 }
 
+// ── 设备 → 模板 ──
+const tplDialogVisible = ref(false)
+const tplForm = reactive({ deviceId: 0, name: '', category: '', description: '', sourceName: '' })
+
+const openSaveAsTemplate = (row: any) => {
+  tplForm.deviceId = row.id
+  tplForm.name = row.name + ' 模板'
+  tplForm.category = ''
+  tplForm.description = ''
+  tplForm.sourceName = row.name
+  tplDialogVisible.value = true
+}
+const doSaveAsTemplate = async () => {
+  if (!tplForm.name.trim()) {
+    ElMessage.warning('请输入模板名称')
+    return
+  }
+  try {
+    await saveDeviceAsTemplate(tplForm.deviceId, {
+      name: tplForm.name.trim(),
+      category: tplForm.category,
+      description: tplForm.description
+    })
+    ElMessage.success('已保存为模板')
+    tplDialogVisible.value = false
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '保存模板失败')
+  }
+}
+
 // ── 设备发布状态 ──
 const publishMap = ref<Record<number, any>>({})
 let publishTimer: any = null
@@ -497,6 +632,7 @@ const onDeviceStatus = (msg: any) => {
 onMounted(() => {
   fetchList()
   fetchOrgTree()
+  fetchTemplates()
   fetchPublishStatus()
   publishTimer = setInterval(fetchPublishStatus, 15000)
   wsManager.on('device_status', onDeviceStatus)
@@ -582,7 +718,14 @@ onUnmounted(() => {
       </template>
       <ElTableColumn type="selection" width="50" :reserve-selection="true" />
       <ElTableColumn sortable prop="id" label="ID" width="70" />
-      <ElTableColumn sortable prop="name" label="设备名称" min-width="160" show-overflow-tooltip />
+      <ElTableColumn sortable prop="name" label="设备名称" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="inline-flex items-center gap-6px">
+            {{ row.name }}
+            <ElTag v-if="!row.enabled" type="danger" size="small" effect="dark">禁用</ElTag>
+          </span>
+        </template>
+      </ElTableColumn>
       <ElTableColumn label="层级" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">
           <span class="text-gray-500">{{
@@ -617,6 +760,20 @@ onUnmounted(() => {
           <ElTag :type="statusType(row.status)">{{ statusText(row.status) }}</ElTag>
         </template>
       </ElTableColumn>
+      <ElTableColumn label="模板" width="140">
+        <template #default="{ row }">
+          <ElTooltip
+            v-if="row.template_id"
+            :content="row.template_synced ? '已同步到模板最新版本' : '模板有更新，需同步到设备'"
+            placement="top"
+          >
+            <ElTag :type="row.template_synced ? 'success' : 'warning'" size="small">{{
+              row.template_name
+            }}</ElTag>
+          </ElTooltip>
+          <span v-else class="text-gray-400 text-12px">—</span>
+        </template>
+      </ElTableColumn>
       <ElTableColumn label="MQTT发布" width="100">
         <template #default="{ row }">
           <template v-if="publishMap[row.id]?.running">
@@ -644,6 +801,9 @@ onUnmounted(() => {
           <ElButton v-hasPermi="['device.write']" link type="primary" @click="openDuplicate(row)"
             >复制</ElButton
           >
+          <ElButton v-hasPermi="['template.write']" link type="primary" @click="openSaveAsTemplate(row)"
+            >存为模板</ElButton
+          >
           <ElButton v-hasPermi="['device.write']" link type="danger" @click="remove(row)"
             >删除</ElButton
           >
@@ -669,6 +829,39 @@ onUnmounted(() => {
         <ElTabs v-model="formTab">
           <!-- Tab 1: 基本信息 -->
           <ElTabPane label="基本信息" name="basic">
+            <template v-if="!form.id">
+              <ElFormItem label="套用模板">
+                <ElSelect
+                  v-model="templateId"
+                  class="w-full"
+                  clearable
+                  filterable
+                  placeholder="可选：选择模板自动预填连接参数并生成点位"
+                  @change="onTemplateChange"
+                >
+                  <ElOption
+                    v-for="t in templates"
+                    :key="t.id"
+                    :label="`${t.name}（${protocolLabel(t.protocol)} / 点位 ${(t.tags || []).length} 个）`"
+                    :value="t.id"
+                  />
+                </ElSelect>
+              </ElFormItem>
+              <template v-if="templateDetail">
+                <ElAlert
+                  type="info"
+                  :closable="false"
+                  class="mb-16px"
+                  :title="`模板「${templateDetail.name}」：点位 ${(templateDetail.tags || []).length} 个，告警规则 ${(templateDetail.alarm_rules || []).length} 条`"
+                />
+                <ElFormItem label="模板选项">
+                  <div class="flex flex-col gap-4px">
+                    <ElCheckbox v-model="tplBind">绑定模板（模板更新后可同步）</ElCheckbox>
+                    <ElCheckbox v-model="tplAlarm">生成模板默认告警规则</ElCheckbox>
+                  </div>
+                </ElFormItem>
+              </template>
+            </template>
             <ElFormItem label="设备名称" prop="name">
               <ElInput v-model="form.name" placeholder="请输入设备名称" />
             </ElFormItem>
@@ -962,6 +1155,31 @@ onUnmounted(() => {
       <template #footer>
         <ElButton @click="dupDialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="doDuplicate">确认复制</ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- 存为模板对话框 -->
+    <ElDialog v-model="tplDialogVisible" title="保存为设备模板" width="480px" @close="tplForm.name = '', tplForm.category = '', tplForm.description = ''">
+      <ElAlert
+        :title="`从「${tplForm.sourceName}」保存模板：吸取连接参数与全部启用点位`"
+        type="info"
+        :closable="false"
+        class="mb-16px"
+      />
+      <ElForm label-width="100px">
+        <ElFormItem label="模板名称">
+          <ElInput v-model="tplForm.name" placeholder="请输入模板名称" />
+        </ElFormItem>
+        <ElFormItem label="分类">
+          <ElInput v-model="tplForm.category" placeholder="如：PLC / 传感器" />
+        </ElFormItem>
+        <ElFormItem label="描述">
+          <ElInput v-model="tplForm.description" type="textarea" :rows="2" />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="tplDialogVisible = false">取消</ElButton>
+        <ElButton type="primary" @click="doSaveAsTemplate">保存模板</ElButton>
       </template>
     </ElDialog>
   </ContentWrap>

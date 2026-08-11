@@ -134,6 +134,58 @@ const doTest = async () => {
   }
 }
 
+// ── 内置变量说明（点击插入到光标处） ──
+const editorRef = ref()
+const BUILTIN_VARS: { name: string; desc: string; insert: string }[] = [
+  {
+    name: 'raw_value',
+    desc: '本次采集的原始值（缩放系数/偏移已应用）',
+    insert: 'raw_value'
+  },
+  {
+    name: 'history',
+    desc: '最近的历史处理值列表（新的在末尾），如 history[-1]',
+    insert: 'history[-1] if history else raw_value'
+  },
+  {
+    name: 'tag',
+    desc: '当前点位配置字典，如 tag.get(\'params\', {})',
+    insert: "tag.get('params', {})"
+  },
+  {
+    name: 'context',
+    desc: '执行上下文，含 device_id / tag_id / timestamp',
+    insert: "context.get('device_id')"
+  },
+  {
+    name: 'math',
+    desc: '数学库：sqrt / log / sin / cos / pi / e …',
+    insert: 'math.sqrt(raw_value)'
+  },
+  {
+    name: 'datetime',
+    desc: 'datetime 模块，如 datetime.now()',
+    insert: 'datetime.now().isoformat()'
+  }
+]
+const insertVar = (v: { insert: string }) => {
+  const editor = editorRef.value?.getEditor?.()
+  if (editor) {
+    editor.executeEdits('script-insert', [
+      { range: editor.getSelection() ?? editor.getModel()?.getFullModelRange(), text: v.insert }
+    ])
+    editor.focus()
+  } else {
+    form.code += v.insert
+  }
+}
+const SCRIPT_HINTS = [
+  '脚本必须定义 process(raw_value, history, tag, context) 函数',
+  '返回 float 表示处理后的值（质量 good）；返回 {value, quality, alarm} 可携带质量与报警信息',
+  '内置变量：raw_value / history / tag / context / math / datetime',
+  '禁止 import 外部模块与访问系统对象；脚本超时（默认 1000ms）会被终止'
+]
+
 onMounted(() => {
   fetchList()
   fetchTemplates()
@@ -199,15 +251,34 @@ onMounted(() => {
           <ElInput v-model="form.description" type="textarea" :rows="2" />
         </ElFormItem>
         <ElFormItem label="脚本内容" prop="code">
-          <div class="w-full border border-solid border-gray-200 rounded">
-            <CodeEditor
-              v-model="form.code"
-              :language="form.language === 'python' ? 'python' : 'javascript'"
-              theme="vs-dark"
-              :height="400"
-              :language-selector="false"
-              :theme-selector="false"
-            />
+          <div class="w-full">
+            <div class="mb-8px rounded border border-solid border-gray-200 bg-gray-50 p-8px text-12px">
+              <div v-for="(h, i) in SCRIPT_HINTS" :key="i" class="leading-20px text-gray-600">
+                · {{ h }}
+              </div>
+              <div class="mt-8px flex flex-wrap gap-6px">
+                <ElTag
+                  v-for="v in BUILTIN_VARS"
+                  :key="v.name"
+                  class="cursor-pointer select-none"
+                  :title="`点击插入：${v.desc}`"
+                  @click="insertVar(v)"
+                >
+                  {{ v.name }}
+                </ElTag>
+              </div>
+            </div>
+            <div class="border border-solid border-gray-200 rounded">
+              <CodeEditor
+                ref="editorRef"
+                v-model="form.code"
+                :language="form.language === 'python' ? 'python' : 'javascript'"
+                theme="vs-dark"
+                :height="400"
+                :language-selector="false"
+                :theme-selector="false"
+              />
+            </div>
           </div>
         </ElFormItem>
         <ElFormItem label="启用">

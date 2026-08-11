@@ -65,7 +65,7 @@ const openDetail = (d: any) => router.push(`/device/detail/${d.id}`)
 const fetchData = async () => {
   loading.value = true
   try {
-    devices.value = unwrapList(await getAllDevices()).list
+    devices.value = unwrapList(await getAllDevices({ enabled: true })).list
   } catch (e) {
     // 忽略单次刷新失败，保留上次数据
   } finally {

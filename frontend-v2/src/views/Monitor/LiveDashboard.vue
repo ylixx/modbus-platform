@@ -82,7 +82,8 @@ const fetchAll = async (showLoading = true) => {
     const res = await getDevices({
       page: page.value,
       page_size: pageSize.value,
-      search: searchKey.value || undefined
+      search: searchKey.value || undefined,
+      enabled: true
     })
     const { list, total } = unwrapList(res)
     totalDevices.value = total ?? list.length

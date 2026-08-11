@@ -687,6 +687,7 @@ class ModbusEngineV2:
                 if result is not None and getattr(result, "isError", None) and result.isError():
                     logger.warning(f"[写] device {device.id} tag {tag.name} 从机返回错误: {result}")
                     return False
+                await self._readback_after_write(client, device, tag)
                 return True
             except (ModbusIOException, ConnectionException, OSError, asyncio.TimeoutError) as e:
                 logger.warning(f"[写] {device.host}:{device.port} 写入连接异常({e})，重连一次")
@@ -699,6 +700,7 @@ class ModbusEngineV2:
                     result = await _do_write()
                     if result is not None and getattr(result, "isError", None) and result.isError():
                         return False
+                    await self._readback_after_write(client, device, tag)
                     return True
                 except (ModbusIOException, ConnectionException, OSError, asyncio.TimeoutError) as e2:
                     raise ConnectError(f"write reconnect {device.host}:{device.port} failed: {e2}")
@@ -707,6 +709,72 @@ class ModbusEngineV2:
             except Exception as e:
                 logger.error(f"[写] device {device.id} tag {tag.name} 写入异常: {e}")
                 return False
+
+    async def _readback_after_write(self, client, device: Device, tag: DeviceTag):
+        """写成功后立即回读：写入点位本身 + 关联回读点位，更新缓存并推送 WS。
+
+        尽力而为：回读失败不影响写入结果（写入已成功，值由下一轮轮询纠正）。
+        注意：调用方须已持有连接锁（锁内直接读，不得再调 _read_with_reconnect 重取锁，否则死锁）。
+        """
+        await self._readback_one(client, device, tag)
+        if tag.readback_tag_id:
+            try:
+                db = SessionLocal()
+                try:
+                    rb_tag = db.query(DeviceTag).filter(DeviceTag.id == tag.readback_tag_id).first()
+                finally:
+                    db.close()
+                if rb_tag:
+                    await self._readback_one(client, device, rb_tag)
+            except Exception as e:
+                logger.warning(f"[写] device {device.id} 读回读点位({tag.readback_tag_id})失败: {e}")
+
+    async def _readback_one(self, client, device: Device, tag: DeviceTag):
+        """回读单个点位（锁内调用，不重取锁），更新实时缓存 + 缓冲 + WS 推送。"""
+        try:
+            if not client.connected:
+                logger.warning(f"[写] device {device.id} tag {tag.name} 回读前连接已断开，跳过回读")
+                return
+            raw_values = await self._read_registers_async(
+                client, device.slave_id, tag.function_code, tag.address,
+                get_register_count(tag.data_type, tag.register_count),
+            )
+            if raw_values is None:
+                logger.warning(f"[写] device {device.id} tag {tag.name} 回读失败（从站无应答）")
+                return
+            value = decode_value(
+                raw_values, 0, tag.data_type, tag.byte_order,
+                bit_index=tag.bit_index,
+                register_count=get_register_count(tag.data_type, tag.register_count),
+                function_code=tag.function_code,
+            )
+            if value is None:
+                return
+            processed = value * tag.scale_factor + tag.offset
+            if tag.decimal_places is not None:
+                processed = round(processed, tag.decimal_places)
+
+            # 更新实时缓存 + 缓冲 + WS 推送（与采集路径一致）
+            key = f"{device.id}_{tag.id}"
+            now_iso = datetime.now(timezone.utc).isoformat()
+            self._live_values[key] = {
+                "value": processed, "raw_value": str(value),
+                "quality": "good", "time": now_iso,
+            }
+            write_buffer.add({
+                "device_id": device.id,
+                "tag_id": tag.id,
+                "tag_name": tag.name,
+                "value": processed,
+                "raw_value": str(value),
+                "quality": "good",
+                "recorded_at": datetime.now(timezone.utc),
+            })
+            ws_pusher.push_live_value(device.id, tag.id, tag.name, processed, "good")
+            from app.services.alarm_service import alarm_service
+            alarm_service.evaluate(device.id, tag.id, tag.name, processed)
+        except Exception as e:
+            logger.warning(f"[写] device {device.id} tag {tag.name} 回读异常: {e}")
 
     def _write_via_sync_client(self, device: Device, tag: DeviceTag, value) -> bool:
         """引擎未运行时的退回实现（一次性同步连接），保证仍可写。"""
@@ -742,7 +810,43 @@ class ModbusEngineV2:
                     return False
             else:
                 return False
-            return not result.isError()
+            ok = not result.isError()
+            if ok:
+                try:
+                    from pymodbus.client import ModbusTcpClient as _M
+                    # noqa - 已用同一连接回读一次
+                    if tag.function_code == FunctionCode.COIL:
+                        rb = client.read_coils(tag.address, count=1, slave=device.slave_id)
+                        raw = rb.bits[:1] if not rb.isError() else None
+                    elif tag.function_code == FunctionCode.HOLDING_REGISTER:
+                        rb = client.read_holding_registers(
+                            tag.address, count=get_register_count(tag.data_type, tag.register_count),
+                            slave=device.slave_id,
+                        )
+                        raw = rb.registers if not rb.isError() else None
+                    else:
+                        raw = None
+                    if raw:
+                        val = decode_value(
+                            raw, 0, tag.data_type, tag.byte_order,
+                            bit_index=tag.bit_index,
+                            register_count=get_register_count(tag.data_type, tag.register_count),
+                            function_code=tag.function_code,
+                        )
+                        if val is not None:
+                            processed = val * tag.scale_factor + tag.offset
+                            if tag.decimal_places is not None:
+                                processed = round(processed, tag.decimal_places)
+                            key = f"{device.id}_{tag.id}"
+                            now_iso = datetime.now(timezone.utc).isoformat()
+                            self._live_values[key] = {
+                                "value": processed, "raw_value": str(val),
+                                "quality": "good", "time": now_iso,
+                            }
+                            ws_pusher.push_live_value(device.id, tag.id, tag.name, processed, "good")
+                except Exception as e:
+                    logger.warning(f"[写] device {device.id} tag {tag.name} 同步回读异常: {e}")
+            return ok
         finally:
             client.close()
 

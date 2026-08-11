@@ -512,7 +512,7 @@ const scriptName = (id?: number | null) =>
 
 const fetchScripts = async () => {
   try {
-    const res = await getScripts({ page: 1, page_size: 200, enabled_only: true })
+    const res = await getScripts({ page: 1, page_size: 100, enabled_only: true })
     scripts.value = unwrapList(res).list
   } catch {
     scripts.value = []

@@ -84,7 +84,7 @@ function updateMonacoVal(val: string) {
   }
 }
 
-defineExpose({ updateOptions })
+defineExpose({ updateOptions, getEditor })
 </script>
 
 <template>

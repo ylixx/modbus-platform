@@ -19,7 +19,7 @@ export const getAlarmTrend = (params?: any) =>
 
 // ============ Devices ============
 export const getDevices = (params?: any) => request.get({ url: '/devices', params })
-export const getAllDevices = () => request.get({ url: '/devices/all' })
+export const getAllDevices = (params?: any) => request.get({ url: '/devices/all', params })
 export const getDevice = (id: number | string) => request.get({ url: `/devices/${id}` })
 export const createDevice = (data: any) => request.post({ url: '/devices', data })
 export const updateDevice = (id: number, data: any) => request.put({ url: `/devices/${id}`, data })
@@ -152,10 +152,21 @@ export const runArchive = (data?: any) => request.post({ url: '/archive/run', da
 export const cleanArchive = (data?: any) => request.post({ url: '/archive/clean', data })
 
 // ============ Templates ============
-export const getDeviceTemplates = () => request.get({ url: '/templates/devices' })
+export const getDeviceTemplates = (params?: any) => request.get({ url: '/templates/devices', params })
 export const getDeviceTemplate = (id: number) => request.get({ url: `/templates/devices/${id}` })
+export const createDeviceTemplate = (data: any) => request.post({ url: '/templates/devices', data })
+export const updateDeviceTemplate = (id: number, data: any) => request.put({ url: `/templates/devices/${id}`, data })
+export const deleteDeviceTemplate = (id: number) => request.delete({ url: `/templates/devices/${id}` })
+export const duplicateDeviceTemplate = (id: number) => request.post({ url: `/templates/devices/${id}/duplicate` })
 export const createFromTemplate = (id: number, data: any) =>
   request.post({ url: `/templates/devices/${id}/create`, data })
+export const saveDeviceAsTemplate = (deviceId: number, data: any) =>
+  request.post({ url: `/templates/devices/${deviceId}/save-as-template`, data })
+export const bindDeviceTemplate = (deviceId: number, templateId: number) =>
+  request.post({ url: `/templates/devices/${deviceId}/bind`, data: { template_id: templateId } })
+export const getDeviceTemplateStatus = (deviceId: number) =>
+  request.get({ url: `/templates/devices/${deviceId}/template-status` })
+export const syncDevicesFromTemplate = (data: any) => request.post({ url: '/templates/sync', data })
 export const getAlarmRuleTemplates = () => request.get({ url: '/templates/alarm-rules' })
 
 // ============ Scripts ============

@@ -160,6 +160,9 @@ class TagListOut(BaseModel):
     data_type: str = ""
     writable: bool = False
     enabled: bool = True
+    script_id: Optional[int] = None
+    readback_tag_id: Optional[int] = None
+    readback_tag_name: str = ""
     class Config:
         from_attributes = True
 
@@ -290,6 +293,10 @@ class DeviceOut(BaseModel):
     org_node_id: Optional[int] = None
     org_path: str = ""  # 组织架构全路径：厂 / 区 / 班 / 站 / 位置
     protocol: str
+    template_id: Optional[int] = None
+    template_name: str = ""
+    template_version: Optional[int] = None
+    template_synced: bool = False
 
     factory: str
     workshop: str

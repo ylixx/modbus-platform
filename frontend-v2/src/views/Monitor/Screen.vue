@@ -28,7 +28,7 @@ const fetchData = async () => {
     // ignore
   }
   try {
-    devices.value = unwrapList(await getAllDevices()).list
+    devices.value = unwrapList(await getAllDevices({ enabled: true })).list
   } catch (e) {
     // ignore
   }

@@ -404,6 +404,7 @@ onMounted(() => {
           <OrgCascadeSelect
             v-model="form.device_id"
             single
+            enabled-only
             :show-device-actions="false"
             :show-actions="false"
             class="w-full"

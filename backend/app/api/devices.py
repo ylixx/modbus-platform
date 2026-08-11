@@ -56,6 +56,21 @@ def _device_out(device: Device, pmap: dict) -> DeviceOut:
     return out
 
 
+def _attach_template_info(out: DeviceOut, binding) -> DeviceOut:
+    """附加模板绑定摘要：template_id / template_name / 是否同步到最新。"""
+    if binding is None or binding.template is None:
+        out.template_id = None
+        out.template_name = ""
+        out.template_version = None
+        out.template_synced = False
+        return out
+    out.template_id = binding.template_id
+    out.template_name = binding.template.name
+    out.template_version = binding.template_version
+    out.template_synced = (binding.template_version or 0) >= (binding.template.version or 0)
+    return out
+
+
 # ============ Device Groups ============
 
 @router.get("/groups", response_model=List[GroupOut])
@@ -150,6 +165,7 @@ def list_devices(
     search: str = Query("", max_length=100),
     writable: bool = None,
     has_lab_data: bool = None,
+    enabled: bool = Query(None, description="按启用状态过滤：True=仅启用，False=仅禁用，None=全部（设备管理页用）"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("device.read")),
 ):
@@ -191,10 +207,25 @@ def list_devices(
         q = q.filter(Device.id.in_(writable_subq))
     if has_lab_data is not None:
         q = q.filter(Device.has_lab_data == has_lab_data)
+    if enabled is not None:
+        q = q.filter(Device.enabled == enabled)
     total = q.count()
     items = q.order_by(Device.id).offset((page - 1) * page_size).limit(page_size).all()
     pmap = _org_path_map(db)
-    return PageResponse(total=total, page=page, page_size=page_size, data=[_device_out(i, pmap) for i in items])
+    outs = [_device_out(i, pmap) for i in items]
+    try:
+        from app.models.template import DeviceTemplateBinding
+        bindings = {
+            b.device_id: b
+            for b in db.query(DeviceTemplateBinding).filter(
+                DeviceTemplateBinding.device_id.in_([o.id for o in outs])
+            ).all()
+        }
+        for o in outs:
+            _attach_template_info(o, bindings.get(o.id))
+    except Exception:
+        pass
+    return PageResponse(total=total, page=page, page_size=page_size, data=outs)
 
 
 @router.get("/all", response_model=List[DeviceOut])
@@ -202,6 +233,7 @@ def list_all_devices(
     search: str = Query(""),
     org_node_id: int = Query(None),
     limit: int = Query(500, ge=1, le=2000),
+    enabled: bool = Query(None, description="按启用状态过滤：True=仅启用，None=全部"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("device.read")),
 ):
@@ -217,8 +249,23 @@ def list_all_devices(
         q = q.filter(Device.org_node_id.in_(ids))
     if search and search.strip():
         q = q.filter(Device.name.ilike(f"%{search.strip()}%"))
+    if enabled is not None:
+        q = q.filter(Device.enabled == enabled)
     pmap = _org_path_map(db)
-    return [_device_out(i, pmap) for i in q.order_by(Device.id).limit(limit).all()]
+    outs = [_device_out(i, pmap) for i in q.order_by(Device.id).limit(limit).all()]
+    try:
+        from app.models.template import DeviceTemplateBinding
+        bindings = {
+            b.device_id: b
+            for b in db.query(DeviceTemplateBinding).filter(
+                DeviceTemplateBinding.device_id.in_([o.id for o in outs])
+            ).all()
+        }
+        for o in outs:
+            _attach_template_info(o, bindings.get(o.id))
+    except Exception:
+        pass
+    return outs
 
 
 # ============ Tags（必须在 /{device_id} 之前注册，否则 /tags/all 会被路径参数吞掉） ============
@@ -251,6 +298,8 @@ def list_all_tags(
     org_node_id: int = Query(None),
     device_ids: str = Query(""),
     search: str = Query(""),
+    writable: bool = Query(None),
+    device_enabled: bool = Query(None, description="按设备启用状态过滤：True=仅启用设备的点位，None=全部"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("tag.read")),
 ):
@@ -269,6 +318,12 @@ def list_all_tags(
                 q = q.filter(DeviceTag.device_id.in_(did_list))
         except ValueError:
             pass
+    # 仅可写点位（批量控制等写值场景）
+    if writable is not None:
+        q = q.filter(DeviceTag.writable == writable)
+    # 仅启用设备的点位（批量控制等读写界面；设备管理页传 None 显示全部）
+    if device_enabled is not None:
+        q = q.filter(Device.enabled == device_enabled)
     # 关键词搜索（设备名 or 点位名）
     if search and search.strip():
         kw = f"%{search.strip()}%"
@@ -282,10 +337,18 @@ def list_all_tags(
     if dids:
         for d in db.query(Device.id, Device.name).filter(Device.id.in_(dids)).all():
             dmap[d.id] = d.name
+    # 构建 回读点位 id → name 映射（跨设备查询，用于批量控制页展示回读点位）
+    rids = list({t.readback_tag_id for t in items if t.readback_tag_id})
+    rbmap = {}
+    if rids:
+        for r in db.query(DeviceTag.id, DeviceTag.name).filter(DeviceTag.id.in_(rids)).all():
+            rbmap[r.id] = r.name
     out = []
     for t in items:
         o = TagListOut.model_validate(t)
         o.device_name = dmap.get(t.device_id, "")
+        if t.readback_tag_id:
+            o.readback_tag_name = rbmap.get(t.readback_tag_id, "") or ""
         out.append(o)
     return PageResponse(total=total, page=page, page_size=page_size, data=out)
 
@@ -659,8 +722,6 @@ def write_tag_value(device_id: int, req: WriteRequest, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="设备不存在")
     if not device.enabled:
         raise HTTPException(status_code=400, detail="设备已禁用，无法写入")
-    if device.status not in ("online", None):
-        raise HTTPException(status_code=400, detail=f"设备当前状态为 {device.status}，无法写入")
     from app.engine.protocol_router import protocol_router
     success = protocol_router.write_value(device_id, tag, req.value, device.protocol)
     if not success:
@@ -743,25 +804,29 @@ def batch_write_tag_values(
                 fail_count += 1
             else:
                 device = db.query(Device).filter(Device.id == item.device_id).first()
-                from app.engine.protocol_router import protocol_router
-                ok = protocol_router.write_value(item.device_id, tag, item.value, device.protocol)
-                if ok:
-                    result["success"] = True
-                    result["message"] = "写入成功"
-                    # 写后尽力读回读寄存器，作为即时反馈
-                    if tag.readback_tag_id:
-                        try:
-                            live = protocol_router.get_live_values(item.device_id, device.protocol) or {}
-                            rb = live.get(tag.readback_tag_id)
-                            if isinstance(rb, dict) and "value" in rb:
-                                result["readback_tag_id"] = tag.readback_tag_id
-                                result["readback_value"] = rb.get("value")
-                        except Exception:
-                            pass
-                    success_count += 1
-                else:
-                    result["message"] = "写入失败，请检查设备连接"
+                if not device or not device.enabled:
+                    result["message"] = "设备已禁用，无法写入"
                     fail_count += 1
+                else:
+                    from app.engine.protocol_router import protocol_router
+                    ok = protocol_router.write_value(item.device_id, tag, item.value, device.protocol)
+                    if ok:
+                        result["success"] = True
+                        result["message"] = "写入成功"
+                        # 写后尽力读回读寄存器，作为即时反馈
+                        if tag.readback_tag_id:
+                            try:
+                                live = protocol_router.get_live_values(item.device_id, device.protocol) or {}
+                                rb = live.get(tag.readback_tag_id)
+                                if isinstance(rb, dict) and "value" in rb:
+                                    result["readback_tag_id"] = tag.readback_tag_id
+                                    result["readback_value"] = rb.get("value")
+                            except Exception:
+                                pass
+                        success_count += 1
+                    else:
+                        result["message"] = "写入失败，请检查设备连接"
+                        fail_count += 1
         except Exception as e:
             result["message"] = str(e)
             fail_count += 1

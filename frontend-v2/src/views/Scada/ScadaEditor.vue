@@ -155,7 +155,7 @@ const fetchCustomWidgets = async () => {
 
 const fetchDevices = async () => {
   try {
-    devices.value = unwrapList(await getAllDevices()).list
+    devices.value = unwrapList(await getAllDevices({ enabled: true })).list
   } catch (e: any) {
     ElMessage.error(e?.message || '获取设备列表失败')
   }

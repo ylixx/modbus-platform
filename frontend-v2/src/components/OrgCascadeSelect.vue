@@ -28,6 +28,9 @@ const props = withDefaults(
     enabledOnly?: boolean
     // 是否显示「搜索 / 重置」按钮（表格类宿主需要；表单单选场景可关闭）
     showActions?: boolean
+    // 紧凑/嵌入模式：去掉卡片边框背景，组织下拉与设备框单行横向滚动、
+    // 控件变窄。用于表格单元格、对话框等空间受限场景。
+    compact?: boolean
   }>(),
   {
     modelValue: null,
@@ -37,7 +40,8 @@ const props = withDefaults(
     showDeviceActions: true,
     writableOnly: false,
     enabledOnly: false,
-    showActions: true
+    showActions: true,
+    compact: false
   }
 )
 const emit = defineEmits<{
@@ -246,7 +250,7 @@ defineExpose({ clearPath, clearSelection, resetAll, selectAllVisible, deviceOpti
 </script>
 
 <template>
-  <div class="org-cascade" v-loading="loading">
+  <div class="org-cascade" :class="{ 'is-compact': compact }" v-loading="loading">
     <!-- 一行级联下拉框：厂/区/班/站/位置 + 设备名称(可输入/检索/多选/逗号分隔) -->
     <div class="oc-bar">
       <ElSelect
@@ -321,6 +325,29 @@ defineExpose({ clearPath, clearSelection, resetAll, selectAllVisible, deviceOpti
   border-radius: 8px;
   background: var(--el-fill-color-blank);
   padding: 12px;
+}
+/* 紧凑/嵌入模式：无卡片、单行、可横向滚动 */
+.org-cascade.is-compact {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  width: 100%;
+}
+.is-compact .oc-bar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 6px;
+}
+.is-compact .oc-select {
+  width: 110px;
+  flex-shrink: 0;
+}
+.is-compact .oc-dev {
+  width: 160px;
+}
+.is-compact .oc-dev :deep(.el-select__selected-item) {
+  max-width: 130px;
 }
 .oc-bar {
   display: flex;
