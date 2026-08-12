@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ContentWrap } from '@/components/ContentWrap'
 import {
@@ -15,9 +15,11 @@ import {
   ElForm,
   ElFormItem,
   ElInput,
-  ElUpload
+  ElUpload,
+  ElSelect,
+  ElOption
 } from 'element-plus'
-import { getScadaWidgets, deleteScadaWidget, uploadScadaWidget, unwrapList } from '@/api/modbus'
+import { getScadaWidgets, updateScadaWidget, deleteScadaWidget, uploadScadaWidget, unwrapList } from '@/api/modbus'
 import { svgWidgetCategories, getSvgWidgetsByCategory } from './widgets/svg-widgets'
 
 defineOptions({ name: 'ScadaWidgets' })
@@ -25,11 +27,19 @@ defineOptions({ name: 'ScadaWidgets' })
 const router = useRouter()
 const loading = ref(false)
 const list = ref<any[]>([])
+const filterCategory = ref('')
+const categories = ref<string[]>([])
+
+const filteredList = computed(() => {
+  if (!filterCategory.value) return list.value
+  return list.value.filter((w) => w.category === filterCategory.value)
+})
 
 const fetchList = async () => {
   loading.value = true
   try {
     list.value = unwrapList(await getScadaWidgets()).list
+    categories.value = [...new Set(list.value.map((w) => w.category).filter(Boolean))] as string[]
   } finally {
     loading.value = false
   }
@@ -82,6 +92,31 @@ const doUpload = async () => {
   }
 }
 
+// 编辑（SVG 源可直接改 data-bind-target 等绑定域标记）
+const editDialogVisible = ref(false)
+const editForm = ref<any>({ id: 0, name: '', category: '', description: '', source_data: '', source_type: '' })
+
+const openEdit = (row: any) => {
+  editForm.value = { ...row }
+  editDialogVisible.value = true
+}
+
+const saveEdit = async () => {
+  try {
+    await updateScadaWidget(editForm.value.id, {
+      name: editForm.value.name,
+      category: editForm.value.category,
+      description: editForm.value.description,
+      source_data: editForm.value.source_data
+    })
+    ElMessage.success('保存成功')
+    editDialogVisible.value = false
+    fetchList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  }
+}
+
 onMounted(fetchList)
 </script>
 
@@ -127,10 +162,23 @@ onMounted(fetchList)
     </ElRow>
 
     <!-- 自定义图元 -->
-    <div class="text-16px font-700 mb-12px">自定义图元</div>
+    <div class="flex items-center justify-between mb-12px">
+      <div class="text-16px font-700">自定义图元</div>
+      <el-select
+        v-if="categories.length"
+        v-model="filterCategory"
+        placeholder="全部分类"
+        clearable
+        size="small"
+        class="w-160px"
+      >
+        <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
+      </el-select>
+    </div>
     <ElEmpty v-if="!loading && !list.length" description="暂无自定义图元" />
+    <ElEmpty v-else-if="!loading && !filteredList.length" description="该分类下暂无图元" />
     <ElRow v-loading="loading" :gutter="16">
-      <ElCol v-for="w in list" :key="w.id" :xs="12" :sm="8" :md="6" class="mb-16px">
+      <ElCol v-for="w in filteredList" :key="w.id" :xs="12" :sm="8" :md="6" class="mb-16px">
         <ElCard shadow="hover" class="h-full">
           <div class="flex flex-col items-center text-center">
             <img
@@ -141,15 +189,26 @@ onMounted(fetchList)
             <div class="text-14px font-600 mb-4px">{{ w.name }}</div>
             <ElTag size="small" class="mb-8px">{{ w.category || '自定义' }}</ElTag>
             <div class="text-12px text-gray-400 mb-8px">{{ w.description || '无描述' }}</div>
-            <ElButton
-              v-hasPermi="['scada.write']"
-              link
-              type="danger"
-              size="small"
-              @click="remove(w)"
-            >
-              删除
-            </ElButton>
+            <div class="flex gap-8px">
+              <ElButton
+                v-hasPermi="['scada.write']"
+                link
+                type="primary"
+                size="small"
+                @click="openEdit(w)"
+              >
+                编辑
+              </ElButton>
+              <ElButton
+                v-hasPermi="['scada.write']"
+                link
+                type="danger"
+                size="small"
+                @click="remove(w)"
+              >
+                删除
+              </ElButton>
+            </div>
           </div>
         </ElCard>
       </ElCol>
@@ -185,6 +244,37 @@ onMounted(fetchList)
       <template #footer>
         <ElButton @click="uploadDialogVisible = false">取消</ElButton>
         <ElButton type="primary" @click="doUpload">上传</ElButton>
+      </template>
+    </ElDialog>
+
+    <!-- 编辑对话框 -->
+    <ElDialog v-model="editDialogVisible" title="编辑图元" width="560px" @close="editDialogVisible = false">
+      <ElForm label-width="80px">
+        <ElFormItem label="名称">
+          <ElInput v-model="editForm.name" />
+        </ElFormItem>
+        <ElFormItem label="分类">
+          <ElInput v-model="editForm.category" placeholder="如：custom、阀门" />
+        </ElFormItem>
+        <ElFormItem label="描述">
+          <ElInput v-model="editForm.description" type="textarea" :rows="2" />
+        </ElFormItem>
+        <ElFormItem v-if="editForm.source_type === 'svg'" label="SVG 源">
+          <ElInput
+            v-model="editForm.source_data"
+            type="textarea"
+            :rows="10"
+            class="font-mono text-12px"
+            placeholder="在元素上添加 data-bind-target / data-bind-prop 标记以支持绑定"
+          />
+          <div class="text-12px text-gray-400 mt-4px">
+            绑定域标记：如 <code>&lt;text data-bind-target="text" data-bind-prop="text"&gt;</code>
+          </div>
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <ElButton @click="editDialogVisible = false">取消</ElButton>
+        <ElButton type="primary" @click="saveEdit">保存</ElButton>
       </template>
     </ElDialog>
   </ContentWrap>

@@ -11,6 +11,7 @@ import { useUserStoreWithOut } from '@/store/modules/user'
 
 export type WsMessageType =
   | 'live_value'
+  | 'batch_live'
   | 'alarm_created'
   | 'alarm_acknowledged'
   | 'alarm_cleared'
@@ -101,6 +102,14 @@ class WebSocketManager {
       try {
         const msg: WsMessage = JSON.parse(event.data)
         if (msg.type === 'pong') return // 心跳回复，忽略
+        // 后端为减少消息量采用批量推送：{"type":"batch_live","data":[live_value,...]}
+        // 展开为逐条 live_value 事件，兼容所有订阅 live_value 的页面
+        if (msg.type === 'batch_live' && Array.isArray(msg.data)) {
+          for (const item of msg.data) {
+            this.emit({ type: 'live_value', data: item })
+          }
+          return
+        }
         this.emit(msg)
       } catch (e) {
         console.warn('[WS] Failed to parse message:', event.data)

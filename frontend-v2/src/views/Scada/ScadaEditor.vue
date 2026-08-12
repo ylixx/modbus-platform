@@ -26,7 +26,9 @@ import {
   ElSlider,
   ElDivider,
   ElTooltip,
-  ElButtonGroup
+  ElButtonGroup,
+  ElSwitch,
+  ElTag
 } from 'element-plus'
 import {
   getScadaPage,
@@ -34,12 +36,15 @@ import {
   getScadaWidgets,
   getDeviceTags,
   getAllDevices,
+  getScadaPages,
   unwrap,
   unwrapList
 } from '@/api/modbus'
 import SvgCanvas from './SvgCanvas.vue'
 import { svgWidgets, svgWidgetCategories, getSvgWidgetsByCategory, genId } from './widgets/svg-widgets'
 import type { SvgWidgetDef } from './widgets/svg-widgets'
+void svgWidgetCategories
+void getSvgWidgetsByCategory
 
 defineOptions({ name: 'ScadaEditor' })
 
@@ -93,14 +98,51 @@ const onBeforeUnload = (e: BeforeUnloadEvent) => {
 const leftTab = ref('builtin')
 const customWidgets = ref<any[]>([])
 const devices = ref<any[]>([])
-const deviceTags = ref<any[]>([])
+const widgetKeyword = ref('')
+
+const filteredBuiltin = computed(() => {
+  const kw = widgetKeyword.value.trim().toLowerCase()
+  if (!kw) return svgWidgets
+  return svgWidgets.filter((w) => w.name.toLowerCase().includes(kw) || w.typeTag.toLowerCase().includes(kw))
+})
+const filteredBuiltinCategories = computed(() => {
+  return [...new Set(filteredBuiltin.value.map((w) => w.category))]
+})
+const filteredCustom = computed(() => {
+  const kw = widgetKeyword.value.trim().toLowerCase()
+  if (!kw) return customWidgets.value
+  return customWidgets.value.filter(
+    (w) => (w.name || '').toLowerCase().includes(kw) || (w.category || '').toLowerCase().includes(kw)
+  )
+})
 
 // ── 右侧属性面板 ──
 const selectedObj = ref<SVGElement | null>(null)
+const selectedCount = ref(0)
 const selectedProps = reactive<any>({
   left: 0,
   top: 0,
+  w: 0,
+  h: 0,
+  angle: 0,
   opacity: 1
+})
+const selectedStyle = reactive<any>({
+  fill: '',
+  stroke: '',
+  strokeWidth: 1,
+  fontSize: 14,
+  rx: 0,
+  text: ''
+})
+const widgetName = ref('')
+const isTextBound = computed(() => {
+  if (!selectedObj.value) return false
+  const textEl = selectedObj.value.querySelector('text[data-bind-target]')
+  const target = textEl?.getAttribute('data-bind-target')
+  const id = selectedWidgetId.value
+  const def = target && id ? canvasRef.value?.getGaugeSettings(id)?.bindings?.[target] : undefined
+  return !!def?.variableId
 })
 
 // ── 选中图元的类型信息 ──
@@ -114,14 +156,72 @@ const selectedWidgetId = computed(() => {
   return selectedObj.value.getAttribute('id') || ''
 })
 
-// ── 绑定配置 ──
+// ── 绑定配置（v2 多属性域） ──
 const bindDialogVisible = ref(false)
-const bindForm = reactive({
-  target: '',
-  deviceId: undefined as number | undefined,
-  tagId: undefined as number | undefined,
+const bindForm = reactive<{
+  deviceId: number | undefined
+  tagId: number | undefined
+  tagName: string
+  events: Array<{
+    id: string
+    type: string
+    action: string
+    deviceId: number | undefined
+    tagId: number | undefined
+    tagName: string
+    tags: any[]
+    pageId: number | undefined
+    valueType: string
+    fixedValue: string
+    onValue: number
+    offValue: number
+    min: number
+    max: number
+  }>
+  domains: Record<
+    string,
+    {
+      bindEnabled: boolean
+      variableId: string
+      deviceId: number | undefined
+      tagId: number | undefined
+      tagName: string
+      tags: any[]
+      variableValue: string
+      bitmask: number
+      format: string
+      ranges: Array<{ min: number; max: number; text: string; color: string; stroke: string }>
+    }
+  >
+}>({
+  deviceId: undefined,
+  tagId: undefined,
   tagName: '',
-  prop: 'text'
+  events: [],
+  domains: {}
+})
+
+// 画面列表（onpage 事件目标）
+const pagesList = ref<any[]>([])
+
+const fetchScadaPagesList = async () => {
+  try {
+    const body = unwrap(await getScadaPages())
+    pagesList.value = Array.isArray(body) ? body : unwrapList(await getScadaPages()).list
+  } catch {
+    pagesList.value = []
+  }
+}
+
+const selectedBindings = computed<Array<{ target: string; tagName: string; hasRanges: boolean; bound: boolean }>>(() => {
+  const id = selectedWidgetId.value
+  if (!id || !canvasRef.value) return []
+  return (canvasRef.value.getBindingDefs(id) || []).map(({ target, def }) => ({
+    target,
+    tagName: def.variableId || '',
+    hasRanges: (def.ranges || []).length > 0,
+    bound: !!def.variableId
+  }))
 })
 
 // ── 加载页面数据 ──
@@ -135,6 +235,7 @@ const fetchPage = async () => {
     if (config) {
       try {
         const json = typeof config === 'string' ? JSON.parse(config) : config
+        page.value.__engine = json?.__engine || 'svg'
         canvasRef.value?.loadFromJSON(json)
       } catch (e) {
         console.warn('Failed to parse SCADA config:', e)
@@ -161,18 +262,40 @@ const fetchDevices = async () => {
   }
 }
 
-const fetchTags = async (deviceId: number) => {
+const fetchTags = async (deviceId: number): Promise<any[]> => {
   try {
     const res = await getDeviceTags(deviceId)
     const body = unwrap(res)
-    deviceTags.value = Array.isArray(body) ? body : unwrapList(res).list
+    return Array.isArray(body) ? body : unwrapList(res).list
   } catch (e: any) {
     ElMessage.error(e?.message || '获取点位列表失败')
+    return []
   }
+}
+
+/** 为单个绑定域加载点位列表（每域独立） */
+const onDomainDeviceSelect = async (domain: any) => {
+  domain.tags = []
+  domain.tagId = undefined
+  domain.tagName = ''
+  if (domain.deviceId) {
+    domain.tags = await fetchTags(domain.deviceId)
+  }
+}
+
+const onDomainTagSelect = (domain: any) => {
+  const tag = domain.tags.find((t: any) => t.id === domain.tagId)
+  domain.tagName = tag?.name || ''
 }
 
 // ── 保存 ──
 const save = async () => {
+  // 保护：maotu 引擎页面禁止用经典编辑器覆盖
+  if (page.value.__engine === 'maotu') {
+    ElMessage.warning('该画面由 maotu 组态引擎创建，请在「maotu 编辑器」中编辑')
+    router.push(`/scada/m-editor/${id}`)
+    return
+  }
   saving.value = true
   try {
     const json = canvasRef.value?.toJSON()
@@ -270,12 +393,30 @@ const onObjectSelected = (el: SVGElement | null) => {
   if (el) {
     const transform = canvasRef.value?.getSelectedTransform()
     if (transform) {
-      selectedProps.left = Math.round(transform.x)
-      selectedProps.top = Math.round(transform.y)
+      selectedProps.left = transform.x
+      selectedProps.top = transform.y
+      selectedProps.w = transform.w
+      selectedProps.h = transform.h
+      selectedProps.angle = transform.angle
       selectedProps.opacity = transform.opacity
     }
+    refreshSelectedStyle()
+    widgetName.value = canvasRef.value?.getGaugeName(selectedWidgetId.value) || ''
+    selectedCount.value = canvasRef.value?.getSelectedCount() || 1
     isLockedState.value = canvasRef.value?.isLocked() ?? false
   }
+}
+
+const refreshSelectedStyle = () => {
+  if (!selectedObj.value) return
+  selectedStyle.fill = canvasRef.value?.getShapeStyle('fill') || ''
+  selectedStyle.stroke = canvasRef.value?.getShapeStyle('stroke') || ''
+  selectedStyle.strokeWidth = parseFloat(canvasRef.value?.getShapeStyle('stroke-width') || '') || 0
+  selectedStyle.fontSize = parseFloat(canvasRef.value?.getShapeStyle('font-size') || '') || 0
+  const rectEl = selectedObj.value.querySelector('rect')
+  selectedStyle.rx = rectEl ? parseFloat(rectEl.getAttribute('rx') || '0') || 0 : 0
+  const textEl = selectedObj.value.querySelector('text') as SVGElement | null
+  selectedStyle.text = textEl?.textContent || ''
 }
 
 const onObjectDeselected = () => {
@@ -285,41 +426,231 @@ const onObjectDeselected = () => {
 const updateProp = (prop: string, value: any) => {
   if (!selectedObj.value) return
   canvasRef.value?.setSelectedTransform(prop, value)
+  markDirty()
 }
 
-// ── 数据绑定 ──
+const applyStyle = (prop: 'fill' | 'stroke' | 'stroke-width' | 'rx' | 'font-size', value: any) => {
+  if (!selectedObj.value || value === undefined || value === null) return
+  canvasRef.value?.applyShapeStyle(prop, String(value))
+  markDirty()
+}
+
+const onTextInput = (value: string) => {
+  if (!selectedObj.value) return
+  canvasRef.value?.setFirstTextContent(String(value))
+  markDirty()
+}
+
+const onNameInput = (value: string) => {
+  if (!selectedObj.value) return
+  canvasRef.value?.setGaugeName(selectedWidgetId.value, value)
+  markDirty()
+}
+
+// ── 对齐 / 分布 ──
+const getAligned = (_mode: string, _dist = false) => {
+  canvasRef.value?.alignSelected(_mode as any)
+  markDirty()
+}
+const getDistributed = (mode: 'horizontal' | 'vertical') => {
+  if (selectedCount.value < 3) {
+    ElMessage.info('分布需要至少选中 3 个图元')
+    return
+  }
+  canvasRef.value?.distributeSelected(mode)
+  markDirty()
+}
+
+// ── 数据绑定（v2 多属性域） ──
+
+const FORMAT_OPTIONS = [
+  { label: '原始值', value: '' },
+  { label: '整数', value: '0' },
+  { label: '1 位小数', value: '1' },
+  { label: '2 位小数', value: '2' },
+  { label: '3 位小数', value: '3' },
+  { label: '4 位小数', value: '4' },
+  { label: '十六进制', value: 'HEX' },
+  { label: '二进制', value: 'BIN' }
+]
 
 const openBindDialog = () => {
-  bindForm.target = ''
+  const id = selectedWidgetId.value
+  if (!id || !canvasRef.value) return
+  const defs = canvasRef.value.getBindingDefs(id)
   bindForm.deviceId = undefined
   bindForm.tagId = undefined
   bindForm.tagName = ''
-  bindForm.prop = 'text'
+  bindForm.events = []
+  bindForm.domains = {}
+  // 载入交互事件（M2）
+  const events = canvasRef.value.getGaugeEvents(id)
+  for (const ev of events) {
+    const o = ev.actoptions || {}
+    bindForm.events.push({
+      id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      type: ev.type || 'click',
+      action: ev.action || 'onSetValue',
+      deviceId: o.deviceId,
+      tagId: o.tagId,
+      tagName: o.tagName || '',
+      tags: [],
+      pageId: o.pageId,
+      valueType: o.valueType || 'fixed',
+      fixedValue: String(o.fixedValue ?? 1),
+      onValue: Number(o.onValue ?? 1),
+      offValue: Number(o.offValue ?? 0),
+      min: Number(o.min ?? 0),
+      max: Number(o.max ?? 100)
+    })
+    if (o.deviceId) fetchTags(o.deviceId)
+  }
+  fetchScadaPagesList()
+  for (const { target, def } of defs) {
+    const [devId, tagName] = (def.variableId || '').split(':')
+    bindForm.domains[target] = {
+      bindEnabled: !!def.variableId,
+      variableId: def.variableId,
+      deviceId: devId ? Number(devId) : undefined,
+      tagId: def.tagId,
+      tagName: tagName || '',
+      tags: [],
+      variableValue: def.variableValue,
+      bitmask: def.bitmask || 0,
+      format: def.format || '',
+      ranges: (def.ranges || []).map((r) => ({
+        min: r.min,
+        max: r.max,
+        text: r.text || '',
+        color: r.color || '',
+        stroke: r.stroke || ''
+      }))
+    }
+    if (devId) onDomainDeviceSelect(bindForm.domains[target])
+  }
   bindDialogVisible.value = true
 }
 
 const resetBindForm = () => {
-  bindForm.target = ''
-  bindForm.deviceId = undefined
-  bindForm.tagId = undefined
-  bindForm.tagName = ''
-  bindForm.prop = 'text'
+  bindForm.domains = {}
+  bindForm.events = []
 }
 
-const onDeviceSelect = (deviceId: number) => {
-  fetchTags(deviceId)
+const addRange = (target: string) => {
+  const domain = bindForm.domains[target]
+  if (!domain) return
+  const last = domain.ranges[domain.ranges.length - 1]
+  domain.ranges.push({
+    min: last ? last.max + 0.01 : 0,
+    max: last ? last.max + 1 : 1,
+    text: '',
+    color: '',
+    stroke: ''
+  })
+}
+
+const removeRange = (target: string, index: number) => {
+  const domain = bindForm.domains[target]
+  if (domain) domain.ranges.splice(index, 1)
+}
+
+// ── 交互事件编辑（M2） ──
+
+const addEvent = () => {
+  bindForm.events.push({
+    id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    type: 'click',
+    action: 'onSetValue',
+    deviceId: undefined,
+    tagId: undefined,
+    tagName: '',
+    tags: [],
+    pageId: undefined,
+    valueType: 'fixed',
+    fixedValue: '1',
+    onValue: 1,
+    offValue: 0,
+    min: 0,
+    max: 100
+  })
+}
+
+const removeEvent = (id: string) => {
+  const idx = bindForm.events.findIndex((e) => e.id === id)
+  if (idx >= 0) bindForm.events.splice(idx, 1)
+}
+
+const onEventDeviceSelect = async (ev: any) => {
+  ev.tagId = undefined
+  ev.tagName = ''
+  ev.tags = []
+  if (!ev.deviceId) return
+  try {
+    const res = await getDeviceTags(ev.deviceId)
+    const body = unwrap(res)
+    ev.tags = Array.isArray(body) ? body : unwrapList(res).list
+  } catch {
+    ev.tags = []
+  }
+}
+
+const onEventTagSelect = (ev: any) => {
+  const tag = ev.tags.find((t: any) => t.id === ev.tagId)
+  ev.tagName = tag?.name || ''
 }
 
 const confirmBind = () => {
-  if (!selectedObj.value || !bindForm.target) {
-    ElMessage.warning('请选择绑定目标和点位')
-    return
-  }
+  if (!selectedObj.value) return
+  const elementId = selectedWidgetId.value
+  if (!elementId || !canvasRef.value) return
 
-  const elementId = selectedObj.value.getAttribute('id') || ''
-  canvasRef.value?.setBinding(elementId, bindForm.target, bindForm.deviceId!, bindForm.tagId!, bindForm.tagName, bindForm.prop)
+  for (const [target, domain] of Object.entries(bindForm.domains)) {
+    // 绑定 Tag 或使用静态值；两者皆空则移除该域
+    const def = {
+      variableId: domain.bindEnabled && domain.deviceId && domain.tagName
+        ? `${domain.deviceId}:${domain.tagName}`
+        : '',
+      tagId: domain.bindEnabled && domain.tagId ? domain.tagId : undefined,
+      variableValue: domain.variableValue,
+      bitmask: domain.bitmask || 0,
+      format: domain.format || '',
+      ranges: domain.ranges.map((r) => ({
+        min: r.min,
+        max: r.max,
+        text: r.text,
+        color: r.color,
+        stroke: r.stroke
+      })),
+      readonly: false
+    }
+    const isEmpty =
+      !def.variableId && def.variableValue === '' && def.ranges.length === 0
+    canvasRef.value.setBindingDef(elementId, target, isEmpty ? null : def)
+  }
+  // 交互事件（M2/M3）
+  const events = bindForm.events
+    .filter((ev) => (ev.action === 'onpage' ? ev.pageId : ev.deviceId && ev.tagId))
+    .map((ev) => ({
+      type: ev.type,
+      action: ev.action,
+      actoptions: ev.action === 'onpage'
+        ? { pageId: ev.pageId, pageName: pagesList.value.find((p: any) => p.id === ev.pageId)?.name || '' }
+        : {
+            deviceId: ev.deviceId,
+            tagId: ev.tagId,
+            tagName: ev.tagName,
+            valueType: ev.action === 'onToggleValue' ? 'toggle' : ev.valueType,
+            fixedValue: ev.valueType === 'fixed' ? ev.fixedValue : undefined,
+            onValue: ev.action === 'onToggleValue' ? ev.onValue : undefined,
+            offValue: ev.action === 'onToggleValue' ? ev.offValue : undefined,
+            min: ev.valueType === 'slider' ? ev.min : undefined,
+            max: ev.valueType === 'slider' ? ev.max : undefined
+          }
+    }))
+  canvasRef.value.setGaugeEvents(elementId, events)
   bindDialogVisible.value = false
-  ElMessage.success(`已绑定到 ${bindForm.tagName} → ${bindForm.target}`)
+  ElMessage.success('绑定配置已保存')
+  markDirty()
 }
 
 // ── 清空画布（带确认） ──
@@ -401,11 +732,24 @@ const toggleGrid = () => {
 
 // ── 键盘快捷键 ──
 const onKeyDown = (e: KeyboardEvent) => {
+  const inInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (selectedObj.value && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+    if (selectedObj.value && !inInput) {
       canvasRef.value?.deleteSelected()
       markDirty()
     }
+  }
+  // 方向键微调位置（1px，Shift=10px）
+  if (selectedObj.value && !inInput && (e.key.startsWith('Arrow'))) {
+    const step = e.shiftKey ? 10 : 1
+    const t = canvasRef.value?.getSelectedTransform()
+    if (!t) return
+    e.preventDefault()
+    if (e.key === 'ArrowLeft') canvasRef.value?.setSelectedTransform('left', t.x - step)
+    else if (e.key === 'ArrowRight') canvasRef.value?.setSelectedTransform('left', t.x + step)
+    else if (e.key === 'ArrowUp') canvasRef.value?.setSelectedTransform('top', t.y - step)
+    else if (e.key === 'ArrowDown') canvasRef.value?.setSelectedTransform('top', t.y + step)
+    markDirty()
   }
   if (e.ctrlKey && e.key === 's') {
     e.preventDefault()
@@ -559,18 +903,26 @@ onUnmounted(() => {
     <div class="editor-body">
       <!-- 左侧：图元面板（SVG 缩略图） -->
       <div class="editor-sidebar">
+        <div class="p-8px">
+          <ElInput
+            v-model="widgetKeyword"
+            size="small"
+            placeholder="搜索图元..."
+            clearable
+          />
+        </div>
         <ElTabs v-model="leftTab" class="h-full">
           <ElTabPane label="内置图元" name="builtin">
             <div class="widget-list">
               <ElCollapse>
                 <ElCollapseItem
-                  v-for="cat in svgWidgetCategories()"
+                  v-for="cat in filteredBuiltinCategories"
                   :key="cat"
                   :title="cat"
                   :name="cat"
                 >
                   <div
-                    v-for="w in getSvgWidgetsByCategory(cat)"
+                    v-for="w in filteredBuiltin.filter((x) => x.category === cat)"
                     :key="w.name"
                     class="widget-item"
                     draggable="true"
@@ -582,12 +934,18 @@ onUnmounted(() => {
                   </div>
                 </ElCollapseItem>
               </ElCollapse>
+              <div
+                v-if="!filteredBuiltin.length"
+                class="text-12px text-gray-400 text-center py-16px"
+              >
+                未找到匹配的图元
+              </div>
             </div>
           </ElTabPane>
           <ElTabPane label="自定义图元" name="custom">
             <div class="widget-list">
               <div
-                v-for="w in customWidgets"
+                v-for="w in filteredCustom"
                 :key="w.id"
                 class="widget-item"
                 draggable="true"
@@ -602,7 +960,7 @@ onUnmounted(() => {
                 <span class="widget-name">{{ w.name }}</span>
               </div>
               <div
-                v-if="!customWidgets.length"
+                v-if="!filteredCustom.length"
                 class="text-12px text-gray-400 text-center py-16px"
               >
                 暂无自定义图元
@@ -632,32 +990,109 @@ onUnmounted(() => {
       <div class="editor-props">
         <div class="text-14px font-600 mb-12px">属性面板</div>
 
-        <template v-if="selectedObj">
+        <template v-if="selectedObj && selectedCount > 1">
+          <div class="mb-8px text-13px font-600">
+            已选 {{ selectedCount }} 个对象
+            <ElTag size="small" type="warning" class="ml-4px">多选</ElTag>
+          </div>
+          <div class="text-12px text-gray-400 mb-12px">
+            Shift+点击切换选择；拖动可整体移动
+          </div>
+
+          <div class="text-13px font-600 mb-6px">对齐</div>
+          <div class="grid grid-cols-4 gap-4px mb-12px">
+            <ElButton size="small" @click="getAligned('left')">左对齐</ElButton>
+            <ElButton size="small" @click="getAligned('centerH')">水平居中</ElButton>
+            <ElButton size="small" @click="getAligned('right')">右对齐</ElButton>
+            <ElButton size="small" @click="getAligned('top')">顶对齐</ElButton>
+            <ElButton size="small" @click="getAligned('centerV')">垂直居中</ElButton>
+            <ElButton size="small" @click="getAligned('bottom')">底对齐</ElButton>
+          </div>
+
+          <div class="text-13px font-600 mb-6px">分布</div>
+          <div class="grid grid-cols-2 gap-4px mb-12px">
+            <ElButton size="small" @click="getDistributed('horizontal')">水平分布</ElButton>
+            <ElButton size="small" @click="getDistributed('vertical')">垂直分布</ElButton>
+          </div>
+
+          <ElDivider />
+
+          <div class="flex items-center gap-6px mb-8px">
+            <ElButton size="small" @click="handleCopy">复制</ElButton>
+            <ElButton size="small" @click="canvasRef?.deleteSelected(); markDirty()">删除</ElButton>
+            <ElButton size="small" @click="handleBringToFront">置顶</ElButton>
+            <ElButton size="small" @click="handleSendToBack">置底</ElButton>
+          </div>
+        </template>
+
+        <template v-else-if="selectedObj">
           <div class="mb-8px">
             <span class="text-12px text-gray-400">ID:</span>
             <span class="text-12px ml-4px">{{ selectedWidgetId }}</span>
           </div>
-          <div class="mb-8px">
+          <div class="mb-8px flex items-center">
             <span class="text-12px text-gray-400">类型:</span>
             <ElTag size="small" class="ml-4px">{{ selectedWidgetType }}</ElTag>
           </div>
 
           <ElForm label-width="70px" size="small">
-            <ElFormItem label="X">
-              <ElInputNumber
-                v-model="selectedProps.left"
-                :step="1"
-                @change="updateProp('left', $event)"
-                class="w-full"
-              />
+            <ElFormItem label="名称">
+              <ElInput v-model="widgetName" @change="onNameInput($event)" placeholder="图元名称" />
             </ElFormItem>
-            <ElFormItem label="Y">
-              <ElInputNumber
-                v-model="selectedProps.top"
-                :step="1"
-                @change="updateProp('top', $event)"
-                class="w-full"
-              />
+          </ElForm>
+
+          <ElDivider content-position="left">位置与尺寸</ElDivider>
+          <ElForm label-width="70px" size="small">
+            <div class="flex gap-6px">
+              <ElFormItem label="X" class="flex-1">
+                <ElInputNumber
+                  v-model="selectedProps.left"
+                  :step="1"
+                  @change="updateProp('left', $event)"
+                  class="w-full"
+                />
+              </ElFormItem>
+              <ElFormItem label="Y" class="flex-1">
+                <ElInputNumber
+                  v-model="selectedProps.top"
+                  :step="1"
+                  @change="updateProp('top', $event)"
+                  class="w-full"
+                />
+              </ElFormItem>
+            </div>
+            <div class="flex gap-6px">
+              <ElFormItem label="宽" class="flex-1">
+                <ElInputNumber
+                  v-model="selectedProps.w"
+                  :min="1"
+                  :step="1"
+                  @change="updateProp('width', $event)"
+                  class="w-full"
+                />
+              </ElFormItem>
+              <ElFormItem label="高" class="flex-1">
+                <ElInputNumber
+                  v-model="selectedProps.h"
+                  :min="1"
+                  :step="1"
+                  @change="updateProp('height', $event)"
+                  class="w-full"
+                />
+              </ElFormItem>
+            </div>
+            <ElFormItem label="旋转">
+              <div class="flex items-center gap-6px w-full">
+                <ElInputNumber
+                  v-model="selectedProps.angle"
+                  :min="-360"
+                  :max="360"
+                  :step="5"
+                  @change="updateProp('angle', $event)"
+                  class="flex-1"
+                />
+                <ElButton size="small" @click="updateProp('angle', 0)">归零</ElButton>
+              </div>
             </ElFormItem>
             <ElFormItem label="透明度">
               <ElSlider
@@ -668,23 +1103,124 @@ onUnmounted(() => {
                 @change="updateProp('opacity', $event)"
               />
             </ElFormItem>
+            <ElFormItem label="翻转">
+              <div class="flex gap-6px">
+                <ElButton size="small" @click="updateProp('flipX', true)">水平翻转</ElButton>
+                <ElButton size="small" @click="updateProp('flipY', true)">垂直翻转</ElButton>
+              </div>
+            </ElFormItem>
           </ElForm>
+
+          <ElDivider content-position="left">外观</ElDivider>
+          <ElForm label-width="70px" size="small">
+            <ElFormItem label="填充">
+              <div class="flex items-center gap-6px w-full">
+                <ElColorPicker
+                  v-model="selectedStyle.fill"
+                  @change="applyStyle('fill', $event)"
+                  class="flex-1"
+                />
+                <ElInput
+                  v-model="selectedStyle.fill"
+                  size="small"
+                  class="flex-1"
+                  placeholder="#2a5a8a"
+                  @change="applyStyle('fill', $event)"
+                />
+              </div>
+            </ElFormItem>
+            <ElFormItem label="描边">
+              <div class="flex items-center gap-6px w-full">
+                <ElColorPicker
+                  v-model="selectedStyle.stroke"
+                  @change="applyStyle('stroke', $event)"
+                  class="flex-1"
+                />
+                <ElInput
+                  v-model="selectedStyle.stroke"
+                  size="small"
+                  class="flex-1"
+                  placeholder="none"
+                  @change="applyStyle('stroke', $event)"
+                />
+              </div>
+            </ElFormItem>
+            <ElFormItem label="线宽">
+              <ElInputNumber
+                v-model="selectedStyle.strokeWidth"
+                :min="0"
+                :max="20"
+                :step="0.5"
+                @change="applyStyle('stroke-width', $event)"
+                class="w-full"
+              />
+            </ElFormItem>
+            <template v-if="selectedWidgetType === 'svg-ext-shapes'">
+              <ElFormItem label="圆角">
+                <ElInputNumber
+                  v-model="selectedStyle.rx"
+                  :min="0"
+                  :max="100"
+                  :step="1"
+                  @change="applyStyle('rx', $event)"
+                  class="w-full"
+                />
+              </ElFormItem>
+            </template>
+            <ElFormItem label="字号">
+              <ElInputNumber
+                v-model="selectedStyle.fontSize"
+                :min="4"
+                :max="200"
+                :step="1"
+                @change="applyStyle('font-size', $event)"
+                class="w-full"
+              />
+            </ElFormItem>
+            <ElFormItem label="文本">
+              <ElInput
+                v-model="selectedStyle.text"
+                :disabled="isTextBound"
+                :placeholder="isTextBound ? '已绑定数据点位' : '双击图元也可编辑'"
+                @change="onTextInput($event)"
+              />
+            </ElFormItem>
+          </ElForm>
+
+          <ElDivider />
+
+          <div class="text-13px font-600 mb-6px">对齐（单选对齐画布）</div>
+          <div class="grid grid-cols-4 gap-4px mb-12px">
+            <ElButton size="small" @click="getAligned('left')">左</ElButton>
+            <ElButton size="small" @click="getAligned('centerH')">中</ElButton>
+            <ElButton size="small" @click="getAligned('right')">右</ElButton>
+            <ElButton size="small" @click="getAligned('top')">顶</ElButton>
+            <ElButton size="small" @click="getAligned('centerV')">中</ElButton>
+            <ElButton size="small" @click="getAligned('bottom')">底</ElButton>
+          </div>
 
           <ElDivider />
 
           <div class="flex justify-between items-center mb-8px">
             <span class="text-13px font-600">数据绑定</span>
-            <ElButton size="small" type="primary" @click="openBindDialog">绑定点位</ElButton>
+            <ElButton size="small" type="primary" @click="openBindDialog">编辑绑定</ElButton>
           </div>
 
-          <!-- 显示当前图元的绑定信息 -->
-          <div class="binding-info" v-if="selectedObj">
-            <div v-for="child in Array.from(selectedObj.querySelectorAll('[data-bind-target]') as NodeListOf<Element>)" :key="child.id || child.getAttribute('data-bind-target')" class="text-12px mb-4px">
-              <span class="text-green-400">{{ child.getAttribute('data-bind-target') }}</span>
-              <span class="text-gray-400 ml-4px">→ {{ child.getAttribute('data-bind-tag-name') || '未绑定' }}</span>
-              <span class="text-gray-500 ml-4px">({{ child.getAttribute('data-bind-prop') }})</span>
+          <!-- 显示当前图元的绑定域列表 -->
+          <div class="binding-info" v-if="selectedBindings.length">
+            <div
+              v-for="b in selectedBindings"
+              :key="b.target"
+              class="text-12px mb-4px flex justify-between"
+            >
+              <span>
+                <span class="text-green-400">{{ b.target }}</span>
+                <span class="text-gray-400 ml-4px">→ {{ b.bound ? b.tagName : '未绑定' }}</span>
+              </span>
+              <span v-if="b.hasRanges" class="text-yellow-500 text-10px">⦿ ranges</span>
             </div>
           </div>
+          <div v-else class="text-12px text-gray-400 mb-4px">该图元无可绑定域</div>
         </template>
 
         <div v-else class="text-13px text-gray-400 text-center py-40px">
@@ -711,68 +1247,186 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 绑定对话框 -->
-    <ElDialog v-model="bindDialogVisible" title="数据绑定" width="480px" @close="resetBindForm">
-      <ElForm label-width="90px">
-        <ElFormItem label="绑定目标">
-          <ElSelect v-model="bindForm.target" class="w-full" placeholder="选择绑定属性">
-            <ElOption label="值 (value)" value="value" />
-            <ElOption label="状态 (state)" value="state" />
-            <ElOption label="液位 (level)" value="level" />
-            <ElOption label="温度 (temperature)" value="temperature" />
-            <ElOption label="文本 (text)" value="text" />
-            <ElOption label="填充色 (fill)" value="fill" />
-            <ElOption label="红色灯 (red)" value="red" />
-            <ElOption label="黄色灯 (yellow)" value="yellow" />
-            <ElOption label="绿色灯 (green)" value="green" />
+    <!-- 绑定对话框（v2 多属性域） -->
+    <ElDialog
+      v-model="bindDialogVisible"
+      title="数据绑定"
+      width="640px"
+      :close-on-click-modal="false"
+      @close="resetBindForm"
+    >
+      <div v-if="Object.keys(bindForm.domains).length === 0" class="text-13px text-gray-400 py-20px text-center">
+        该图元无绑定域（SVG 中没有 data-bind-target 元素）
+      </div>
+
+      <ElCollapse v-for="(domain, target) in bindForm.domains" :key="target" class="mb-12px">
+        <ElCollapseItem :title="`绑定域: ${target}`">
+          <ElForm label-width="80px" size="small">
+            <ElFormItem label="启用绑定">
+              <ElSwitch v-model="domain.bindEnabled" />
+            </ElFormItem>
+            <template v-if="domain.bindEnabled">
+              <ElFormItem label="设备">
+                <ElSelect
+                  v-model="domain.deviceId"
+                  class="w-full"
+                  placeholder="选择设备"
+                  @change="onDomainDeviceSelect(domain)"
+                >
+                  <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="点位">
+                <ElSelect
+                  v-model="domain.tagId"
+                  class="w-full"
+                  placeholder="选择点位"
+                  :disabled="!domain.tags.length"
+                  @change="onDomainTagSelect(domain)"
+                >
+                  <ElOption
+                    v-for="t in domain.tags"
+                    :key="t.id"
+                    :label="`${t.name} (${t.address})`"
+                    :value="t.id"
+                  />
+                </ElSelect>
+              </ElFormItem>
+            </template>
+            <template v-else>
+              <ElFormItem label="静态值">
+                <ElInput v-model="domain.variableValue" placeholder="未绑定时的显示值" />
+              </ElFormItem>
+            </template>
+            <ElFormItem label="位掩码">
+              <ElInputNumber v-model="domain.bitmask" :min="0" :step="1" class="w-full" />
+            </ElFormItem>
+            <ElFormItem label="格式化">
+              <ElSelect v-model="domain.format" class="w-full">
+                <ElOption
+                  v-for="f in FORMAT_OPTIONS"
+                  :key="f.value"
+                  :label="f.label"
+                  :value="f.value"
+                />
+              </ElSelect>
+            </ElFormItem>
+            <ElFormItem label="范围映射">
+              <div class="w-full">
+                <div
+                  v-for="(r, idx) in domain.ranges"
+                  :key="idx"
+                  class="flex items-center gap-4px mb-6px"
+                >
+                  <ElInputNumber v-model="r.min" :step="0.1" controls-position="right" class="flex-1" placeholder="min" />
+                  <span class="text-gray-400">~</span>
+                  <ElInputNumber v-model="r.max" :step="0.1" controls-position="right" class="flex-1" placeholder="max" />
+                  <ElInput v-model="r.text" placeholder="文本" class="flex-1" />
+                  <ElColorPicker v-model="r.color" size="small" />
+                  <ElButton size="small" text type="danger" @click="removeRange(target, idx)">
+                    ✕
+                  </ElButton>
+                </div>
+                <ElButton size="small" text type="primary" @click="addRange(target)">
+                  + 添加范围
+                </ElButton>
+              </div>
+            </ElFormItem>
+          </ElForm>
+        </ElCollapseItem>
+      </ElCollapse>
+
+      <ElDivider content-position="left" class="mt-16px">
+        交互事件（写值控制）
+      </ElDivider>
+
+      <div v-if="bindForm.events.length === 0" class="text-12px text-gray-400 mb-8px">
+        无交互事件，点击按钮/开关/滑块/输入框时不会写值
+      </div>
+
+      <div
+        v-for="ev in bindForm.events"
+        :key="ev.id"
+        class="event-row mb-8px border rounded p-8px"
+      >
+        <div class="flex items-center gap-6px mb-6px">
+          <ElSelect v-model="ev.type" size="small" class="w-100px">
+            <ElOption label="点击" value="click" />
+            <ElOption label="变更" value="change" />
           </ElSelect>
-        </ElFormItem>
-        <ElFormItem label="绑定属性">
-          <ElSelect v-model="bindForm.prop" class="w-full" placeholder="选择更新方式">
-            <ElOption label="文本内容" value="text" />
-            <ElOption label="填充色" value="fill" />
-            <ElOption label="描边色" value="stroke" />
-            <ElOption label="宽度" value="width" />
-            <ElOption label="高度" value="height" />
-            <ElOption label="旋转" value="rotate" />
-            <ElOption label="透明度" value="opacity" />
+          <ElSelect v-model="ev.action" size="small" class="w-140px">
+            <ElOption label="写固定值 (onSetValue)" value="onSetValue" />
+            <ElOption label="切换值 (onToggleValue)" value="onToggleValue" />
+            <ElOption label="跳转画面 (onpage)" value="onpage" />
           </ElSelect>
-        </ElFormItem>
-        <ElFormItem label="设备">
+          <ElButton size="small" text type="danger" @click="removeEvent(ev.id)">✕</ElButton>
+        </div>
+        <div class="flex items-center gap-6px mb-6px">
           <ElSelect
-            v-model="bindForm.deviceId"
-            class="w-full"
-            placeholder="选择设备"
-            @change="onDeviceSelect"
+            v-model="ev.deviceId"
+            size="small"
+            class="flex-1"
+            placeholder="目标设备"
+            @change="onEventDeviceSelect(ev)"
           >
             <ElOption v-for="d in devices" :key="d.id" :label="d.name" :value="d.id" />
           </ElSelect>
-        </ElFormItem>
-        <ElFormItem label="点位">
           <ElSelect
-            v-model="bindForm.tagId"
-            class="w-full"
-            placeholder="选择点位"
-            :disabled="!bindForm.deviceId"
-            @change="
-              (val: number) => {
-                const tag = deviceTags.find((t) => t.id === val)
-                bindForm.tagName = tag?.name || ''
-              }
-            "
+            v-model="ev.tagId"
+            size="small"
+            class="flex-1"
+            placeholder="目标点位"
+            :disabled="!ev.deviceId"
+            @change="onEventTagSelect(ev)"
           >
             <ElOption
-              v-for="t in deviceTags"
+              v-for="t in ev.tags"
               :key="t.id"
               :label="`${t.name} (${t.address})`"
               :value="t.id"
             />
           </ElSelect>
-        </ElFormItem>
-      </ElForm>
+        </div>
+        <div v-if="ev.action === 'onpage'" class="flex items-center gap-6px">
+          <ElSelect v-model="ev.pageId" size="small" class="flex-1" placeholder="目标画面">
+            <ElOption
+              v-for="p in pagesList"
+              :key="p.id"
+              :label="`${p.name}${p.id === Number(id) ? ' (当前)' : ''}`"
+              :value="p.id"
+            />
+          </ElSelect>
+        </div>
+        <div v-else-if="ev.action === 'onToggleValue'" class="flex items-center gap-6px">
+          <span class="text-12px text-gray-400 w-48px">开值</span>
+          <ElInputNumber v-model="ev.onValue" size="small" :step="1" class="flex-1" />
+          <span class="text-12px text-gray-400 w-48px">关值</span>
+          <ElInputNumber v-model="ev.offValue" size="small" :step="1" class="flex-1" />
+        </div>
+        <div v-else class="flex items-center gap-6px">
+          <ElSelect v-model="ev.valueType" size="small" class="w-120px">
+            <ElOption label="固定值" value="fixed" />
+            <ElOption label="输入框内容" value="input" />
+            <ElOption label="滑块范围" value="slider" />
+          </ElSelect>
+          <template v-if="ev.valueType === 'fixed'">
+            <ElInput v-model="ev.fixedValue" size="small" class="flex-1" placeholder="固定值，如 1 或 0" />
+          </template>
+          <template v-else-if="ev.valueType === 'slider'">
+            <span class="text-12px text-gray-400">min</span>
+            <ElInputNumber v-model="ev.min" size="small" :step="1" class="flex-1" />
+            <span class="text-12px text-gray-400">max</span>
+            <ElInputNumber v-model="ev.max" size="small" :step="1" class="flex-1" />
+          </template>
+          <span v-else class="text-12px text-gray-400">运行时输入框内容将直接下发</span>
+        </div>
+      </div>
+
+      <ElButton size="small" type="primary" plain @click="addEvent">+ 添加事件</ElButton>
+
       <template #footer>
         <ElButton @click="bindDialogVisible = false">取消</ElButton>
-        <ElButton type="primary" @click="confirmBind">确认绑定</ElButton>
+        <ElButton type="primary" @click="confirmBind">保存绑定</ElButton>
       </template>
     </ElDialog>
   </div>

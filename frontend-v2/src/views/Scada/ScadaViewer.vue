@@ -6,10 +6,10 @@
  * - 全屏模式
  * - 管道流动动画 + 旋转动画
  */
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElButton, ElBadge } from 'element-plus'
-import { getScadaPage, unwrap } from '@/api/modbus'
+import { ElButton, ElBadge, ElMessage, ElDrawer } from 'element-plus'
+import { getScadaPage, getScadaPages, getHistory, unwrap, writeDevice } from '@/api/modbus'
 import SvgCanvas from './SvgCanvas.vue'
 import { useWsStore } from '@/store/modules/websocket'
 import { wsManager } from '@/utils/websocket'
@@ -24,27 +24,15 @@ const id = route.params.id as string
 const page = ref<any>({ name: '', config_json: '{}' })
 const canvasRef = ref<InstanceType<typeof SvgCanvas>>()
 const isFullscreen = ref(false)
+const pagesList = ref<any[]>([])
+const drawerVisible = ref(false)
 let unsubFns: (() => void)[] = []
 
 const wsConnected = computed(() => wsStore.connected)
 
-// ── 绑定信息缓存 ──
-interface BindingInfo {
-  elementId: string
-  bindTarget: string
-  deviceId: number
-  tagId: number
-  tagName: string
-  prop: string
-}
-
-const parseBindingsFromCanvas = (): BindingInfo[] => {
-  if (!canvasRef.value) return []
-  return canvasRef.value.getAllBindings()
-}
-
-const fetchPage = async () => {
-  const body = unwrap(await getScadaPage(Number(id)))
+// ── 页面加载（支持切换画面） ──
+const loadPage = async (pid: number) => {
+  const body = unwrap(await getScadaPage(pid))
   page.value = body || {}
   await nextTick()
 
@@ -57,46 +45,122 @@ const fetchPage = async () => {
       console.warn('Failed to load SCADA config:', e)
     }
   }
+  // 重启流动动画（DOM 已重建）
+  canvasRef.value?.stopFlowAnimation()
+  canvasRef.value?.startFlowAnimation()
+
+  // 回放 WS 缓存中的最近值（打开画面立即显示，不等下一次推送）
+  for (const [signalId, v] of Object.entries(wsStore.liveData)) {
+    canvasRef.value?.applySignalValueToCanvas(signalId, v.value)
+  }
+
+  // M4: 为趋势图元加载历史数据
+  const trends = canvasRef.value?.getTrendTargets() || []
+  for (const t of trends) {
+    getHistory({ device_id: t.deviceId, tag_id: t.tagId, interval: 'raw', page_size: 300 })
+      .then((res: any) => {
+        try {
+          const body = unwrap(res)
+          const series = (body?.data || []).map((d: any) => Number(d.value))
+          if (series.length > 0) canvasRef.value?.loadTrendData(t.elementId, series)
+        } catch {
+          // history may be empty
+        }
+      })
+      .catch(() => {
+        // history read error -> trend shows live only
+      })
+  }
 }
 
-// ── WebSocket 实时数据更新 ──
+const fetchPagesList = async () => {
+  try {
+    const body = unwrap(await getScadaPages())
+    pagesList.value = Array.isArray(body) ? body : []
+  } catch {
+    pagesList.value = []
+  }
+}
+
+const switchPage = (pid: number) => {
+  drawerVisible.value = false
+  if (Number(pid) !== Number(route.params.id)) {
+    router.push(`/scada/view/${pid}`)
+  }
+}
+
+watch(
+  () => route.params.id,
+  (n) => {
+    if (n) loadPage(Number(n))
+  }
+)
+
+// ── WebSocket 实时数据更新（v2 引擎：signalId = deviceId:tagName） ──
+/** 最近值缓存（供 toggle 事件判断当前状态） */
+const lastValues = new Map<string, number>()
+
 const onLiveValue = (msg: any) => {
   const d = msg.data as WsLiveValue
-  if (!d) return
+  if (!d || !canvasRef.value) return
+  const signalId = `${d.device_id}:${d.tag_name}`
+  if (typeof d.value === 'number') lastValues.set(signalId, d.value)
+  canvasRef.value.applySignalValueToCanvas(signalId, d.value)
+}
 
-  const bindings = parseBindingsFromCanvas()
+// ── 交互写值（M2：按钮/开关/滑块/输入框） ──
+const onWidgetInteract = async (payload: {
+  elementId: string
+  eventType: string
+  events: any[]
+  value?: any
+}) => {
+  const { elementId, events, value } = payload
+  if (!canvasRef.value || events.length === 0) return
 
-  for (const binding of bindings) {
-    if (binding.deviceId === d.device_id && binding.tagName === d.tag_name) {
-      let updateValue: any = d.value
+  const gauge = canvasRef.value.getGaugeSettings(elementId)
+  const ev = events[0]
+  if (!ev) return
 
-      // 根据绑定目标决定更新方式（FUXA processValue 风格）
-      if (binding.bindTarget === 'state') {
-        // 状态绑定：根据值映射颜色
-        updateValue = d.value > 0 ? '#00ff00' : '#ff0000'
-        canvasRef.value?.updateBoundValue(binding.elementId, 'state', updateValue, 'fill')
-      } else if (['fill', 'stroke'].includes(binding.prop)) {
-        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, updateValue, binding.prop)
-      } else if (binding.bindTarget === 'level') {
-        // 液位绑定
-        canvasRef.value?.updateBoundValue(binding.elementId, 'level', d.value, 'height')
-        // 同时更新数值文本
-        canvasRef.value?.updateBoundValue(binding.elementId, 'level', d.value.toFixed(1), 'text')
-      } else if (binding.bindTarget === 'value') {
-        const displayValue = typeof d.value === 'number' ? d.value.toFixed(1) : String(d.value)
-        canvasRef.value?.updateBoundValue(binding.elementId, 'value', displayValue, 'text')
-      } else if (['red', 'yellow', 'green'].includes(binding.bindTarget)) {
-        // 信号灯颜色绑定
-        updateValue = d.value > 0 ? '#00ff00' : '#003a00'
-        if (binding.bindTarget === 'red') updateValue = d.value > 0 ? '#ff0000' : '#3a0000'
-        if (binding.bindTarget === 'yellow') updateValue = d.value > 0 ? '#ffff00' : '#3a3a00'
-        if (binding.bindTarget === 'green') updateValue = d.value > 0 ? '#00ff00' : '#003a00'
-        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, updateValue, 'fill')
-      } else {
-        const displayValue = typeof d.value === 'number' ? d.value.toFixed(1) : String(d.value)
-        canvasRef.value?.updateBoundValue(binding.elementId, binding.bindTarget, displayValue, 'text')
-      }
+  const o = ev.actoptions || {}
+
+  // M3: 画面跳转事件
+  if (ev.action === 'onpage') {
+    if (o.pageId && Number(o.pageId) !== Number(route.params.id)) {
+      router.push(`/scada/view/${o.pageId}`)
     }
+    return
+  }
+
+  if (!o.deviceId || !o.tagId) {
+    ElMessage.warning(`${gauge?.name || elementId}: 事件未配置目标点位`)
+    return
+  }
+
+  let writeVal: number | undefined
+  if (ev.action === 'onToggleValue') {
+    const cur = lastValues.get(`${o.deviceId}:${o.tagName}`)
+    writeVal = cur === o.offValue ? o.onValue : o.offValue
+  } else if (ev.action === 'onSetValue') {
+    if (o.valueType === 'input') {
+      writeVal = Number(value)
+    } else if (o.valueType === 'slider') {
+      writeVal = Number(value)
+    } else {
+      writeVal = Number(o.fixedValue)
+    }
+  }
+  if (writeVal === undefined || Number.isNaN(writeVal)) {
+    ElMessage.warning('请输入有效的数值')
+    return
+  }
+
+  try {
+    await writeDevice(o.deviceId, { tag_id: o.tagId, value: writeVal })
+    lastValues.set(`${o.deviceId}:${o.tagName}`, writeVal)
+    ElMessage.success(`${o.tagName} = ${writeVal}`)
+  } catch (e: any) {
+    ElMessage.error(e?.message || '写入失败')
   }
 }
 
@@ -122,10 +186,8 @@ const onFullscreenChange = () => {
 }
 
 onMounted(() => {
-  fetchPage().then(() => {
-    // 加载完成后启动动画
-    canvasRef.value?.startFlowAnimation()
-  })
+  loadPage(Number(route.params.id))
+  fetchPagesList()
   unsubFns.push(wsManager.on('live_value', onLiveValue))
   document.addEventListener('fullscreenchange', onFullscreenChange)
 })
@@ -149,6 +211,7 @@ onUnmounted(() => {
         </ElBadge>
       </div>
       <div class="flex items-center gap-8px">
+        <ElButton size="small" @click="drawerVisible = true">画面列表</ElButton>
         <ElButton size="small" @click="toggleFullscreen">
           {{ isFullscreen ? '退出全屏' : '全屏' }}
         </ElButton>
@@ -163,6 +226,27 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- 画面切换抽屉 -->
+    <ElDrawer v-model="drawerVisible" title="画面列表" size="280px">
+      <div
+        v-for="p in pagesList"
+        :key="p.id"
+        class="page-item"
+        :class="{ active: Number(p.id) === Number(route.params.id) }"
+        @click="switchPage(p.id)"
+      >
+        <div class="page-name">
+          {{ p.name }}<span v-if="p.id === page.id" class="text-green-400"> ●</span>
+        </div>
+        <div class="page-meta">
+          {{ p.id }} · {{ p.width }}×{{ p.height }}{{ p.description ? ' · ' + p.description : '' }}
+        </div>
+      </div>
+      <div v-if="pagesList.length === 0" class="text-12px text-gray-400">
+        暂无其他画面
+      </div>
+    </ElDrawer>
+
     <div class="viewer-canvas">
       <SvgCanvas
         ref="canvasRef"
@@ -170,6 +254,7 @@ onUnmounted(() => {
         :height="page.height || 1080"
         :background="page.background || '#1a1a2e'"
         :runtime="true"
+        @widget:interact="onWidgetInteract"
       />
     </div>
   </div>
@@ -205,5 +290,27 @@ onUnmounted(() => {
   justify-content: center;
   padding: 16px;
   background: #0d1117;
+}
+.page-item {
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  transition: background 0.15s;
+}
+.page-item:hover {
+  background: var(--el-fill-color-light);
+}
+.page-item.active {
+  background: var(--el-color-primary-light-9);
+}
+.page-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.page-meta {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
 }
 </style>

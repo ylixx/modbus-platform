@@ -434,6 +434,30 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         }
       },
       {
+        path: 'm-editor/:id',
+        component: () => import('@/views/Scada/MaotuEditor.vue'),
+        name: 'ScadaMaotuEditor',
+        meta: {
+          title: t('router.scadaEditor'),
+          hidden: true,
+          canTo: true,
+          activeMenu: '/scada/pages',
+          permission: 'scada.write'
+        }
+      },
+      {
+        path: 'm-view/:id',
+        component: () => import('@/views/Scada/MaotuViewer.vue'),
+        name: 'ScadaMaotuViewer',
+        meta: {
+          title: t('router.scadaViewer'),
+          hidden: true,
+          canTo: true,
+          activeMenu: '/scada/pages',
+          permission: 'scada.read'
+        }
+      },
+      {
         path: 'widgets',
         component: () => import('@/views/Scada/ScadaWidgets.vue'),
         name: 'ScadaWidgets',

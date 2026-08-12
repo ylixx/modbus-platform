@@ -663,6 +663,32 @@ export const svgWidgets: SvgWidgetDef[] = [
 </g>`
   },
 
+  // ══════════ 图表 ══════════
+  {
+    typeTag: 'svg-ext-chart',
+    name: '趋势图',
+    category: '图表',
+    defaultWidth: 320,
+    defaultHeight: 180,
+    bindableProps: ['trend', 'title'],
+    thumbnail: `<svg viewBox="0 0 40 24" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1" y="1" width="38" height="22" rx="2" fill="none" stroke="#3a5a7a" stroke-width="1" stroke-dasharray="3 2"/>
+  <polyline points="3,18 10,14 16,16 23,9 30,11 37,5" fill="none" stroke="#3a8fd4" stroke-width="1.5"/>
+  <text x="20" y="13" text-anchor="middle" fill="#a0c0e0" font-size="5">趋势</text>
+</svg>`,
+    createSvg: (id, x = 0, y = 0, w = 320, h = 180) => {
+      const pad = 12
+      return `<g id="${id}" type="svg-ext-chart" transform="translate(${x},${y})">
+  <rect width="${w}" height="${h}" rx="6" fill="#101828cc" stroke="#3a5a7a" stroke-width="1.5" stroke-dasharray="6 3"/>
+  <line x1="${pad}" y1="${pad}" x2="${w - pad}" y2="${pad}" stroke="#2a3a4a" stroke-width="1"/>
+  <line x1="${pad}" y1="${h / 2}" x2="${w - pad}" y2="${h / 2}" stroke="#2a3a4a" stroke-width="1"/>
+  <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="#2a3a4a" stroke-width="1"/>
+  <polyline points="" fill="none" stroke="#3a8fd4" stroke-width="2" stroke-linejoin="round" data-bind-target="trend" data-bind-prop="trend"/>
+  <text x="${w / 2}" y="${h - 4}" text-anchor="middle" fill="#a0c0e0" font-size="12" font-family="Arial" data-bind-target="title" data-bind-prop="text">趋势图</text>
+</g>`
+    }
+  },
+
   // ══════════ 标注类 ══════════
   {
     typeTag: 'svg-ext-value',

@@ -12,7 +12,10 @@ import {
   ElInput,
   ElMessage,
   ElMessageBox,
-  ElEmpty
+  ElEmpty,
+  ElTag,
+  ElRadioGroup,
+  ElRadio
 } from 'element-plus'
 import {
   getScadaPages,
@@ -21,6 +24,7 @@ import {
   duplicateScadaPage,
   unwrapList
 } from '@/api/modbus'
+import { defaultMtPageConfig } from './maotu/types'
 
 defineOptions({ name: 'ScadaPages' })
 
@@ -30,7 +34,17 @@ const list = ref<any[]>([])
 const fetchList = async () => {
   loading.value = true
   try {
-    list.value = unwrapList(await getScadaPages()).list
+    const pages = unwrapList(await getScadaPages()).list
+    list.value = (pages || []).map((p: any) => {
+      let engine = 'svg'
+      try {
+        const json = typeof p.config_json === 'string' ? JSON.parse(p.config_json) : p.config_json
+        if (json?.__engine === 'maotu') engine = 'maotu'
+      } catch {
+        // ignore
+      }
+      return { ...p, engine }
+    })
   } finally {
     loading.value = false
   }
@@ -38,16 +52,23 @@ const fetchList = async () => {
 
 const dialogVisible = ref(false)
 const formRef = ref()
-const form = reactive<any>({ name: '', description: '' })
+const form = reactive<any>({ name: '', description: '', engine: 'svg' })
 const rules = { name: [{ required: true, message: '请输入画面名称', trigger: 'blur' }] }
 const openCreate = () => {
-  Object.assign(form, { name: '', description: '' })
+  Object.assign(form, { name: '', description: '', engine: 'svg' })
   dialogVisible.value = true
 }
 const submit = async () => {
   await formRef.value?.validate()
   try {
-    await createScadaPage({ name: form.name, description: form.description, config_json: '[]' })
+    const config_json = form.engine === 'maotu'
+      ? JSON.stringify(defaultMtPageConfig())
+      : '[]'
+    await createScadaPage({
+      name: form.name,
+      description: form.description,
+      config_json
+    })
     ElMessage.success('创建成功')
     dialogVisible.value = false
     fetchList()
@@ -93,17 +114,26 @@ onMounted(fetchList)
       <ElTableColumn sortable prop="id" label="ID" width="70" />
       <ElTableColumn sortable prop="name" label="画面名称" min-width="160" show-overflow-tooltip />
       <ElTableColumn sortable prop="description" label="描述" min-width="200" show-overflow-tooltip />
-      <ElTableColumn sortable prop="updated_at" label="更新时间" width="180" />
-      <ElTableColumn label="操作" width="280" fixed="right">
+      <ElTableColumn label="引擎" width="90" align="center">
         <template #default="{ row }">
-          <ElButton link type="primary" @click="router.push(`/scada/view/${row.id}`)"
+          <ElTag v-if="row.engine === 'maotu'" type="success" size="small">maotu</ElTag>
+          <ElTag v-else size="small" type="info">经典</ElTag>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn sortable prop="updated_at" label="更新时间" width="180" />
+      <ElTableColumn label="操作" width="300" fixed="right">
+        <template #default="{ row }">
+          <ElButton
+            link
+            type="primary"
+            @click="router.push(row.engine === 'maotu' ? `/scada/m-view/${row.id}` : `/scada/view/${row.id}`)"
             >运行</ElButton
           >
           <ElButton
             v-hasPermi="['scada.write']"
             link
             type="primary"
-            @click="router.push(`/scada/editor/${row.id}`)"
+            @click="router.push(row.engine === 'maotu' ? `/scada/m-editor/${row.id}` : `/scada/editor/${row.id}`)"
             >编辑</ElButton
           >
           <ElButton v-hasPermi="['scada.write']" link type="primary" @click="duplicate(row)"
@@ -121,9 +151,15 @@ onMounted(fetchList)
         <ElFormItem label="名称" prop="name">
           <ElInput v-model="form.name" placeholder="请输入画面名称" />
         </ElFormItem>
-        <ElFormItem label="描述">
-          <ElInput v-model="form.description" type="textarea" :rows="2" />
-        </ElFormItem>
+<ElFormItem label="描述">
+        <ElInput v-model="form.description" type="textarea" :rows="2" />
+      </ElFormItem>
+      <ElFormItem label="引擎">
+        <ElRadioGroup v-model="form.engine">
+          <ElRadio value="maotu">maotu 组态</ElRadio>
+          <ElRadio value="svg">经典 SVG</ElRadio>
+        </ElRadioGroup>
+      </ElFormItem>
       </ElForm>
       <template #footer>
         <ElButton @click="dialogVisible = false">取消</ElButton>

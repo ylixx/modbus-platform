@@ -65,21 +65,22 @@ export interface GaugeSettings {
   id: string // = SVG元素的 id 属性
   type: string // 图元类型标签，如 'svg-ext-value', 'svg-ext-button'
   name: string // 图元实例名称
-  property: GaugeProperty // 数据绑定属性
   label: string // 显示标签
   hide: boolean
   lock: boolean
+  bindings: DictionaryBindingDef // 多属性域绑定：{ [绑定域]: BindingDef }
+  events: GaugeEvent[] // 鼠标/键盘事件
 }
 
-// ── GaugeProperty 数据绑定基类 ──
+// ── BindingDef 单个属性域的数据绑定 ──
 
-export interface GaugeProperty {
-  variableId: string // 绑定的Tag/信号ID
-  variableValue: string // 静态初始值
-  bitmask: number // 位掩码
-  ranges: GaugeRangeProperty[] // 值域范围映射
-  events: GaugeEvent[] // 鼠标/键盘事件
-  actions: GaugeAction[] // 数据驱动动作
+export interface BindingDef {
+  variableId: string // 绑定的信号ID，格式 "deviceId:tagName"，空 = 未绑定
+  tagId?: number // 点位ID（趋势图元拉取历史时使用）
+  variableValue: string // 静态值（未绑定时的显示值）
+  bitmask: number // 位掩码（0 = 不使用）
+  format: string // 格式化：''=原始 | '0'-'6'=小数位 | 'HEX' | 'BIN'
+  ranges: GaugeRangeProperty[] // 值域范围映射（趋势图元：ranges[0] 作为 Y 轴显示范围）
   readonly: boolean
 }
 
@@ -88,9 +89,13 @@ export interface GaugeProperty {
 export interface GaugeRangeProperty {
   min: number
   max: number
-  text: string // 范围内显示文本
-  color: string // 范围内填充色
-  stroke: string // 范围内描边色
+  text: string // 范围内显示文本（空 = 不覆盖文本）
+  color: string // 范围内填充色（空 = 不覆盖填充）
+  stroke: string // 范围内描边色（空 = 不覆盖描边）
+}
+
+export interface DictionaryBindingDef {
+  [bindTarget: string]: BindingDef
 }
 
 // ── 数据驱动动作 ──
@@ -155,6 +160,7 @@ export interface GaugeActionOptions {
 export enum GaugeEventType {
   click = 'click',
   dblclick = 'dblclick',
+  change = 'change',
   mousedown = 'mousedown',
   mouseup = 'mouseup',
   mouseover = 'mouseover',
@@ -201,20 +207,55 @@ export function createGaugeSettings(id: string, type: string, name?: string): Ga
     label: type,
     hide: false,
     lock: false,
-    property: createDefaultProperty()
+    bindings: {},
+    events: []
   }
 }
 
-export function createDefaultProperty(): GaugeProperty {
+export function createDefaultBinding(): BindingDef {
   return {
     variableId: '',
     variableValue: '',
     bitmask: 0,
+    format: '',
     ranges: [],
-    events: [],
-    actions: [],
     readonly: false
   }
+}
+
+// ── 值格式化 ──
+
+/**
+ * 数值格式化（FUXA formatValue 风格）
+ * @param raw 原始值
+ * @param format ''=原始 | '0'-'6'=小数位 | 'HEX'=十六进制 | 'BIN'=二进制
+ */
+export function formatValue(raw: number | string | boolean, format: string): string {
+  if (format === 'HEX' || format === 'BIN') {
+    const num = typeof raw === 'number' ? raw : parseInt(String(raw), 10)
+    if (Number.isNaN(num)) return String(raw)
+    return format === 'HEX' ? num.toString(16).toUpperCase() : num.toString(2)
+  }
+  const decimals = parseInt(format, 10)
+  if (!Number.isNaN(decimals)) {
+    const num = typeof raw === 'number' ? raw : parseFloat(String(raw))
+    if (Number.isNaN(num)) return String(raw)
+    return num.toFixed(decimals)
+  }
+  return typeof raw === 'number' ? String(raw) : String(raw)
+}
+
+// ── 静态值回退 ──
+
+/**
+ * 解析某绑定域的显示值：绑定了信号 → 原始值；未绑定 → 静态值
+ */
+export function resolveRawValue(def: BindingDef, signalValue: number | string | boolean | null | undefined): number | string | boolean | undefined {
+  if (!def.variableId) {
+    if (def.variableValue === '') return undefined
+    return def.variableValue
+  }
+  return signalValue ?? undefined
 }
 
 // ── 存储格式（用于后端 API 交互） ──
@@ -232,6 +273,7 @@ export interface ScadaPageDTO {
 /** 将内部 View 转为后端 config_json */
 export function viewToConfigJson(view: View): string {
   return JSON.stringify({
+    version: 2,
     svgcontent: view.svgcontent,
     items: view.items,
     profile: view.profile

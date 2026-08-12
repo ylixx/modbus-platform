@@ -279,6 +279,7 @@ class WidgetUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
     description: Optional[str] = None
+    source_data: Optional[str] = None
     default_width: Optional[int] = None
     default_height: Optional[int] = None
     bindable: Optional[List[str]] = None
