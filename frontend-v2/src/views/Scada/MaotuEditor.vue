@@ -75,8 +75,9 @@ const onReturn = () => {
   router.push('/scada/pages')
 }
 
+leftAsideStore.registerConfig('石化图元', chemSymbols)
+
 onMounted(() => {
-  leftAsideStore.registerConfig('石化图元', chemSymbols)
   loadPage()
 })
 </script>

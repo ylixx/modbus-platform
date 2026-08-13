@@ -242,4 +242,33 @@ export const chemSymbols: ChemSymbol[] = [
     svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" width="44" height="44"><circle cx="22" cy="22" r="17" fill="#94a3b8" stroke="#e2e8f0" stroke-width="2"/><circle cx="22" cy="22" r="10" fill="#64748b"/></svg>',
     thumbnail: 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2044%2044%22%3E%3Ccircle%20cx%3D%2222%22%20cy%3D%2222%22%20r%3D%2217%22%20fill%3D%22%2394a3b8%22%20stroke%3D%22%23e2e8f0%22%20stroke-width%3D%222%22%2F%3E%3Ccircle%20cx%3D%2222%22%20cy%3D%2222%22%20r%3D%2210%22%20fill%3D%22%2364748b%22%2F%3E%3C%2Fsvg%3E',
   },
+
+  {
+    id: 'chem-flow-meter',
+    title: '仪表·流量计',
+    type: 'svg',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 80" width="100" height="80"><rect x="0" y="30" width="100" height="20" rx="10" fill="#0d1b2a" stroke="#4aa8ff" stroke-width="3"/><circle cx="50" cy="40" r="26" fill="#10233d" stroke="#4aa8ff" stroke-width="3"/><circle cx="50" cy="40" r="17" fill="none" stroke="#2c5f8a" stroke-width="1.5"/><path d="M 50 23 L 58 40 L 50 57 L 42 40 Z" fill="#67e8f9"/><circle cx="50" cy="40" r="3" fill="#0d1b2a"/></svg>',
+    thumbnail: 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%2080%22%20width%3D%22100%22%20height%3D%2280%22%3E%3Crect%20x%3D%220%22%20y%3D%2230%22%20width%3D%22100%22%20height%3D%2220%22%20rx%3D%2210%22%20fill%3D%22%230d1b2a%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2240%22%20r%3D%2226%22%20fill%3D%22%2310233d%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2240%22%20r%3D%2217%22%20fill%3D%22none%22%20stroke%3D%22%232c5f8a%22%20stroke-width%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M%2050%2023%20L%2058%2040%20L%2050%2057%20L%2042%2040%20Z%22%20fill%3D%22%2367e8f9%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2240%22%20r%3D%223%22%20fill%3D%22%230d1b2a%22%2F%3E%3C%2Fsvg%3E',
+  },
+  {
+    id: 'chem-thermometer',
+    title: '仪表·温度计',
+    type: 'svg',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 100" width="60" height="100"><rect x="20" y="6" width="20" height="46" rx="10" fill="#0d1b2a" stroke="#4aa8ff" stroke-width="3"/><circle cx="30" cy="80" r="18" fill="#10233d" stroke="#4aa8ff" stroke-width="3"/><rect x="26" y="14" width="8" height="48" fill="#ff5252"/><circle cx="30" cy="80" r="10" fill="#ff5252"/><path d="M 8 20 L 17 20 M 8 34 L 17 34 M 8 48 L 17 48" stroke="#4aa8ff" stroke-width="2"/></svg>',
+    thumbnail: 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2060%20100%22%20width%3D%2260%22%20height%3D%22100%22%3E%3Crect%20x%3D%2220%22%20y%3D%226%22%20width%3D%2220%22%20height%3D%2246%22%20rx%3D%2210%22%20fill%3D%22%230d1b2a%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2230%22%20cy%3D%2280%22%20r%3D%2218%22%20fill%3D%22%2310233d%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%223%22%2F%3E%3Crect%20x%3D%2226%22%20y%3D%2214%22%20width%3D%228%22%20height%3D%2248%22%20fill%3D%22%23ff5252%22%2F%3E%3Ccircle%20cx%3D%2230%22%20cy%3D%2280%22%20r%3D%2210%22%20fill%3D%22%23ff5252%22%2F%3E%3Cpath%20d%3D%22M%208%2020%20L%2017%2020%20M%208%2034%20L%2017%2034%20M%208%2048%20L%2017%2048%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%222%22%2F%3E%3C%2Fsvg%3E',
+  },
+  {
+    id: 'chem-pressure-gauge',
+    title: '仪表·压力表',
+    type: 'svg',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 80" width="100" height="80"><rect x="0" y="40" width="100" height="12" rx="6" fill="#0d1b2a" stroke="#4aa8ff" stroke-width="3"/><circle cx="50" cy="36" r="34" fill="#10233d" stroke="#4aa8ff" stroke-width="3"/><circle cx="50" cy="36" r="26" fill="none" stroke="#2c5f8a" stroke-width="1.5"/><path d="M 50 36 L 68 20" stroke="#ffd54f" stroke-width="3" stroke-linecap="round"/><circle cx="50" cy="36" r="3.5" fill="#ffd54f"/></svg>',
+    thumbnail: 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%2080%22%20width%3D%22100%22%20height%3D%2280%22%3E%3Crect%20x%3D%220%22%20y%3D%2240%22%20width%3D%22100%22%20height%3D%2212%22%20rx%3D%226%22%20fill%3D%22%230d1b2a%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2236%22%20r%3D%2234%22%20fill%3D%22%2310233d%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2236%22%20r%3D%2226%22%20fill%3D%22none%22%20stroke%3D%22%232c5f8a%22%20stroke-width%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M%2050%2036%20L%2068%2020%22%20stroke%3D%22%23ffd54f%22%20stroke-width%3D%223%22%20stroke-linecap%3D%22round%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2236%22%20r%3D%223.5%22%20fill%3D%22%23ffd54f%22%2F%3E%3C%2Fsvg%3E',
+  },
+  {
+    id: 'chem-level-gauge',
+    title: '仪表·液位计',
+    type: 'svg',
+    svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 100" width="60" height="100"><rect x="12" y="6" width="36" height="88" fill="#0d1b2a" stroke="#4aa8ff" stroke-width="3"/><rect x="16" y="58" width="28" height="32" fill="#37e2ff" opacity="0.85"/><path d="M 8 20 L 12 20 M 8 40 L 12 40 M 8 60 L 12 60 M 8 80 L 12 80 M 48 20 L 52 20 M 48 40 L 52 40 M 48 60 L 52 60 M 48 80 L 52 80" stroke="#4aa8ff" stroke-width="2"/></svg>',
+    thumbnail: 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2060%20100%22%20width%3D%2260%22%20height%3D%22100%22%3E%3Crect%20x%3D%2212%22%20y%3D%226%22%20width%3D%2236%22%20height%3D%2288%22%20fill%3D%22%230d1b2a%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%223%22%2F%3E%3Crect%20x%3D%2216%22%20y%3D%2258%22%20width%3D%2228%22%20height%3D%2232%22%20fill%3D%22%2337e2ff%22%20opacity%3D%220.85%22%2F%3E%3Cpath%20d%3D%22M%208%2020%20L%2012%2020%20M%208%2040%20L%2012%2040%20M%208%2060%20L%2012%2060%20M%208%2080%20L%2012%2080%20M%2048%2020%20L%2052%2020%20M%2048%2040%20L%2052%2040%20M%2048%2060%20L%2052%2060%20M%2048%2080%20L%2052%2080%22%20stroke%3D%22%234aa8ff%22%20stroke-width%3D%222%22%2F%3E%3C%2Fsvg%3E',
+  },
 ]

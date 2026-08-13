@@ -64,13 +64,16 @@ class WebSocketManager {
 
   /** 建立连接 */
   connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      return
+    }
 
     this.manuallyClosed = false
     const userStore = useUserStoreWithOut()
     const token = userStore.getToken
     if (!token) {
-      console.warn('[WS] No token, skip connect')
+      // token 尚未就绪（如 pinia persist 异步恢复），稍后重试而非放弃
+      setTimeout(() => this.connect(), 1000)
       return
     }
 

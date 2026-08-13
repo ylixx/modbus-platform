@@ -52,10 +52,28 @@ const applyLiveValue = (signalId: string, value: number, tagId?: number) => {
   for (const it of bindItems) {
     const b = it.device_bind
     if (b?.signalId === signalId && b.attr) {
-      let v: any = value
-      if (b.attr === 'fill' || b.attr === 'stroke') v = value ? '#67C23A' : '#F56C6C'
-      else if (b.attr === 'visibility') v = value ? 'visible' : 'hidden'
-      target.setItemAttrByID(it.id, b.attr, v)
+      // svg 图元的 props 通常为空（custom symbol），数据层 setItemAttr 对 fill/stroke 无效，
+      // 直接操作 DOM：状态发光（绿=运行 / 红=停止）
+      if (it.type === 'svg') {
+        const el = document.getElementById(it.id)
+        if (el) {
+          if (b.attr === 'fill' || b.attr === 'stroke') {
+            const img = el.querySelector('img')
+            if (img) {
+              img.style.filter = value
+                ? 'drop-shadow(0 0 6px rgba(103,194,58,.95)) drop-shadow(0 0 2px rgba(103,194,58,.8))'
+                : 'drop-shadow(0 0 6px rgba(245,108,108,.95))'
+            }
+          } else if (b.attr === 'visibility') {
+            el.style.visibility = value ? 'visible' : 'hidden'
+          }
+        }
+        continue
+      }
+      // vue 组件（kv-vue/text-vue 等）：渲染层从 item.props.<attr>.val 绑定（render-item prosToVBind）
+      if (b.attr === 'value' || b.attr === 'text') {
+        target.setItemAttrByID(it.id, `props.${b.attr}.val`, value)
+      }
     }
   }
 }
@@ -168,8 +186,9 @@ watch(
   }
 )
 
+leftAsideStore.registerConfig('石化图元', chemSymbols)
+
 onMounted(async () => {
-  leftAsideStore.registerConfig('石化图元', chemSymbols)
   installWriteBridge()
   fetchPagesList()
   unsubFns.push(wsManager.on('live_value', onLiveValue))
