@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 from sqlalchemy import text
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, HistorySessionLocal
 from app.services.config_service import get_retention_days, get_config
 
 # SQLite-compatible batch delete: use subquery with LIMIT inside an IN clause.
@@ -17,7 +17,8 @@ def archive_history(retention_days: int = None):
         logger.warning(f"archive_history called with retention_days={days}, skipping (must be >= 1)")
         return 0
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    db = SessionLocal()
+    # tag_history 已路由到独立历史库（若已配置），清理必须走历史会话
+    db = HistorySessionLocal()
     try:
         # Use subquery with LIMIT for SQLite compatibility
         result = db.execute(text(
@@ -133,10 +134,19 @@ def get_archive_stats():
     db = SessionLocal()
     try:
         stats = {}
-        for table in ["tag_history", "alarm_records", "sms_records", "audit_logs"]:
+        for table in ["alarm_records", "sms_records", "audit_logs"]:
             result = db.execute(text(f"SELECT COUNT(*) FROM {table}"))
             stats[table] = result.scalar()
-        for table, col in [("tag_history", "recorded_at"), ("alarm_records", "triggered_at"), ("audit_logs", "created_at")]:
+        # tag_history 位于独立历史库（若已配置），用历史会话统计
+        hdb = HistorySessionLocal()
+        try:
+            result = hdb.execute(text("SELECT COUNT(*) FROM tag_history"))
+            stats["tag_history"] = result.scalar()
+            result = hdb.execute(text("SELECT MIN(recorded_at) FROM tag_history"))
+            stats["tag_history_oldest"] = str(result.scalar() or "N/A")
+        finally:
+            hdb.close()
+        for table, col in [("alarm_records", "triggered_at"), ("audit_logs", "created_at")]:
             result = db.execute(text(f"SELECT MIN({col}) FROM {table}"))
             stats[f"{table}_oldest"] = str(result.scalar() or "N/A")
         return stats

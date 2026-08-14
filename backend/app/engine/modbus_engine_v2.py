@@ -9,8 +9,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
-from app.core.database import SessionLocal
-from app.models.device import Device, DeviceTag, FunctionCode
+from app.core.database import SessionLocal, HistorySessionLocal
+from app.models.device import Device, DeviceTag, FunctionCode, ProtocolType
 from app.models.history import TagHistory
 from app.engine.modbus_codec import get_register_count, decode_value
 from app.engine.shared_buffer import write_buffer, ws_pusher
@@ -102,8 +102,12 @@ class ModbusEngineV2:
         self._conn_lock = asyncio.Lock()
         db = SessionLocal()
         try:
-            devices = db.query(Device).filter(Device.enabled == True).all()
-            # 启动时将所有启用设备状态重置为 offline，避免残留旧的 online 状态
+            devices = db.query(Device).filter(
+                Device.enabled == True,
+                Device.protocol.in_([ProtocolType.MODBUS_TCP, ProtocolType.MODBUS_RTU]),
+            ).all()
+            # 启动时将本引擎管理的（Modbus）启用设备状态重置为 offline，避免残留旧的 online 状态。
+            # 注意：仅 Modbus 设备，避免误改 MQTT/OPC-UA 设备的状态。
             for device in devices:
                 if device.status in ("online", "no-data"):
                     device.status = "offline"
@@ -284,21 +288,31 @@ class ModbusEngineV2:
           None  - 设备无可用点位（不纳入「在线无数据」判定）
         连接失败会抛 ConnectError，由协程层做离线/重连处理。
         """
+        # 仅用短生命周期会话读取点位配置；读完后立即释放，
+        # 避免后续阻塞式 Modbus I/O 期间占用主库连接池（否则删除设备等
+        # 操作会因连接池耗尽而 checkout 阻塞长达 pool_timeout）。
         db = SessionLocal()
         try:
-            # 获取共享连接（连接失败会抛 ConnectError 冒泡到协程）
-            client, lock = await self._get_client(device)
-
             tags = db.query(DeviceTag).filter(
                 DeviceTag.device_id == device_id, DeviceTag.enabled == True,
             ).all()
+        finally:
+            db.close()
+            db = None
 
-            groups = self._group_tags(tags)
+        try:
+            # 获取共享连接（连接失败会抛 ConnectError 冒泡到协程）
+            client, lock = await self._get_client(device)
+        except ConnectError:
+            raise
 
-            if not groups:
-                # 无可用点位，不纳入「在线无数据」判定
-                return None
+        groups = self._group_tags(tags)
 
+        if not groups:
+            # 无可用点位，不纳入「在线无数据」判定
+            return None
+
+        try:
             logger.debug(f"[采集] 设备ID={device_id}: {len(tags)} 个点位, {len(groups)} 组读取请求")
 
             read_any = False
@@ -326,8 +340,8 @@ class ModbusEngineV2:
                             if tag.decimal_places is not None:
                                 processed = round(processed, tag.decimal_places)
 
-                            # 脚本处理（同步，但很快）
-                            processed, quality, alarm_msg = self._apply_script(db, tag, device_id, processed)
+                            # 脚本处理（同步，但很快）。自行管理短生命周期会话。
+                            processed, quality, alarm_msg = self._apply_script(tag, device_id, processed)
 
                             logger.info(f"[采集] 设备ID={device_id} 点位={tag.name} 原始值={value} 处理值={processed} 质量={quality}")
 
@@ -363,11 +377,18 @@ class ModbusEngineV2:
                 except Exception as e:
                     logger.error(f"[采集] 设备ID={device_id}: FC={fc} addr={start_addr} 读取异常: {e}")
 
-            # 更新最后采集时间
-            dev_row = db.query(Device).filter(Device.id == device_id).first()
-            if dev_row:
-                dev_row.last_poll_at = datetime.now(timezone.utc)
-            db.commit()
+            # 更新最后采集时间：使用全新短生命周期会话，避免占用连接池
+            try:
+                db2 = SessionLocal()
+                try:
+                    dev_row = db2.query(Device).filter(Device.id == device_id).first()
+                    if dev_row:
+                        dev_row.last_poll_at = datetime.now(timezone.utc)
+                    db2.commit()
+                finally:
+                    db2.close()
+            except Exception as e:
+                logger.error(f"[采集] 设备ID={device_id}: 更新 last_poll_at 失败: {e}")
 
             return read_any
 
@@ -375,9 +396,6 @@ class ModbusEngineV2:
             raise
         except Exception as e:
             logger.error(f"[采集] 设备ID={device_id} 采集过程异常: {e}")
-            db.rollback()
-        finally:
-            db.close()
 
     async def _read_registers_async(self, client, slave_id: int, fc: str, address: int, count: int):
         """异步读取寄存器。
@@ -502,21 +520,30 @@ class ModbusEngineV2:
 
         return groups
 
-    def _apply_script(self, db, tag, device_id: int, value: float):
-        """脚本处理（同步，单次执行很快 <1ms）。"""
+    def _apply_script(self, tag, device_id: int, value: float):
+        """脚本处理（同步，单次执行很快 <1ms）。
+
+        自行管理短生命周期会话：仅读取脚本配置时使用主库连接，用完即释放，
+        不在阻塞式采集循环中长期占用连接池。
+        """
         if not tag.script_id:
             return value, "good", None
 
         from app.models.script import Script
         from app.engine.script_engine import script_engine
 
-        script = db.query(Script).filter(Script.id == tag.script_id, Script.enabled == True).first()
+        db = SessionLocal()
+        try:
+            script = db.query(Script).filter(Script.id == tag.script_id, Script.enabled == True).first()
+        finally:
+            db.close()
         if not script:
             return value, "good", None
 
-        recent = db.query(TagHistory.value).filter(
-            TagHistory.device_id == device_id, TagHistory.tag_id == tag.id,
-        ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
+        with HistorySessionLocal() as hdb:
+            recent = hdb.query(TagHistory.value).filter(
+                TagHistory.device_id == device_id, TagHistory.tag_id == tag.id,
+            ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
         history = [r[0] for r in reversed(recent)]
 
         tag_config = {"name": tag.name, "unit": tag.unit, "scale_factor": tag.scale_factor, "offset": tag.offset, "params": {}}

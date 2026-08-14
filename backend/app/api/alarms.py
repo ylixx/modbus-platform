@@ -143,7 +143,8 @@ def delete_rule(rule_id: int, request: Request, db: Session = Depends(get_db), u
     db.delete(rule)
     log_action(action="alarm.rule.delete", resource_type="alarm_rule", resource_id=rule.id,
                resource_name=rule.name, detail="",
-               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "",
+               db=db)
     try:
         db.commit()
     except Exception as e:

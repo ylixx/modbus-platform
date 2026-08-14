@@ -71,48 +71,63 @@ class MqttConnectionPool:
         """
         key = self.make_key(broker, port, username)
 
+        # State for an immediate on_connect notification that must happen
+        # OUTSIDE the lock (callbacks may do DB writes).
+        reuse_connected = False
+        reuse_client = None
+        reuse_on_connect = None
+        entry = None
         with self._lock:
-            if key in self._pool:
-                entry = self._pool[key]
+            entry = self._pool.get(key)
+            if entry is not None:
                 entry.ref_count += 1
                 if on_connect:
                     entry.on_connect_callbacks.append(on_connect)
                 if on_disconnect:
                     entry.on_disconnect_callbacks.append(on_disconnect)
                 logger.debug(f"MqttPool: acquire existing key={key}, ref_count={entry.ref_count}")
-                return key, entry
+                reuse_connected = entry.connected
+                reuse_client = entry.client
+                reuse_on_connect = on_connect
 
-            # Create new client
-            cid = client_id or f"pool_{key.replace(':', '_')}_{int(time.time())}"
-            client = mqtt.Client(
-                client_id=cid,
-                protocol=mqtt.MQTTv311,
-                callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            )
+        if entry is not None:
+            # Reuse an already-established shared connection.
+            if reuse_connected and reuse_on_connect and reuse_client is not None:
+                # paho only fires on_connect on a real (re)connection, so a
+                # late-joining device would otherwise stay stuck in its default
+                # (offline) state forever even though it is subscribed and
+                # receiving data. Notify it now so its status flips to online.
+                try:
+                    reuse_on_connect(reuse_client, 0)
+                except Exception as e:
+                    logger.error(f"MqttPool: on_connect (reuse) callback error key={key}: {e}")
+            return key, entry
 
-            if username:
-                client.username_pw_set(username, password or "")
+        # Create a brand-new connection (outside the lock to avoid blocking).
+        cid = client_id or f"pool_{key.replace(':', '_')}_{int(time.time())}"
+        client = mqtt.Client(
+            client_id=cid,
+            protocol=mqtt.MQTTv311,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        )
+        if username:
+            client.username_pw_set(username, password or "")
+        if use_tls:
+            self._apply_tls(client, ca_cert)
+        client.reconnect_delay_set(min_delay=1, max_delay=60)
 
-            if use_tls:
-                self._apply_tls(client, ca_cert)
+        entry = PoolEntry(client=client, ref_count=1)
+        if on_connect:
+            entry.on_connect_callbacks.append(on_connect)
+        if on_disconnect:
+            entry.on_disconnect_callbacks.append(on_disconnect)
+        client.on_connect = self._make_on_connect(key)
+        client.on_disconnect = self._make_on_disconnect(key)
+        client.on_message = self._make_on_message(key)
 
-            # Exponential reconnect: 1s ~ 60s
-            client.reconnect_delay_set(min_delay=1, max_delay=60)
-
-            entry = PoolEntry(client=client, ref_count=1)
-            if on_connect:
-                entry.on_connect_callbacks.append(on_connect)
-            if on_disconnect:
-                entry.on_disconnect_callbacks.append(on_disconnect)
-
-            # Wire callbacks
-            client.on_connect = self._make_on_connect(key)
-            client.on_disconnect = self._make_on_disconnect(key)
-            client.on_message = self._make_on_message(key)
-
+        with self._lock:
             self._pool[key] = entry
 
-        # Connect outside lock to avoid blocking
         try:
             client.connect_async(broker, port, keepalive=60)
             client.loop_start()

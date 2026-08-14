@@ -92,7 +92,8 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), a
     db.delete(user)
     log_action(action="user.delete", resource_type="user", resource_id=user.id,
                resource_name=user.username, detail="",
-               user_id=admin.id, username=admin.username, ip_address=request.client.host if request.client else "")
+               user_id=admin.id, username=admin.username, ip_address=request.client.host if request.client else "",
+               db=db)
     try:
         db.commit()
     except Exception as e:

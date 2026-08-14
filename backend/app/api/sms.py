@@ -83,7 +83,8 @@ def delete_contact(contact_id: int, request: Request, db: Session = Depends(get_
     db.delete(contact)
     log_action(action="sms.contact.delete", resource_type="sms_contact", resource_id=contact.id,
                resource_name=contact.name, detail="",
-               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "",
+               db=db)
     try:
         db.commit()
     except Exception as e:

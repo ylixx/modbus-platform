@@ -91,7 +91,8 @@ def delete_rule(
     db.delete(rule)
     log_action(action="data_forward.delete", resource_type="data_forward_rule", resource_id=rule.id,
                resource_name=rule.name, detail="",
-               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "",
+               db=db)
     try:
         db.commit()
     except Exception as e:

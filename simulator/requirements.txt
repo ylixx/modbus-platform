@@ -1,0 +1,4 @@
+# 模拟器依赖（均复用 backend/.venv 中已安装项，仅 amqtt 需额外安装）
+# pip install -r requirements.txt   （在 backend/.venv 内执行）
+amqtt==0.12.0
+PyYAML>=6.0

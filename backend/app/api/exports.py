@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query, Response, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
-from app.core.database import get_db
+from app.core.database import get_db, HistorySessionLocal
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.device import Device, DeviceTag
@@ -32,17 +32,19 @@ def export_history_csv(
     from app.services.org_service import check_device_visible
     if not check_device_visible(db, current_user, device_id):
         raise HTTPException(status_code=403, detail="无权导出该设备数据（超出组织数据范围）")
-    q = db.query(TagHistory).filter(TagHistory.device_id == device_id)
-    if tag_id:
-        q = q.filter(TagHistory.tag_id == tag_id)
-    if start_time:
-        q = q.filter(TagHistory.recorded_at >= start_time)
-    else:
-        q = q.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(days=7))
-    if end_time:
-        q = q.filter(TagHistory.recorded_at <= end_time)
+    # TagHistory 已路由到独立历史库，使用历史会话查询（无独立历史库时回退主库）
+    with HistorySessionLocal() as hdb:
+        q = hdb.query(TagHistory).filter(TagHistory.device_id == device_id)
+        if tag_id:
+            q = q.filter(TagHistory.tag_id == tag_id)
+        if start_time:
+            q = q.filter(TagHistory.recorded_at >= start_time)
+        else:
+            q = q.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(days=7))
+        if end_time:
+            q = q.filter(TagHistory.recorded_at <= end_time)
 
-    rows = q.order_by(TagHistory.recorded_at.desc()).limit(50000).all()
+        rows = q.order_by(TagHistory.recorded_at.desc()).limit(50000).all()
 
     output = io.StringIO()
     writer = csv.writer(output)

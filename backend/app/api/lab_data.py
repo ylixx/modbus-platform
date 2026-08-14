@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from app.core.database import get_db
+from app.core.database import get_db, HistorySessionLocal
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.device import Device, DeviceTag
@@ -119,15 +119,16 @@ def list_lab_data(
             window_start = i.sample_time - half_window
             window_end = i.sample_time + half_window
 
-            stats = db.query(
-                sql_func.avg(TagHistory.value),
-                sql_func.count(TagHistory.id),
-            ).filter(
-                TagHistory.device_id == i.device_id,
-                TagHistory.tag_id == i.tag_id,
-                TagHistory.recorded_at >= window_start,
-                TagHistory.recorded_at <= window_end,
-            ).first()
+            with HistorySessionLocal() as hdb:
+                stats = hdb.query(
+                    sql_func.avg(TagHistory.value),
+                    sql_func.count(TagHistory.id),
+                ).filter(
+                    TagHistory.device_id == i.device_id,
+                    TagHistory.tag_id == i.tag_id,
+                    TagHistory.recorded_at >= window_start,
+                    TagHistory.recorded_at <= window_end,
+                ).first()
 
             if stats and stats[1] > 0:
                 collected_avg = round(float(stats[0]), 4)
@@ -314,17 +315,18 @@ def compare_lab_data(
             window_end = lab.sample_time + half_window
 
             # 从历史表聚合
-            stats = db.query(
-                sql_func.avg(TagHistory.value),
-                sql_func.count(TagHistory.id),
-                sql_func.min(TagHistory.value),
-                sql_func.max(TagHistory.value),
-            ).filter(
-                TagHistory.device_id == lab.device_id,
-                TagHistory.tag_id == lab.tag_id,
-                TagHistory.recorded_at >= window_start,
-                TagHistory.recorded_at <= window_end,
-            ).first()
+            with HistorySessionLocal() as hdb:
+                stats = hdb.query(
+                    sql_func.avg(TagHistory.value),
+                    sql_func.count(TagHistory.id),
+                    sql_func.min(TagHistory.value),
+                    sql_func.max(TagHistory.value),
+                ).filter(
+                    TagHistory.device_id == lab.device_id,
+                    TagHistory.tag_id == lab.tag_id,
+                    TagHistory.recorded_at >= window_start,
+                    TagHistory.recorded_at <= window_end,
+                ).first()
 
             if stats and stats[1] > 0:
                 collected_avg = round(float(stats[0]), 4)
@@ -378,19 +380,20 @@ def query_aggregate(
     """Query pre-aggregated data. Falls back to real-time calculation if no aggregate exists."""
     if not check_device_visible(db, user, device_id):
         raise HTTPException(403, "无权查看此设备的数据")
-    q = db.query(TagAggregate).filter(
-        TagAggregate.device_id == device_id,
-        TagAggregate.tag_id == tag_id,
-        TagAggregate.granularity == granularity,
-    )
-    if start_time:
-        q = q.filter(TagAggregate.bucket_time >= start_time)
-    else:
-        q = q.filter(TagAggregate.bucket_time >= datetime.now(timezone.utc) - timedelta(hours=24))
-    if end_time:
-        q = q.filter(TagAggregate.bucket_time <= end_time)
+    with HistorySessionLocal() as hdb:
+        q = hdb.query(TagAggregate).filter(
+            TagAggregate.device_id == device_id,
+            TagAggregate.tag_id == tag_id,
+            TagAggregate.granularity == granularity,
+        )
+        if start_time:
+            q = q.filter(TagAggregate.bucket_time >= start_time)
+        else:
+            q = q.filter(TagAggregate.bucket_time >= datetime.now(timezone.utc) - timedelta(hours=24))
+        if end_time:
+            q = q.filter(TagAggregate.bucket_time <= end_time)
 
-    items = q.order_by(TagAggregate.bucket_time.asc()).limit(1000).all()
+        items = q.order_by(TagAggregate.bucket_time.asc()).limit(1000).all()
 
     if items:
         return {
@@ -413,18 +416,19 @@ def query_aggregate(
         }
 
     # Fallback: real-time calculation from raw history
-    raw_q = db.query(TagHistory.value, TagHistory.recorded_at).filter(
-        TagHistory.device_id == device_id,
-        TagHistory.tag_id == tag_id,
-    )
-    if start_time:
-        raw_q = raw_q.filter(TagHistory.recorded_at >= start_time)
-    else:
-        raw_q = raw_q.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(hours=24))
-    if end_time:
-        raw_q = raw_q.filter(TagHistory.recorded_at <= end_time)
+    with HistorySessionLocal() as hdb:
+        raw_q = hdb.query(TagHistory.value, TagHistory.recorded_at).filter(
+            TagHistory.device_id == device_id,
+            TagHistory.tag_id == tag_id,
+        )
+        if start_time:
+            raw_q = raw_q.filter(TagHistory.recorded_at >= start_time)
+        else:
+            raw_q = raw_q.filter(TagHistory.recorded_at >= datetime.now(timezone.utc) - timedelta(hours=24))
+        if end_time:
+            raw_q = raw_q.filter(TagHistory.recorded_at <= end_time)
 
-    raw_data = raw_q.order_by(TagHistory.recorded_at.asc()).all()
+        raw_data = raw_q.order_by(TagHistory.recorded_at.asc()).all()
 
     buckets = {}
     for value, recorded_at in raw_data:

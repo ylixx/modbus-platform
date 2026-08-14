@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sql_func
-from app.core.database import get_db
+from app.core.database import get_db, HistorySessionLocal
 from app.core.deps import get_current_user, require_permission
 from app.models.user import User
 from app.models.history import TagHistory
@@ -52,7 +52,8 @@ def query_history(
     """Query historical data with optional aggregation."""
     if not check_device_visible(db, current_user, device_id):
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权访问该设备历史数据（超出组织数据范围）")
-    q = db.query(TagHistory).filter(
+    hdb = HistorySessionLocal()
+    q = hdb.query(TagHistory).filter(
         TagHistory.device_id == device_id,
         TagHistory.tag_id == tag_id,
     )
@@ -130,7 +131,7 @@ def query_history(
             ]
         except Exception:
             # Fallback: Python-based aggregation for SQLite or other DBs without extract()
-            raw_q = db.query(TagHistory.value, TagHistory.recorded_at).filter(*base_filter).order_by(TagHistory.recorded_at.asc())
+            raw_q = hdb.query(TagHistory.value, TagHistory.recorded_at).filter(*base_filter).order_by(TagHistory.recorded_at.asc())
             buckets = {}
             for value, recorded_at in raw_q.yield_per(1000):
                 if recorded_at is None or value is None:
@@ -168,12 +169,13 @@ def get_latest_values(
     if not check_device_visible(db, current_user, device_id):
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="无权访问该设备历史数据（超出组织数据范围）")
     from sqlalchemy import text
-    subq = db.query(
+    hdb = HistorySessionLocal()
+    subq = hdb.query(
         TagHistory.tag_id,
         sql_func.max(TagHistory.id).label("max_id"),
     ).filter(TagHistory.device_id == device_id).group_by(TagHistory.tag_id).subquery()
 
-    rows = db.query(TagHistory).join(
+    rows = hdb.query(TagHistory).join(
         subq, TagHistory.id == subq.c.max_id
     ).limit(500).all()
 

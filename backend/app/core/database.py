@@ -1,6 +1,6 @@
 """Database engine and session factory."""
 from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import sessionmaker, DeclarativeBase, Session
 from app.core.config import settings
 
 
@@ -18,7 +18,11 @@ def _apply_sqlite_pragmas(engine):
     def _set_sqlite_pragma(dbapi_conn, conn_record):
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL;")
-        cursor.execute("PRAGMA busy_timeout=5000;")
+        # 写锁争抢时等待更久（默认仅 5s 在并发删除/引擎持续写入时易超时）。
+        # 30s 上限足够覆盖批量删除与采集引擎的短暂写竞争。
+        cursor.execute("PRAGMA busy_timeout=30000;")
+        # WAL 下 NORMAL 同步即可保证崩溃一致性，并显著缩短写锁持有时间。
+        cursor.execute("PRAGMA synchronous=NORMAL;")
         cursor.close()
 
 

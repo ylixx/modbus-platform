@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
 
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, HistorySessionLocal
 from app.models.device import Device, DeviceTag, ProtocolType, OpcSecurity
 from app.models.history import TagHistory
 
@@ -199,9 +199,10 @@ class OpcUaDeviceSession:
                             try:
                                 script = sdb.query(Script).filter(Script.id == tag.script_id, Script.enabled == True).first()
                                 if script:
-                                    recent = sdb.query(TagHistory.value).filter(
-                                        TagHistory.device_id == self.device_id, TagHistory.tag_id == tag.id,
-                                    ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
+                                    with HistorySessionLocal() as hdb:
+                                        recent = hdb.query(TagHistory.value).filter(
+                                            TagHistory.device_id == self.device_id, TagHistory.tag_id == tag.id,
+                                        ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
                                     history = [r[0] for r in reversed(recent)]
                                     tag_cfg = {"name": tag.name, "unit": tag.unit, "scale_factor": tag.scale_factor, "offset": tag.offset, "params": {}}
                                     ctx = {"device_id": self.device_id, "tag_id": tag.id, "timestamp": datetime.now(timezone.utc).isoformat()}

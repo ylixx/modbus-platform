@@ -1,0 +1,151 @@
+# ============================================================================
+# 模拟器场景定义 (scenarios.yaml)
+# ----------------------------------------------------------------------------
+# 本文件定义"被平台采集"的模拟设备与点位。
+#  - 平台侧：可手动按下方字段添加设备/点位，或运行  python seed/seed_platform.py  自动导入。
+#  - 模拟器侧：按本文件驱动各协议服务端产生拟真数据。
+#
+# 点位字段说明（与平台 DeviceTag 对齐）：
+#   Modbus  : function_code(holding_register|input_register|coil|discrete_input)
+#             address / data_type(int16|uint16|int32|uint32|float32|float64|bool)
+#             byte_order(big_endian|little_endian|big_endian_swap|little_endian_swap)
+#   OPC-UA  : opc_node_id (如 "ns=2;s=TankLevel") / opc_node_type
+#   MQTT    : mqtt_json_path (平台用 JSONPath 解析，这里统一用 "value")
+#   writable: true 表示平台可写（写后从同一点位回读，验证 round-trip）
+#   generator: 数据生成器 {type: sine|random_walk|square|constant|ramp, ...}
+# ============================================================================
+
+defaults:
+  modbus_host: "127.0.0.1"
+  mqtt_broker: "127.0.0.1"
+  mqtt_port: 1883
+  opc_endpoint: "opc.tcp://127.0.0.1:4840"
+  opc_namespace: 2
+  mqtt_prefix: "sim"          # 模拟 MQTT 设备发布/订阅前缀
+  update_interval: 2.0        # 模拟器点位刷新周期(秒)
+
+devices:
+
+  # ---------- 1) Modbus-TCP 换热站 PLC ----------
+  - name: SIM_MODBUS_PLC
+    protocol: modbus_tcp
+    description: "换热站模拟 PLC（Modbus-TCP 从机，平台作为客户端连接）"
+    port: 15021
+    slave_id: 1
+    poll_interval: 5.0
+    tags:
+      - name: temperature
+        unit: "°C"
+        description: "出水温度"
+        function_code: holding_register
+        address: 0
+        data_type: float32
+        byte_order: big_endian
+        generator: {type: sine, amplitude: 30, offset: 50, period: 60}
+      - name: pressure
+        unit: "bar"
+        description: "母管压力"
+        function_code: holding_register
+        address: 2
+        data_type: uint16
+        byte_order: big_endian
+        generator: {type: random_walk, start: 5, step: 0.5, min: 0, max: 10}
+      - name: setpoint
+        unit: "°C"
+        description: "目标温度设定（可写，写后回读）"
+        function_code: holding_register
+        address: 4
+        data_type: float32
+        byte_order: big_endian
+        writable: true
+        generator: {type: constant, value: 55}
+      - name: flow_rate
+        unit: "m3/h"
+        description: "瞬时流量"
+        function_code: input_register
+        address: 0
+        data_type: float32
+        byte_order: big_endian
+        generator: {type: sine, amplitude: 20, offset: 40, period: 30}
+      - name: pump_running
+        description: "水泵运行（线圈，可写）"
+        function_code: coil
+        address: 0
+        data_type: bool
+        writable: true
+        generator: {type: square, low: 0, high: 1, period: 20}
+      - name: alarm_di
+        description: "报警离散输入"
+        function_code: discrete_input
+        address: 0
+        data_type: bool
+        generator: {type: square, low: 1, high: 0, period: 45}
+
+  # ---------- 2) OPC-UA 储罐 ----------
+  - name: SIM_OPC_TANK
+    protocol: opc_ua
+    description: "储罐模拟（OPC-UA 服务端，平台作为客户端连接）"
+    opc_endpoint: "opc.tcp://127.0.0.1:4840"
+    opc_namespace: 2
+    opc_security_mode: "None"
+    poll_interval: 5.0
+    tags:
+      - name: tank_level
+        unit: "%"
+        description: "液位"
+        opc_node_id: "ns=2;s=TankLevel"
+        opc_node_type: float64
+        generator: {type: sine, amplitude: 40, offset: 50, period: 120}
+      - name: tank_temp
+        unit: "°C"
+        description: "罐温"
+        opc_node_id: "ns=2;s=TankTemp"
+        opc_node_type: float64
+        generator: {type: random_walk, start: 25, step: 0.3, min: 10, max: 60}
+      - name: pump_status
+        description: "泵状态(bool)"
+        opc_node_id: "ns=2;s=PumpStatus"
+        opc_node_type: bool
+        generator: {type: square, low: 0, high: 1, period: 25}
+      - name: valve_setpoint
+        unit: "%"
+        description: "阀门开度设定（可写，写后回读）"
+        opc_node_id: "ns=2;s=ValveSetpoint"
+        opc_node_type: float64
+        writable: true
+        generator: {type: constant, value: 50}
+
+  # ---------- 3) MQTT 环境传感器 ----------
+  - name: SIM_MQTT_SENSOR
+    protocol: mqtt
+    description: "环境传感器模拟（自连内置 broker 的 MQTT 设备）"
+    mqtt_broker: "127.0.0.1"
+    mqtt_port: 1883
+    mqtt_topic_prefix: "sim"
+    mqtt_payload_format: json
+    poll_interval: 5.0
+    tags:
+      - name: humidity
+        unit: "%"
+        description: "湿度"
+        mqtt_json_path: "value"
+        mqtt_value_type: float64
+        generator: {type: sine, amplitude: 15, offset: 55, period: 60}
+      - name: co2
+        unit: "ppm"
+        description: "CO2 浓度"
+        mqtt_json_path: "value"
+        mqtt_value_type: float64
+        generator: {type: random_walk, start: 400, step: 10, min: 350, max: 1200}
+      - name: online
+        description: "在线状态(bool)"
+        mqtt_json_path: "value"
+        mqtt_value_type: bool
+        generator: {type: square, low: 0, high: 1, period: 30}
+      - name: target_temp
+        unit: "°C"
+        description: "目标温度（可写，写后回读）"
+        mqtt_json_path: "value"
+        mqtt_value_type: float64
+        writable: true
+        generator: {type: constant, value: 22}

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
 from app.core.config import settings
-from app.core.database import SessionLocal, HistorySessionLocal
+from app.core.database import SessionLocal, HistorySessionLocal, history_engine, engine
 from app.core.timeseries import get_timeseries_client
 from app.models.history import TagHistory
 from app.models.lab_data import TagAggregate
@@ -74,7 +74,10 @@ class WriteBuffer:
         # 原始点是否写关系库 tag_history；TIMESERIES_RAW_ONLY 且时序库已配 → 只写时序库
         raw_to_relational = not (ts_enabled and settings.TIMESERIES_RAW_ONLY)
 
-        db = SessionLocal()
+        # 原始点写入目标库：配置了独立历史库时写历史库，避免与设备管理等关系库
+        # 在 SQLite 单写者下互相锁争抢（批量删设备会 30s 超时 / 500）。
+        raw_db_factory = HistorySessionLocal if (history_engine is not engine) else SessionLocal
+        db = raw_db_factory()
         retry_batch = None
         try:
             if raw_to_relational:
@@ -113,8 +116,13 @@ class WriteBuffer:
             db.close()
 
     def _update_aggregates(self, records: list[dict]):
-        # 聚合历史优先写历史库（HISTORY_DATABASE_URL 已配），失败则回退主库，保证不丢聚合数据
-        for db in (HistorySessionLocal(), SessionLocal()):
+        # 聚合历史优先写历史库（HISTORY_DATABASE_URL 已配）；未配则回退主库。
+        # 配了独立历史库后只写历史库，避免与设备管理等关系库争抢 SQLite 写锁。
+        if history_engine is not engine:
+            agg_sessions = (HistorySessionLocal(),)
+        else:
+            agg_sessions = (SessionLocal(),)
+        for db in agg_sessions:
             try:
                 buckets: dict[str, list[float]] = defaultdict(list)
                 meta: dict[str, dict] = {}

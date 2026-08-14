@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, HistorySessionLocal
 from app.models.device import Device, DeviceTag
 from app.models.history import TagHistory
 
@@ -82,9 +82,10 @@ def process_tag_value(device_id: int, tag: DeviceTag, raw_value, ts: Optional[da
             from app.engine.script_engine import script_engine
             script = db.query(Script).filter(Script.id == tag.script_id, Script.enabled == True).first()
             if script:
-                recent = db.query(TagHistory.value).filter(
-                    TagHistory.device_id == device_id, TagHistory.tag_id == tag.id,
-                ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
+                with HistorySessionLocal() as hdb:
+                    recent = hdb.query(TagHistory.value).filter(
+                        TagHistory.device_id == device_id, TagHistory.tag_id == tag.id,
+                    ).order_by(TagHistory.recorded_at.desc()).limit(script.max_history).all()
                 history = [r[0] for r in reversed(recent)]
                 tag_cfg = {"name": tag.name, "unit": tag.unit, "scale_factor": tag.scale_factor, "offset": tag.offset, "params": {}}
                 try:

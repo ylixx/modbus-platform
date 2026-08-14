@@ -1,5 +1,9 @@
 """Device management API."""
 import json
+import time
+import threading
+import sqlalchemy.exc
+from loguru import logger
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -500,7 +504,8 @@ def update_device(device_id: int, req: DeviceUpdate, request: Request, db: Sessi
         device.last_error = '已手动禁用'
     log_action(action="device.update", resource_type="device", resource_id=device.id,
                resource_name=device.name, detail=json.dumps(data, ensure_ascii=False, default=str),
-               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
+               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "",
+               db=db)
     try:
         db.commit()
         db.refresh(device)
@@ -532,25 +537,33 @@ def update_device(device_id: int, req: DeviceUpdate, request: Request, db: Sessi
     return device
 
 
+# 串行化删除操作：SQLite 仅允许单写者，前端批量删除会并发发多个 DELETE，
+# 互相争抢写锁；用进程内锁把删除排队，再配合 DB 层 busy_timeout 与重试，
+# 可彻底消除 "database is locked" 导致的 500。
+_delete_lock = threading.Lock()
+
+
 @router.delete("/{device_id}")
 def delete_device(device_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_permission("device.write"))):
-    device = db.query(Device).filter(Device.id == device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="设备不存在")
-    device_id_val = device.id
-    device_protocol = device.protocol
-    # 级联删除关联的报警规则
-    from app.models.alarm import AlarmRule
-    db.query(AlarmRule).filter(AlarmRule.device_id == device_id).delete()
-    db.delete(device)
-    log_action(action="device.delete", resource_type="device", resource_id=device_id_val,
-               resource_name=device.name, detail=json.dumps({"protocol": device_protocol}, ensure_ascii=False),
-               user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "")
-    try:
+    device_id_val = None
+    device_protocol = None
+    # 串行化删除：SQLite 单写者，批量删除并发时由进程内锁排队。
+    # 审计写入复用同一个 db 会话（log_action(db=db)），避免再开一条独立写连接造成互锁死锁。
+    with _delete_lock:
+        device = db.query(Device).filter(Device.id == device_id).first()
+        if not device:
+            raise HTTPException(status_code=404, detail="设备不存在")
+        device_id_val = device.id
+        device_protocol = device.protocol
+        # 级联删除关联的报警规则
+        from app.models.alarm import AlarmRule
+        db.query(AlarmRule).filter(AlarmRule.device_id == device_id).delete()
+        db.delete(device)
+        log_action(action="device.delete", resource_type="device", resource_id=device_id_val,
+                   resource_name=device.name, detail=json.dumps({"protocol": device_protocol}, ensure_ascii=False),
+                   user_id=user.id, username=user.username, ip_address=request.client.host if request.client else "",
+                   db=db)
         db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"删除失败: {e}")
     # Stop engine for deleted device
     try:
         from app.engine.protocol_router import protocol_router
