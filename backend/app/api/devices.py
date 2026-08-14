@@ -1,6 +1,6 @@
 """Device management API."""
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -16,7 +16,7 @@ from app.schemas.device import (
 )
 from app.schemas.common import ResponseModel, PageResponse
 from app.services.org_service import apply_device_org_filter, check_device_visible
-from typing import List
+from typing import List, Optional
 from fastapi import status as http_status
 
 router = APIRouter(prefix="/devices", tags=["设备管理"])
@@ -764,6 +764,107 @@ class BatchWriteRequest(BaseModel):
     def model_post_init(self, __context):
         if len(self.items) > 50:
             raise ValueError("批量写入最多支持 50 条")
+
+
+class BatchPollIntervalRequest(BaseModel):
+    """批量设置采集间隔（poll_interval）。
+
+    筛选方式（可组合，至少指定一项）：
+    - device_ids: 指定若干设备（优先级最高）
+    - protocol:   按协议类型（modbus_tcp | modbus_rtu | mqtt | opc_ua）
+    - group_id:   按分组
+    - dry_run=True 时仅统计匹配数量，不实际修改
+    """
+    poll_interval: float = Field(..., gt=0, le=86400, description="新的采集间隔(秒)")
+    device_ids: Optional[List[int]] = None
+    protocol: Optional[str] = None
+    group_id: Optional[int] = None
+    dry_run: bool = False
+
+
+@router.post("/batch-poll-interval")
+def batch_set_poll_interval(
+    req: BatchPollIntervalRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("device.write")),
+):
+    """批量修改设备采集间隔，支持按设备ID / 协议类型 / 分组筛选。
+
+    保留设备级单独设置：本接口只修改被选中的设备，其余设备保持原值。
+    修改后会对受影响设备调用 reload_device，使新间隔立即生效（无需重启后端）。
+    """
+    # 1) 构建筛选条件
+    if req.device_ids:
+        q = db.query(Device).filter(Device.id.in_(req.device_ids))
+    else:
+        if not req.protocol and req.group_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="请指定 device_ids 或至少一个过滤条件（protocol / group_id）",
+            )
+        q = db.query(Device)
+        if req.protocol:
+            q = q.filter(Device.protocol == req.protocol)
+        if req.group_id is not None:
+            q = q.filter(Device.group_id == req.group_id)
+
+    matched = q.with_entities(Device.id, Device.protocol).all()
+    total = len(matched)
+    updated_ids = [r[0] for r in matched]
+
+    # 2) 仅统计模式
+    if req.dry_run:
+        return {
+            "dry_run": True,
+            "matched": total,
+            "poll_interval": req.poll_interval,
+            "device_ids": updated_ids,
+        }
+
+    # 3) 执行批量更新
+    try:
+        q.update({Device.poll_interval: req.poll_interval}, synchronize_session=False)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"批量更新采集间隔失败: {e}")
+
+    # 4) 重新加载受影响设备的采集协程，使新间隔立即生效
+    try:
+        from app.engine.protocol_router import protocol_router
+        for dev_id, dev_proto in matched:
+            protocol_router.reload_device(dev_id, dev_proto)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"批量设置间隔后重载设备协程失败（配置已保存，重启后端即可生效）: {e}"
+        )
+
+    log_action(
+        action="device.batch_poll_interval",
+        resource_type="device",
+        resource_id=0,
+        resource_name=f"batch({total})",
+        detail=json.dumps(
+            {
+                "matched": total,
+                "poll_interval": req.poll_interval,
+                "device_ids": updated_ids[:50],
+                "protocol": req.protocol,
+                "group_id": req.group_id,
+            },
+            ensure_ascii=False,
+        ),
+        user_id=current_user.id,
+        username=current_user.username,
+        ip_address=request.client.host if request.client else "",
+    )
+    return {
+        "updated": total,
+        "poll_interval": req.poll_interval,
+        "device_ids": updated_ids,
+    }
 
 
 @router.post("/batch-write")
