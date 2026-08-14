@@ -4,6 +4,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from app.core.database import Base
+from app.core.config import settings
 import enum
 
 
@@ -146,7 +147,8 @@ class Device(Base):
     status = Column(String(20), default=DeviceStatus.OFFLINE)
     last_poll_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
-    poll_interval = Column(Float, default=5.0)
+    # 默认值取自配置 MODBUS_POLL_INTERVAL，避免配置项成为死配置
+    poll_interval = Column(Float, default=settings.MODBUS_POLL_INTERVAL)
     enabled = Column(Boolean, default=True)
     has_lab_data = Column(Boolean, default=False)  # 是否启用化验数据对比功能
     created_at = Column(DateTime, server_default=func.now())

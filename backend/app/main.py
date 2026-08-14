@@ -35,6 +35,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Database init error: {e}")
 
+    # 配置了独立历史库时，确保聚合历史表存在（幂等；用户也可用自有建表脚本）
+    try:
+        from app.core.database import history_engine, HistorySessionLocal
+        from app.models.lab_data import TagAggregate
+        if history_engine is not engine:
+            TagAggregate.__table__.create(bind=history_engine, checkfirst=True)
+            logger.info("History DB aggregate table ensured")
+    except Exception as e:
+        logger.warning(f"History DB init skipped: {e}")
+
     try:
         _create_default_admin()
         _seed_permissions()

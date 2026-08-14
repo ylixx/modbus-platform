@@ -11,7 +11,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 from loguru import logger
-from app.core.database import SessionLocal
+from app.core.config import settings
+from app.core.database import SessionLocal, HistorySessionLocal
+from app.core.timeseries import get_timeseries_client
 from app.models.history import TagHistory
 from app.models.lab_data import TagAggregate
 
@@ -67,13 +69,28 @@ class WriteBuffer:
         if not batch:
             return
 
+        ts_client = get_timeseries_client()
+        ts_enabled = ts_client.enabled
+        # 原始点是否写关系库 tag_history；TIMESERIES_RAW_ONLY 且时序库已配 → 只写时序库
+        raw_to_relational = not (ts_enabled and settings.TIMESERIES_RAW_ONLY)
+
         db = SessionLocal()
         retry_batch = None
         try:
-            db.bulk_insert_mappings(TagHistory, batch)
-            db.commit()
-            logger.info(f"[入库] WriteBuffer 批量写入 {len(batch)} 条历史记录")
-            self._update_aggregates(db, batch)
+            if raw_to_relational:
+                db.bulk_insert_mappings(TagHistory, batch)
+                db.commit()
+                logger.info(f"[入库] WriteBuffer 批量写入 {len(batch)} 条历史记录")
+            else:
+                logger.info(f"[入库] 原始点仅写时序库，跳过关系库 tag_history {len(batch)} 条")
+            # 聚合写历史库（未配历史库时回退主库，由 _update_aggregates 内部处理）
+            self._update_aggregates(batch)
+            # 镜像原始点到时序库（最佳努力，失败不影响关系库入库）
+            if ts_enabled:
+                try:
+                    ts_client.write_points(batch)
+                except Exception as e:
+                    logger.error(f"时序库写入失败(已忽略，关系库已落库): {e}")
         except Exception as e:
             logger.error(f"WriteBuffer flush error: {e}")
             db.rollback()
@@ -95,59 +112,64 @@ class WriteBuffer:
         finally:
             db.close()
 
-    def _update_aggregates(self, db, records: list[dict]):
-        try:
-            buckets: dict[str, list[float]] = defaultdict(list)
-            meta: dict[str, dict] = {}
+    def _update_aggregates(self, records: list[dict]):
+        # 聚合历史优先写历史库（HISTORY_DATABASE_URL 已配），失败则回退主库，保证不丢聚合数据
+        for db in (HistorySessionLocal(), SessionLocal()):
+            try:
+                buckets: dict[str, list[float]] = defaultdict(list)
+                meta: dict[str, dict] = {}
 
-            for r in records:
-                if r.get("value") is None or r.get("quality") != "good":
-                    continue
-                ts = r.get("recorded_at")
-                if not ts:
-                    continue
-                if isinstance(ts, str):
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                minute_ts = ts.replace(second=0, microsecond=0)
-                key = f"{r['device_id']}:{r['tag_id']}:{minute_ts.isoformat()}"
-                buckets[key].append(r["value"])
-                if key not in meta:
-                    meta[key] = {
-                        "device_id": r["device_id"], "tag_id": r["tag_id"],
-                        "tag_name": r.get("tag_name", ""), "bucket_time": minute_ts,
-                    }
+                for r in records:
+                    if r.get("value") is None or r.get("quality") != "good":
+                        continue
+                    ts = r.get("recorded_at")
+                    if not ts:
+                        continue
+                    if isinstance(ts, str):
+                        ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    minute_ts = ts.replace(second=0, microsecond=0)
+                    key = f"{r['device_id']}:{r['tag_id']}:{minute_ts.isoformat()}"
+                    buckets[key].append(r["value"])
+                    if key not in meta:
+                        meta[key] = {
+                            "device_id": r["device_id"], "tag_id": r["tag_id"],
+                            "tag_name": r.get("tag_name", ""), "bucket_time": minute_ts,
+                        }
 
-            for key, values in buckets.items():
-                m = meta[key]
-                existing = db.query(TagAggregate).filter(
-                    TagAggregate.device_id == m["device_id"],
-                    TagAggregate.tag_id == m["tag_id"],
-                    TagAggregate.granularity == 60,
-                    TagAggregate.bucket_time == m["bucket_time"],
-                ).first()
+                for key, values in buckets.items():
+                    m = meta[key]
+                    existing = db.query(TagAggregate).filter(
+                        TagAggregate.device_id == m["device_id"],
+                        TagAggregate.tag_id == m["tag_id"],
+                        TagAggregate.granularity == 60,
+                        TagAggregate.bucket_time == m["bucket_time"],
+                    ).first()
 
-                if existing:
-                    all_min = min(existing.min_value, min(values)) if existing.min_value is not None else min(values)
-                    all_max = max(existing.max_value, max(values)) if existing.max_value is not None else max(values)
-                    total_sum = (existing.avg_value or 0) * existing.count + sum(values)
-                    existing.count += len(values)
-                    existing.avg_value = round(total_sum / existing.count, 4)
-                    existing.min_value = round(all_min, 4)
-                    existing.max_value = round(all_max, 4)
-                    existing.last_value = round(values[-1], 4)
-                else:
-                    db.add(TagAggregate(
-                        device_id=m["device_id"], tag_id=m["tag_id"], tag_name=m["tag_name"],
-                        granularity=60, bucket_time=m["bucket_time"],
-                        min_value=round(min(values), 4), max_value=round(max(values), 4),
-                        avg_value=round(sum(values) / len(values), 4), count=len(values),
-                        first_value=round(values[0], 4), last_value=round(values[-1], 4),
-                    ))
+                    if existing:
+                        all_min = min(existing.min_value, min(values)) if existing.min_value is not None else min(values)
+                        all_max = max(existing.max_value, max(values)) if existing.max_value is not None else max(values)
+                        total_sum = (existing.avg_value or 0) * existing.count + sum(values)
+                        existing.count += len(values)
+                        existing.avg_value = round(total_sum / existing.count, 4)
+                        existing.min_value = round(all_min, 4)
+                        existing.max_value = round(all_max, 4)
+                        existing.last_value = round(values[-1], 4)
+                    else:
+                        db.add(TagAggregate(
+                            device_id=m["device_id"], tag_id=m["tag_id"], tag_name=m["tag_name"],
+                            granularity=60, bucket_time=m["bucket_time"],
+                            min_value=round(min(values), 4), max_value=round(max(values), 4),
+                            avg_value=round(sum(values) / len(values), 4), count=len(values),
+                            first_value=round(values[0], 4), last_value=round(values[-1], 4),
+                        ))
 
-            db.commit()
-        except Exception as e:
-            logger.error(f"Aggregate update error: {e}")
-            db.rollback()
+                db.commit()
+                return  # 成功即止，不回退
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Aggregate update error (db={db.bind.url}): {e}")
+            finally:
+                db.close()
 
 
 class WsBatchPusher:
